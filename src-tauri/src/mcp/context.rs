@@ -180,6 +180,7 @@ fn vulnerabilities(store: &Store, p: &Vulnerabilities) -> Result<Value, String> 
         p.include_hidden,
         cve.as_deref(),
         false,
+        false,
     )?;
     let sources = view.sources.drain(..).map(|source| json!({
         "id":source.id,"kind":source.kind,"release":source.release,"scope":source.scope,

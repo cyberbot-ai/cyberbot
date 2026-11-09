@@ -65,8 +65,14 @@ function previewVulnerabilities(id:unknown,includeHidden:boolean):VulnerabilityV
      fingerprint:String(index + 1).repeat(64), hiddenAt:hidden ? at : null};
  });
  const fixes = Object.fromEntries(findings.filter(f => f.fixPublished).map(f => [`${f.source}:${f.cve}:${f.source}`, 'available']));
+ const fixable = findings.filter(f => f.hiddenAt == null && f.fixPublished);
+ const bulkFix = fixable.length >= 2 ? {
+   findingCount: fixable.length,
+   packages: [...new Set(fixable.flatMap(f => f.packages.map(p => p.name)))].sort(),
+   hasUnverified: false,
+ } : undefined;
  return {...empty, evaluation:{at,root:'demo',checks:indices.length,freshUntil:at+86400,coverage:[],generations:{},affected:indices.length,critical:indices.length,unknown:0,error:null},
-   fresh:true,lastSuccess:at,total:findings.length,hiddenCount,active:{affected,critical:affected,unknown:0,hidden:hiddenCount},findings,fixes};
+   fresh:true,lastSuccess:at,total:findings.length,hiddenCount,active:{affected,critical:affected,unknown:0,hidden:hiddenCount},findings,fixes,bulkFix};
 }
 
 function previewVulnerabilityCatalog(servers: Server[]) {

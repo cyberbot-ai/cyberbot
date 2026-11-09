@@ -3,7 +3,7 @@ use crate::{
     advisories::{self, Assessment, Match},
     inventory::stable_id,
     model::{now, Incident},
-    packages::{Result, State},
+    packages::{Apt, Result, State},
     store::Store,
     AppState,
 };
@@ -14,7 +14,10 @@ pub(crate) fn migrate_groups(db: &rusqlite::Connection) -> Result<()> {
     groups::migrate(db)
 }
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
@@ -190,9 +193,120 @@ pub struct View {
     pub offset: usize,
     pub findings: Vec<Finding>,
     pub fixes: BTreeMap<String, String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bulk_fix: Option<BulkFix>,
     pub sources: Vec<advisories::Source>,
     pub cvss_queue: advisories::CvssQueue,
 }
+#[derive(Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BulkFix {
+    pub finding_count: usize,
+    pub packages: Vec<String>,
+    pub has_unverified: bool,
+}
+
+fn package_fix_status(
+    state: &State,
+    apt: &BTreeMap<String, Apt>,
+    source: &str,
+    package: &advisories::PackageEvidence,
+    at: i64,
+) -> &'static str {
+    apt.get(&package.name)
+        .filter(|entry| {
+            Some(&entry.root) == state.root.as_ref()
+                && at - entry.at <= 86400
+                && entry.cache_at.is_some_and(|t| at - t <= 86400)
+        })
+        .and_then(|entry| {
+            let fixed = package.fixed_version.as_ref()?;
+            let actual = if state.metadata.as_ref()?.distro == "debian" {
+                if entry.candidate.source.as_deref() != Some(source) {
+                    return None;
+                }
+                entry.candidate.source_version.as_ref()?
+            } else {
+                entry.candidate.version.as_ref()?
+            };
+            crate::debversion::compare(actual, fixed).map(|order| {
+                if order.is_lt() {
+                    "not_available"
+                } else {
+                    "available"
+                }
+            })
+        })
+        .unwrap_or("unknown")
+}
+
+fn apt_package_argument(name: &str) -> bool {
+    let (package, arch) = name
+        .split_once(':')
+        .map_or((name, None), |(p, a)| (p, Some(a)));
+    let alphanumeric = |b: u8| b.is_ascii_lowercase() || b.is_ascii_digit();
+    package.bytes().next().is_some_and(alphanumeric)
+        && package
+            .bytes()
+            .all(|b| alphanumeric(b) || b"+.-".contains(&b))
+        && if let Some(arch) = arch {
+            arch.bytes().next().is_some_and(alphanumeric)
+                && arch.bytes().all(|b| alphanumeric(b) || b == b'-')
+                && !arch.ends_with('-')
+        } else {
+            // APT treats a trailing + or - as a change to the requested action.
+            !package.ends_with(['+', '-'])
+        }
+}
+
+fn bulk_fix(
+    db: &rusqlite::Connection,
+    id: &str,
+    state: &State,
+    apt: &BTreeMap<String, Apt>,
+    at: i64,
+) -> Result<Option<BulkFix>> {
+    let mut query = db
+        .prepare(
+            "SELECT payload FROM vulnerability_groups
+             WHERE server_id=?1 AND hidden_at IS NULL
+               AND json_extract(payload,'$.state')='affected'
+               AND json_extract(payload,'$.fixPublished')=1",
+        )
+        .map_err(err)?;
+    let rows = query
+        .query_map([id], |row| row.get::<_, String>(0))
+        .map_err(err)?;
+    let mut finding_count = 0;
+    let mut has_unverified = false;
+    let mut packages = BTreeSet::new();
+    for row in rows {
+        let finding: Match = serde_json::from_str(&row.map_err(err)?).map_err(err)?;
+        if finding.packages.is_empty() {
+            continue;
+        }
+        let mut unverified = false;
+        let eligible = finding.packages.iter().all(|p| {
+            if !apt_package_argument(&p.name) {
+                return false;
+            }
+            let status = package_fix_status(state, apt, &finding.source, p, at);
+            unverified |= status == "unknown";
+            status != "not_available"
+        });
+        if eligible {
+            finding_count += 1;
+            has_unverified |= unverified;
+            packages.extend(finding.packages.into_iter().map(|p| p.name));
+        }
+    }
+    Ok((finding_count >= 2).then(|| BulkFix {
+        finding_count,
+        packages: packages.into_iter().collect(),
+        has_unverified,
+    }))
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Card {
@@ -286,7 +400,7 @@ impl Store {
         offset: usize,
         include_hidden: bool,
     ) -> Result<View> {
-        self.vulnerability_page(id, offset, include_hidden, None, true)
+        self.vulnerability_page(id, offset, include_hidden, None, true, true)
     }
     pub(crate) fn vulnerability_page(
         &self,
@@ -295,6 +409,7 @@ impl Store {
         include_hidden: bool,
         cve: Option<&str>,
         clamp_offset: bool,
+        include_bulk_fix: bool,
     ) -> Result<View> {
         if offset > 20000 {
             return Err("Invalid page".into());
@@ -332,6 +447,12 @@ impl Store {
                 Ok::<_, String>(result)
             })
             .transpose()?;
+        let at = now();
+        let bulk_fix = if include_bulk_fix && active.affected >= 2 {
+            bulk_fix(&db, id, &state, &apt, at)?
+        } else {
+            None
+        };
         // The general page is grouped. An explicit CVE lookup can still
         // retrieve exact evidence without counting it as another package.
         let selection = if cve.is_some() {
@@ -386,31 +507,7 @@ impl Store {
         for f in &findings {
             for p in &f.finding.packages {
                 let key = format!("{}:{}:{}", f.finding.source, f.finding.cve, p.name);
-                let available = apt.get(&p.name).filter(|a| {
-                    Some(&a.root) == state.root.as_ref()
-                        && now() - a.at <= 86400
-                        && a.cache_at.is_some_and(|t| now() - t <= 86400)
-                });
-                let status = available
-                    .and_then(|a| {
-                        let fixed = p.fixed_version.as_ref()?;
-                        let actual = if state.metadata.as_ref()?.distro == "debian" {
-                            if a.candidate.source.as_deref() != Some(&f.finding.source) {
-                                return None;
-                            }
-                            a.candidate.source_version.as_ref()?
-                        } else {
-                            a.candidate.version.as_ref()?
-                        };
-                        crate::debversion::compare(actual, fixed).map(|order| {
-                            if order.is_lt() {
-                                "not_available"
-                            } else {
-                                "available"
-                            }
-                        })
-                    })
-                    .unwrap_or("unknown");
+                let status = package_fix_status(&state, &apt, &f.finding.source, p, at);
                 fixes.insert(key, status.into());
             }
         }
@@ -451,6 +548,7 @@ impl Store {
             offset,
             findings,
             fixes,
+            bulk_fix,
             sources,
             cvss_queue,
         })
@@ -1406,6 +1504,143 @@ mod tests {
                 now()
             )
             .is_err());
+    }
+    #[test]
+    fn bulk_fix_uses_eligible_findings_across_pages_and_ignores_hidden_findings() {
+        let (db, s) = fixture();
+        assert!(db.vulnerability_view(&s.id, 0).unwrap().bulk_fix.is_none());
+
+        let mut installed = Vec::new();
+        let mut assessment = assessment("critical");
+        let template = assessment.findings.remove(0);
+        let evidence = |p: &crate::packages::Package| advisories::PackageEvidence {
+            name: format!("{}:{}", p.name, p.arch),
+            version: p.version.clone(),
+            fixed_version: Some("4".into()),
+        };
+        for n in 0..23 {
+            let source = format!("fixture-{n:02}");
+            let mut p = package();
+            p.source = source.clone();
+            p.name = source.clone();
+            installed.push(p.clone());
+
+            let mut f = template.clone();
+            f.source = source;
+            f.cve = format!("CVE-2025-{}", 21000 + n);
+            f.fix_published = matches!(n, 0..=3 | 5 | 22);
+            if n != 5 {
+                f.packages.push(evidence(&p));
+            }
+            if n == 0 {
+                f.packages.push(evidence(&p));
+                p.arch = "i386".into();
+                f.packages.push(evidence(&p));
+                installed.push(p);
+            } else if n == 2 {
+                p.name = "fixture-extra".into();
+                f.packages.insert(0, evidence(&p));
+                installed.push(p);
+            }
+            if n == 3 {
+                f.state = "unknown".into();
+            }
+            assessment.findings.push(f);
+        }
+        let state = install(&db, &s, installed);
+        db.save_assessment(&s.id, &state, assessment).unwrap();
+        let cache_candidate = |source: &str, name: &str, source_version: &str| {
+            let at = now();
+            let root = state.root.as_ref().unwrap();
+            let entry = Apt {
+                candidate: crate::packages::Candidate {
+                    package: name.into(),
+                    version: Some("3".into()),
+                    source: Some(source.into()),
+                    source_version: Some(source_version.into()),
+                },
+                cache_at: Some(at),
+                at,
+                root: root.clone(),
+            };
+            db.0.lock()
+                .unwrap()
+                .execute(
+                    "INSERT INTO vulnerability_apt VALUES(?1,?2,?3,?4,?5)",
+                    params![s.id, name, root, at, serde_json::to_string(&entry).unwrap()],
+                )
+                .unwrap();
+        };
+        cache_candidate("fixture-00", "fixture-00:amd64", "4");
+        cache_candidate("fixture-00", "fixture-00:i386", "4");
+        cache_candidate("fixture-02", "fixture-02:amd64", "3");
+        let hide = |f: &Finding| {
+            db.set_vulnerability_hidden(
+                &s.id,
+                &f.finding.source,
+                &f.finding.cve,
+                &f.fingerprint,
+                true,
+                now(),
+            )
+            .unwrap();
+        };
+        let first = db.vulnerability_view(&s.id, 0).unwrap();
+        hide(
+            first
+                .findings
+                .iter()
+                .find(|f| f.finding.source == "fixture-01")
+                .unwrap(),
+        );
+
+        let first = db.vulnerability_view(&s.id, 0).unwrap();
+        let second = db.vulnerability_view(&s.id, 20).unwrap();
+        assert_eq!(first.findings.len(), 20);
+        assert_eq!(second.findings[0].finding.source, "fixture-22");
+        assert_eq!(
+            first.fixes["fixture-02:CVE-2025-21002:fixture-02:amd64"],
+            "not_available"
+        );
+        let expected = Some(BulkFix {
+            finding_count: 2,
+            packages: vec![
+                "fixture-00:amd64".into(),
+                "fixture-00:i386".into(),
+                "fixture-22:amd64".into(),
+            ],
+            has_unverified: true,
+        });
+        assert_eq!(first.bulk_fix, expected);
+        assert_eq!(second.bulk_fix, expected);
+        assert_eq!(
+            db.vulnerability_view_filtered(&s.id, 0, true)
+                .unwrap()
+                .bulk_fix,
+            expected
+        );
+        let mcp_page = db
+            .vulnerability_page(&s.id, 0, false, None, false, false)
+            .unwrap();
+        assert!(serde_json::to_value(mcp_page)
+            .unwrap()
+            .get("bulkFix")
+            .is_none());
+
+        cache_candidate("fixture-22", "fixture-22:amd64", "4");
+        assert!(
+            !db.vulnerability_view(&s.id, 0)
+                .unwrap()
+                .bulk_fix
+                .unwrap()
+                .has_unverified
+        );
+        hide(&second.findings[0]);
+        assert!(db
+            .vulnerability_view_filtered(&s.id, 0, true)
+            .unwrap()
+            .bulk_fix
+            .is_none());
     }
     #[test]
     fn hidden_pagination_is_bounded_and_does_not_resurrect_empty_pages() {

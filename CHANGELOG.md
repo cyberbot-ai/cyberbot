@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.0
+
+- Copy one APT command for multiple fixable findings across all pages of a server's vulnerabilities tab.
+
 ## 0.7.3
 
 - Ask for one-time approval before reversible repairs to security configuration and show the risk and recovery limits in a red warning.
