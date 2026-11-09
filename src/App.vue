@@ -269,7 +269,7 @@ async function closeDetails(){if(standalone&&!preview){try{await getCurrentWindo
     </nav>
     <div class="sidebar-bottom"><button type="button" class="theme-shortcut" :title="themeShortcutTitle" :aria-label="`${themeShortcutLabel}. ${themeShortcutTitle}`" @click="cycleTheme"><UiIcon :name="theme==='dark'?'moon':'sun'"/><span>{{themeShortcutLabel}}</span></button><div class="monitor-control" :class="{paused:data?.settings.paused}" :title="pollingLabel"><span class="monitor-caption" role="status" :aria-label="pollingLabel"><span class="monitor-full">{{pollingLabel}}</span><span class="monitor-short" aria-hidden="true">{{data?.settings.paused?'Pause':pollingInterval}}</span></span><button type="button" class="monitor-toggle" :disabled="!data||pauseBusy" :aria-busy="pauseBusy" :aria-label="data?.settings.paused?'Resume monitoring':'Pause monitoring'" :title="data?.settings.paused?'Resume monitoring':'Pause polling and automatic investigations'" @click="togglePause"><UiIcon :name="data?.settings.paused?'play':'pause'" :size="16"/></button></div></div>
   </aside>
-  <main v-if="!standalone" class="main" :class="{'fleet-page':page==='fleet','incidents-page':page==='incidents'}">
+  <main v-if="!standalone" class="main" :class="{'fleet-page':page==='fleet','inset-page':page==='incidents'||page==='console'}">
     <header class="page-head" :class="{searching:page==='fleet'&&searchOpen,'activity-head':page==='activity','automation-head':page==='automation'}">
       <div class="page-title">
         <AutomationMode v-if="page==='automation' && data" :settings="data.settings" @saved="automationSaved">
@@ -298,8 +298,8 @@ async function closeDetails(){if(standalone&&!preview){try{await getCurrentWindo
       <div v-else-if="!filtered.length" class="empty"><h2>No servers found</h2><p>Try a different search or reset the filters.</p><button @click="search='';filter='all'">Reset filters</button></div>
       <div v-else class="fleet"><FleetGrid :servers="fleet.servers" :project-starts="fleet.projectStarts" :now="now" :interval="settings.pollSeconds" :compact="compact" :scroll-reset-key="fleetScrollResetKey" @select="openServer($event.id)"/></div>
     </template>
-    <section v-else-if="page==='incidents'" class="scroll-content incidents-scroll">
-      <div class="incident-content">
+    <section v-else-if="page==='incidents'" class="scroll-content inset-scroll">
+      <div class="inset-content">
         <p v-if="notificationIds" class="notification-selection">Incidents from notification <button @click="notificationIds=null">All incidents</button></p>
         <div class="incident-toolbar">
           <div class="incident-query">
@@ -326,7 +326,10 @@ async function closeDetails(){if(standalone&&!preview){try{await getCurrentWindo
         </div>
       </div>
     </section>
-    <section v-else-if="page==='console'" class="scroll-content"><FleetConsole v-if="data" v-model="consoleSelection" :servers="servers" :ai-agent="settings.autoAgent" @ai-settings="openAiSettings"/></section>
+    <section v-else-if="page==='console'" class="scroll-content inset-scroll">
+      <FleetConsole v-if="data" v-model="consoleSelection" class="inset-content" :servers="servers"
+        :ai-agent="settings.autoAgent" @ai-settings="openAiSettings"/>
+    </section>
     <section v-else-if="page==='activity'" class="scroll-content"><ActivityLog @monitoring="openMonitoring"/></section>
     <section v-else-if="page==='monitoring'" class="scroll-content"><MonitoringLibrary :servers="servers" :now="now" :initial="monitoringTarget" @updated="reload"/></section>
     <template v-else-if="page==='automation'">
@@ -418,18 +421,18 @@ button,input,select,textarea{font:inherit;color:inherit}button{cursor:pointer;di
 .main{flex:1;min-width:0;display:flex;flex-direction:column;padding:0 28px}.page-head{height:80px;flex-shrink:0;display:flex;align-items:center;justify-content:space-between;gap:12px}.page-title{position:relative;min-width:0}.page-title,.head-actions{display:flex;align-items:center;gap:12px}h1{font-size:23px;font-weight:600;letter-spacing:-.5px;margin:0}.preview{font-size:11px;line-height:20px;padding:0 7px;border:1px solid var(--line);border-radius:4px;color:var(--muted)}.fleet-toolbar{display:flex;align-items:center;gap:10px;padding:5px 0 16px}.view-switch{display:flex;gap:2px}.view-switch button{background:none;border-color:transparent;padding:8px}.view-switch button.active{background:var(--hover);color:var(--accent)}.fleet-filters{display:flex;align-items:center;gap:4px;padding:0 0 16px;flex-wrap:wrap}.fleet-filters button{min-height:32px;padding:5px 10px;border:0;background:none;font-size:12px;color:var(--muted)}.fleet-filters button.chosen{background:var(--hover);color:var(--text)}.fleet-filters button span{font-variant-numeric:tabular-nums;margin-left:2px}.result-count{margin-left:auto;color:var(--muted);font-size:12px}.dot{display:inline-block;width:6px;height:6px;border-radius:50%;flex-shrink:0}.attention-dot{background:var(--warning)}.attention-dot.critical{background:var(--danger)}.fleet{flex:1;min-height:0}
 .manage-servers{font-size:12px;min-height:32px;padding:5px 8px;color:var(--muted)}
 .source-description h3{overflow-wrap:anywhere}
-.incidents-page { --incident-width: 1120px; --incident-inset: 20px; }
-.incidents-page .page-head {
-  width: min(100% - 2 * var(--incident-inset), var(--incident-width));
+.inset-page { --content-width: 1120px; --content-inset: 20px; }
+.inset-page .page-head {
+  width: min(100% - 2 * var(--content-inset), var(--content-width));
   margin-inline: auto;
 }
-.incidents-scroll {
+.inset-scroll {
   padding-block-start: 6px;
-  padding-inline: var(--incident-inset);
+  padding-inline: var(--content-inset);
   scrollbar-gutter: stable both-edges;
 }
-.incident-content { max-width: var(--incident-width); margin-inline: auto; }
-.incident-content .notification-selection { flex-wrap: wrap; }
+.inset-content { max-width: var(--content-width); margin-inline: auto; }
+.inset-content .notification-selection { flex-wrap: wrap; }
 .incident-toolbar {
   display: flex;
   flex-wrap: wrap;

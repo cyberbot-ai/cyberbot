@@ -248,9 +248,9 @@ function seconds(ms: number) {
 
 <style scoped>
 .commands { min-width: 0; }
-.prompt { display: flex; gap: 10px; align-items: baseline; padding: 7px 10px; border: 1px solid var(--line); background: var(--surface); border-radius: 6px; color: var(--accent); }
+.prompt { display: flex; gap: 10px; align-items: baseline; padding: 10px 12px; border: 1px solid var(--line); background: var(--surface); border-radius: 6px; color: var(--accent); }
 .prompt:focus-within { border-color: var(--accent); }
-.prompt textarea { flex: 1; min-width: 0; overflow-wrap: anywhere; resize: vertical; border: none; outline: none; background: transparent; color: var(--text); font: 13px/1.5 ui-monospace, monospace; }
+.prompt textarea { flex: 1; min-width: 0; padding: 0; overflow-wrap: anywhere; resize: vertical; border: none; outline: none; background: transparent; color: var(--text); font: 13px/1.5 ui-monospace, monospace; }
 .hint { font-size: 12px; color: var(--muted); margin: 6px 0; }
 .error { color: var(--danger); background: var(--danger-bg); padding: 7px 9px; border-radius: 5px; }
 .result-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin: 12px 0 5px; }
@@ -263,7 +263,7 @@ button { font: inherit; color: var(--text); cursor: pointer; }
 .stop { color: var(--danger); }
 button:disabled { opacity: .55; cursor: default; }
 .result { border-bottom: 1px solid var(--line); }
-.result-row { width: 100%; display: grid; grid-template-columns: 12px minmax(0, 1fr) 62px 84px; gap: 6px; align-items: center; padding: 4px 6px; text-align: left; background: transparent; border: none; min-height: 29px; }
+.result-row { display: grid; grid-template-columns: 12px minmax(0, 1fr) clamp(42px, 12%, 62px) clamp(56px, 18%, 84px); gap: 6px; align-items: center; padding: 4px 6px; text-align: left; background: transparent; border: none; min-height: 29px; }
 .result-row:hover, .result-row:has([aria-expanded=true]) { background: var(--hover); }
 .result-row { cursor: pointer; }
 .disclosure { padding: 0; border: 0; background: none; }

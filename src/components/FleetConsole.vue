@@ -34,7 +34,7 @@ watch(() => props.servers, () => {
 </script>
 
 <template>
-  <section class="console-page">
+  <section class="console-page" :class="{ 'chat-active': tab === 'ai' }">
     <ConsoleServerPicker v-model="selection" :servers="servers"/>
     <div ref="tabs" class="tabs" role="tablist" aria-label="Console mode" @keydown="switchTab">
       <button id="console-commands-tab" type="button" role="tab" aria-controls="console-commands-panel"
@@ -53,10 +53,11 @@ watch(() => props.servers, () => {
 </template>
 
 <style scoped>
-.console-page { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: 12px; padding-bottom: 18px; }
+.console-page { min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+.console-page.chat-active { height: 100%; }
 .tabs { display: flex; gap: 16px; border-bottom: 1px solid var(--line); }
 .tabs button { border: none; border-bottom: 2px solid transparent; background: transparent; color: var(--muted); font: inherit; padding: 6px 2px 8px; cursor: pointer; }
 .tabs button[aria-selected=true] { border-color: var(--accent); color: var(--text); }
 .tabs button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.chat { display: flex; min-width: 0; height: max(420px, calc(100vh - 216px)); }
+.chat { display: flex; flex: 1; min-width: 0; min-height: 360px; }
 </style>

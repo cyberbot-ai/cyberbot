@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.1
+
+- Align the fleet Console with the page header, separate the command field and results from the scrollbar, and keep the server picker and AI tab usable in narrow windows.
+
 ## 0.7.0
 
 - Search individual incidents and incident groups by title, evidence, check, server name or address, status, severity, or identifier.

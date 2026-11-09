@@ -130,18 +130,18 @@ async function searchKey(event: KeyboardEvent) {
 </template>
 
 <style scoped>
-.picker { position: relative; display: flex; gap: 8px; align-items: center; min-width: 0; }
+.picker { position: relative; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; min-width: 0; }
 button { font: inherit; color: var(--text); cursor: pointer; }
 .trigger { display: inline-flex; align-items: center; gap: 8px; flex: none; padding: 7px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
 .chevron { transform: rotate(90deg); color: var(--muted); }
-.selection { display: flex; align-items: center; gap: 5px; overflow: hidden; min-width: 0; }
+.selection { display: flex; align-items: center; gap: 5px; overflow: hidden; min-width: 0; max-width: 100%; }
 .chip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: var(--subtle); padding: 3px 6px; border-radius: 4px; min-width: 0; }
 .count, .nothing { color: var(--muted); }
 .count { flex: none; }
-.popover { position: absolute; z-index: 4; top: calc(100% + 5px); left: 0; width: min(410px, calc(100vw - 130px)); background: var(--surface); border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow); padding: 7px; }
+.popover { position: absolute; z-index: 4; top: calc(100% + 5px); left: 0; box-sizing: border-box; width: min(410px, 100%); background: var(--surface); border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow); padding: 7px; }
 .search { display: flex; align-items: center; gap: 7px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 5px; color: var(--muted); }
 .search:focus-within { border-color: var(--accent); }
-.search input { font: inherit; color: var(--text); background: transparent; border: none; outline: none; width: 100%; }
+.search input { flex: 1; min-width: 0; font: inherit; color: var(--text); background: transparent; border: none; outline: none; }
 .actions { display: flex; flex-wrap: wrap; gap: 5px; justify-content: space-between; margin: 5px 0; }
 .actions button { background: transparent; border: none; border-radius: 4px; padding: 5px 7px; color: var(--accent); }
 .actions button:hover:not(:disabled), .option:hover, .option[data-active=true] { background: var(--hover); }
