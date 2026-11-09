@@ -13,8 +13,6 @@ const paths:Record<string,string>={
  auto:'m13 2-9 12h7l-1 8 10-13h-7l1-7Z',
  settings:'M4 6h16 M4 12h16 M4 18h16 M8 3v6 M16 9v6 M10 15v6',
  search:'M21 21l-5-5 M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0',
- grid:'M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z',
- list:'M8 5h13 M8 12h13 M8 19h13 M3 5h.01 M3 12h.01 M3 19h.01',
  plus:'M12 5v14 M5 12h14',close:'m6 6 12 12 M18 6 6 18',
  pause:'M6 4h4v16H6z M14 4h4v16h-4z',play:'m7 4 13 8-13 8V4Z',
  arrow:'M5 12h14 m-6-6 6 6-6 6',external:'M14 3h7v7 M21 3 11 13 M10 3H3v18h18v-7',

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.9.0
+
+- Show the Servers page as a list only. The card view and the view switch are removed.
+
 ## 0.8.0
 
 - Copy one APT command for multiple fixable findings across all pages of a server's vulnerabilities tab.

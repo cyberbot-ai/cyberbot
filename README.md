@@ -39,13 +39,13 @@
 
 ### Fleet dashboard
 
-![Cyberbot grid view filtered to eight servers that need attention, including critical, warning, failed, and stale ones](docs/screenshots/fleet-attention.jpg)
+![Cyberbot server list filtered to eight servers that need attention, including critical, warning, failed, and stale ones](docs/screenshots/fleet-attention.jpg)
 
-*Grid view filtered to the servers that need attention.*
+*The server list filtered to the servers that need attention.*
 
 - Watch CPU, memory, swap, load, disk space, inodes, detected services, and open incidents for every server on one screen.
-- Switch between a compact list and a grid. Filter by **Needs attention**, **Healthy**, or **Insufficient data**, search by name or address, and sort by any resource metric to compare servers.
-- Add servers by address or import a [static Ansible inventory](docs/INVENTORY.md). In the list, inventories are grouped by domain.
+- Filter by **Needs attention**, **Healthy**, or **Insufficient data**, search by name or address, and sort by any resource metric to compare servers.
+- Add servers by address or import a [static Ansible inventory](docs/INVENTORY.md). When sorted by host, inventories are grouped by domain.
 - Pause and resume polling from the sidebar. Cyberbot keeps polling from the menu bar after you close the window and stops while your Mac is asleep.
 
 ### Server details and SSH console
@@ -115,7 +115,7 @@ Run one command on a selection of servers, or on the whole fleet, and read the o
 
 ### Everyday details
 
-![Cyberbot grid view of the fleet in the light theme](docs/screenshots/fleet-light.jpg)
+![Cyberbot server list in the light theme](docs/screenshots/fleet-light.jpg)
 
 *The same fleet in the light theme.*
 

@@ -2,7 +2,6 @@
 import { mount } from '@vue/test-utils';
 import { describe, it, expect } from 'vitest';
 import ServerRibbon from './ServerRibbon.vue';
-import ServerCard from './ServerCard.vue';
 import type { Server } from '../types';
 
 const base: Server = { id: 'a', sourceId: 's', name: 'web-01', endpoint: { host: '10.0.0.1', user: 'ops', port: 22, identityFile: null, jumpHost: null }, observation: { at: 1000, cpuPercent: 15, memoryPercent: 60, swapPercent: 0, load: 1.4, uptime: 100, disks: [{ mount: '/', usedPercent: 35, inodePercent: 5 }, { mount: '/data', usedPercent: 98, inodePercent: null }], services: [], missing: [], bytesReceived: 100, durationMs: 20 }, lastError: null, lastAttempt: 1000, nextCheck: 1180, failures: 0 };
@@ -100,34 +99,25 @@ it('highlights the failed Fail2ban service alongside a neutral running Twemproxy
     services: [{kind: 'twemproxy', name: 'Twemproxy', detected: true, availability: 'running', status: 'unknown', at: 1000}],
   };
   const ribbon = render(server);
-  const tile = mount(ServerCard, {props: {server, now: 1000, interval: 180}});
   const fail2ban = () => ribbon.get('[data-service="fail2ban:default"]');
-  const tileFailure = () => tile.get('.services span[title*="fail2ban.service"]');
   expect(ribbon.classes()).toContain('warning');
-  expect(tile.classes()).toContain('warning');
   expect(fail2ban().text()).toBe('Fail2ban');
   expect(fail2ban().classes()).toContain('warning');
   expect(fail2ban().attributes('title')).toContain('service error');
-  expect(tileFailure().classes()).toContain('warning');
 
   const updated: Server = {
     ...server,
     services: [...server.services!, {kind: 'fail2ban', name: 'Fail2ban', detected: true, availability: 'stopped', status: 'unknown', at: 1000}],
   };
   await ribbon.setProps({server: updated});
-  await tile.setProps({server: updated});
   expect(ribbon.findAll('.service').map(chip => chip.text())).toEqual(['Fail2banStopped', 'TwemproxyRunning']);
   expect(fail2ban().classes()).toContain('warning');
   expect(fail2ban().attributes('title')).toContain('fail2ban.service');
   expect(ribbon.get('[data-service="twemproxy:default"]').classes()).toContain('unknown');
-  expect(tileFailure().classes()).toContain('warning');
-  expect(tileFailure().attributes('title')).toContain('Stopped');
 
   await ribbon.setProps({now: 2000});
-  await tile.setProps({now: 2000});
   expect(ribbon.classes()).toContain('stale');
   expect(fail2ban().classes()).not.toContain('warning');
-  expect(tile.find('.services .warning').exists()).toBe(false);
 
   const recovered = {
     ...updated,
@@ -135,13 +125,10 @@ it('highlights the failed Fail2ban service alongside a neutral running Twemproxy
     services: updated.services!.map(card => card.kind === 'fail2ban' ? {...card, availability: 'running' as const} : card),
   };
   await ribbon.setProps({server: recovered, now: 1000});
-  await tile.setProps({server: recovered, now: 1000});
   expect(ribbon.classes()).toContain('healthy');
   expect(fail2ban().text()).toBe('Fail2banRunning');
   expect(fail2ban().classes()).not.toContain('warning');
-  expect(tile.find('.services .warning').exists()).toBe(false);
   ribbon.unmount();
-  tile.unmount();
 });
 
 it('does not attribute another unit failure to Fail2ban or treat an inactive unit as failed', async () => {

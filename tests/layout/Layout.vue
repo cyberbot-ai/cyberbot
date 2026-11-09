@@ -2,7 +2,6 @@
 import { computed,ref } from 'vue';
 import { scenario,value } from './api';
 import ServerRibbon from '../../src/components/ServerRibbon.vue';
-import ServerCard from '../../src/components/ServerCard.vue';
 import ServerDetail from '../../src/components/ServerDetail.vue';
 import ServicePanel from '../../src/components/ServicePanel.vue';
 import NginxPanel from '../../src/components/NginxPanel.vue';
@@ -25,7 +24,6 @@ const server=computed<Server>(()=>({id:scenario.value,sourceId:'fixture',name:lo
   </div></header>
   <div class="surface app" :style="{width:width+'px'}" :data-scenario="scenario" :data-panel="panel">
     <template v-if="panel==='dashboard'"><h2>Ribbon</h2><ServerRibbon :server="server" :now="now" :interval="180"/><ServerRibbon :server="server" :now="now" :interval="180" alternate/>
-      <h2>Card</h2><div class="cards"><ServerCard :server="server" :now="now" :interval="180"/><ServerCard :server="server" :now="now" :interval="180"/></div>
     </template>
     <ServerDetail v-else-if="panel==='detail'" :key="scenario" :server="server" :now="now" :interval="180"/>
     <DependenciesPanel v-else-if="panel==='dependencies'" :key="scenario" :server-id="server.id"/>
@@ -39,5 +37,5 @@ const server=computed<Server>(()=>({id:scenario.value,sourceId:'fixture',name:lo
 <style scoped>
 .harness{--canvas:#f7f8f5;--surface:#fff;--subtle:#f0f2ee;--hover:#e9ede7;--line:#d9ded5;--line-strong:#b2bcb0;--text:#242a25;--muted:#626c61;--accent:#355c40;--accent-bg:#e2ecdf;--success:#287347;--warning:#8d5b13;--warning-bg:#faf0dc;--danger:#b03d37;--danger-bg:#fae8e5;color:var(--text);background:var(--canvas);padding:12px;min-height:100vh;box-sizing:border-box;font:13px/1.5 -apple-system,BlinkMacSystemFont,sans-serif}
 .dark{--canvas:#191c1b;--surface:#202422;--subtle:#262b28;--hover:#2d332f;--line:#353c36;--line-strong:#59665c;--text:#e8ede6;--muted:#a0aca1;--accent:#b5d2aa;--accent-bg:#2e3f30;--success:#97c9a2;--warning:#e2bc77;--warning-bg:#3b3324;--danger:#eda39a;--danger-bg:#402b28;color-scheme:dark}
-header{margin-bottom:20px}h1{font-size:20px;margin:0}h2{font-size:13px;margin:20px 0 10px}p{margin:6px 0;color:var(--muted)}.controls{display:flex;gap:12px;align-items:end;flex-wrap:wrap}label{display:flex;gap:5px;align-items:center;flex-wrap:wrap}select{font:inherit;padding:6px;background:var(--surface);color:var(--text);border:1px solid var(--line);border-radius:5px}.surface{box-sizing:border-box;padding:12px;max-width:100%;background:var(--surface);border:1px solid var(--line)}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(250px,100%),1fr));gap:12px}
+header{margin-bottom:20px}h1{font-size:20px;margin:0}h2{font-size:13px;margin:20px 0 10px}p{margin:6px 0;color:var(--muted)}.controls{display:flex;gap:12px;align-items:end;flex-wrap:wrap}label{display:flex;gap:5px;align-items:center;flex-wrap:wrap}select{font:inherit;padding:6px;background:var(--surface);color:var(--text);border:1px solid var(--line);border-radius:5px}.surface{box-sizing:border-box;padding:12px;max-width:100%;background:var(--surface);border:1px solid var(--line)}
 </style>

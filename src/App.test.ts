@@ -2,7 +2,7 @@
 import { mount, flushPromises } from '@vue/test-utils';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import App from './App.vue';
-import FleetGrid from './components/FleetGrid.vue';
+import FleetList from './components/FleetList.vue';
 import AutomationMode from './components/AutomationMode.vue';
 import { appearanceKey } from './appearance';
 import { cliChecksKey } from './aiNavigation';
@@ -37,9 +37,7 @@ describe('fleet ribbon integration', () => {
     expect(app.get('.ribbon.unknown').attributes('aria-label')).toContain('No data');
     expect(app.get('[data-metric="cpu"]').text()).toBe('CPU—');
     expect(app.get('.ribbon').find('.service').exists()).toBe(false);
-    await app.get('[aria-label="Grid view"]').trigger('click');
-    expect(app.get('.card.unknown .health').text()).toBe('No data');
-    await app.get('.card').trigger('click');
+    await app.get('.ribbon').trigger('click');
     await flushPromises();
     expect(app.get('.detail .connectivity-notice').text()).toContain('No internet connection');
     expect(app.get('.detail .state').text()).toBe('No data');
@@ -117,8 +115,7 @@ describe('fleet ribbon integration', () => {
     const app = mount(App, {attachTo:document.body});
     await flushPromises();
     expect(app.find('[aria-label="Project"]').exists()).toBe(false);
-    const grid = () => app.getComponent(FleetGrid);
-    expect(grid().props('compact')).toBe(true);
+    const fleetList = () => app.getComponent(FleetList);
     const modeControl = app.getComponent(AutomationMode);
     expect(modeControl.props('compact')).toBe(true);
     expect(modeControl.get('[role="switch"]').attributes('aria-checked')).toBe('false');
@@ -129,11 +126,11 @@ describe('fleet ribbon integration', () => {
     expect(app.find('.mode-link').exists()).toBe(false);
     const attention = app.findAll('.fleet-filters button').find(b => b.text().startsWith('Needs attention'))!;
     await attention.trigger('click');
-    expect(grid().props('servers').map((s:Server)=>s.id)).toEqual(['stale']);
+    expect(fleetList().props('servers').map((s:Server)=>s.id)).toEqual(['stale']);
     await app.findAll('.fleet-filters button').find(b => b.text().startsWith('Insufficient data'))!.trigger('click');
-    expect(grid().props('servers').map((s:Server)=>s.id)).toEqual(['new']);
+    expect(fleetList().props('servers').map((s:Server)=>s.id)).toEqual(['new']);
     await app.findAll('.fleet-filters button').find(b => b.text().startsWith('Healthy'))!.trigger('click');
-    expect(grid().props('servers').map((s:Server)=>s.id)).toEqual(['current','partial']);
+    expect(fleetList().props('servers').map((s:Server)=>s.id)).toEqual(['current','partial']);
     await app.findAll('.fleet-filters button')[0].trigger('click');
     expect(app.find('input[aria-label="Search servers"]').exists()).toBe(false);
     expect(app.get('.head-actions .primary').text()).toBe('Add server');
@@ -141,23 +138,19 @@ describe('fleet ribbon integration', () => {
     const search = app.get('input[aria-label="Search servers"]');
     expect(document.activeElement).toBe(search.element);
     await search.setValue('legacy-tag');
-    expect(app.findComponent(FleetGrid).exists()).toBe(false);
+    expect(app.findComponent(FleetList).exists()).toBe(false);
     await search.setValue('legacy-project');
-    expect(app.findComponent(FleetGrid).exists()).toBe(false);
+    expect(app.findComponent(FleetList).exists()).toBe(false);
     await search.setValue('current');
-    expect(grid().props('servers').map((s:Server)=>s.id)).toEqual(['current']);
+    expect(fleetList().props('servers').map((s:Server)=>s.id)).toEqual(['current']);
     await search.trigger('keydown',{key:'Escape'});
     expect(app.find('input[aria-label="Search servers"]').exists()).toBe(false);
-    expect(grid().props('servers')).toHaveLength(4);
+    expect(fleetList().props('servers')).toHaveLength(4);
     expect(document.activeElement).toBe(app.get('button[aria-label="Search servers"]').element);
     await app.get('button[aria-label="Search servers"]').trigger('click');
     await app.get('input[aria-label="Search servers"]').setValue('stale');
     await app.get('button[aria-label="Close search"]').trigger('click');
-    expect(grid().props('servers')).toHaveLength(4);
-    await app.get('[aria-label="Grid view"]').trigger('click');
-    expect(grid().props('compact')).toBe(false);
-    await app.get('[aria-label="List view"]').trigger('click');
-    expect(grid().props('compact')).toBe(true);
+    expect(fleetList().props('servers')).toHaveLength(4);
     app.unmount();
   });
   it('shows fresh metrics as healthy after a manual poll and keeps log gaps in the log tab', async () => {
@@ -208,11 +201,9 @@ describe('fleet ribbon integration', () => {
     expect(app.get('.detail-dialog .logs').text()).toContain('Log source unavailable');
     await app.get('[aria-label="Close server"]').trigger('click');
     await app.findAll('.fleet-filters button').find(button => button.text().startsWith('Healthy'))!.trigger('click');
-    await app.get('[aria-label="Grid view"]').trigger('click');
-    expect(app.get('button.card.healthy .health').text()).toBe('Healthy');
     app.unmount();
   });
-  it('sorts the fleet by hostname suffix or metric in either view, including after polling', async () => {
+  it('sorts the fleet by hostname suffix or metric, including after polling', async () => {
     vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
     const now = Date.now() / 1000;
     const server = (id: string, host: string, rootUsage: number, dataUsage: number): Server => ({
@@ -236,7 +227,7 @@ describe('fleet ribbon integration', () => {
     const app = mount(App, { attachTo: document.body });
     try {
       await flushPromises();
-      const rowIds = () => app.getComponent(FleetGrid).findAll('[data-id]').map(row => row.attributes('data-id'));
+      const rowIds = () => app.getComponent(FleetList).findAll('[data-id]').map(row => row.attributes('data-id'));
       const sort = app.get('[aria-label="Sort servers"]');
       const button = (label: string) => sort.findAll('button').find(item => item.text().split(/\s+/)[0] === label)!;
       expect(rowIds()).toEqual(['app2', 'app10', 'db', 'other']);
@@ -254,8 +245,6 @@ describe('fleet ribbon integration', () => {
       await app.get('input[aria-label="Search servers"]').setValue('example.com');
       expect(rowIds()).toEqual(['app10', 'db', 'app2']);
       await app.findAll('.fleet-filters button').find(item => item.text().startsWith('Needs attention'))!.trigger('click');
-      expect(rowIds()).toEqual(['db', 'app2']);
-      await app.get('[aria-label="Grid view"]').trigger('click');
       expect(rowIds()).toEqual(['db', 'app2']);
 
       nodes = [other, db, app10, server('app2', app2.endpoint.host, 30, 97)];
@@ -298,7 +287,7 @@ describe('fleet ribbon integration', () => {
     const app = mount(App);
     try {
       await flushPromises();
-      const rows = () => app.getComponent(FleetGrid).findAll('[data-id]');
+      const rows = () => app.getComponent(FleetList).findAll('[data-id]');
       const projects = () => app.findAll('.ribbon-project').map(heading => heading.text());
       const ids = rows().map(row => row.attributes('data-id'));
       expect([...projects()].sort()).toEqual(['example.co.uk', 'example.com', 'example.com', 'prod']);
@@ -323,9 +312,6 @@ describe('fleet ribbon integration', () => {
       expect(app.get('.detail-dialog .server-title h2').text()).toBe('proxy.example.com');
       expect(app.get('.detail-dialog .server-title p').text()).toBe('ops@192.0.2.7:22');
       await app.get('[aria-label="Close server"]').trigger('click');
-      await app.get('[aria-label="Grid view"]').trigger('click');
-      expect(app.get('.card[data-id="proxy"] .identity strong').text()).toBe('proxy.example.com');
-      await app.get('[aria-label="List view"]').trigger('click');
 
       await app.get('button[aria-label="Close search"]').trigger('click');
       await app.findAll('.fleet-sort button').find(button => button.text() === 'CPU')!.trigger('click');
@@ -356,7 +342,7 @@ describe('fleet ribbon integration', () => {
     expect(attention().get('.dot').classes()).toContain('critical');
     await app.get('button[aria-label="Search servers"]').trigger('click');
     await app.get('input[aria-label="Search servers"]').setValue('warning');
-    expect(app.getComponent(FleetGrid).props('servers')).toHaveLength(1);
+    expect(app.getComponent(FleetList).props('servers')).toHaveLength(1);
     expect(attention().get('.dot').classes()).toContain('critical');
     await update([base]);
     expect(attention().get('.dot').classes()).not.toContain('critical');
@@ -828,10 +814,10 @@ it.each([false,true])('uses pending-first-check status consistently with confirm
  vi.mocked(call).mockImplementation(async c=>c==='snapshot'?{servers:[server],awaitingFirstCheck:['pending'],vulnerabilities:affected?{pending:{status:'critical',affected:1,critical:1,at:1}}:{},sources:[],incidents:[],nginx:{},logStatus:{},settings:{mode:'manual',autoAgent:'codex',pollSeconds:180,logPollSeconds:600,paused:false,concurrency:4,dailyTokenLimit:null,dailyRunLimit:null,runTokenLimit:50000},collectedAt:Date.now()/1000}:{});
  const app=mount(App,{attachTo:document.body});await flushPromises();
  const attention=app.findAll('.fleet-filters button').find(b=>b.text().startsWith('Needs attention'))!;
- expect(attention.text()).toContain(affected?'1':'0');await attention.trigger('click');expect(app.findComponent(FleetGrid).exists()).toBe(affected);
- if(affected)expect(app.getComponent(FleetGrid).props('servers')[0].awaitingFirstCheck).toBe(true);
+ expect(attention.text()).toContain(affected?'1':'0');await attention.trigger('click');expect(app.findComponent(FleetList).exists()).toBe(affected);
+ if(affected)expect(app.getComponent(FleetList).props('servers')[0].awaitingFirstCheck).toBe(true);
  await app.findAll('.fleet-filters button').find(b=>b.text().startsWith('Insufficient data'))!.trigger('click');
- expect(app.findComponent(FleetGrid).exists()).toBe(!affected);app.unmount();vi.unstubAllGlobals();
+ expect(app.findComponent(FleetList).exists()).toBe(!affected);app.unmount();vi.unstubAllGlobals();
 });
 
 it('opens the detail panel without selecting a control and restores the opener on close',async()=>{

@@ -2,14 +2,14 @@
 import { mount } from '@vue/test-utils';
 import { describe,it,expect,vi,afterEach } from 'vitest';
 import { nextTick } from 'vue';
-import FleetGrid from './FleetGrid.vue';
+import FleetList from './FleetList.vue';
 import type { Server } from '../types';
 const servers:Server[]=Array.from({length:500},(_,i)=>({id:String(i),sourceId:'fixture',name:`host-${i}`,endpoint:{host:'localhost',user:'ops',port:22,identityFile:null,jumpHost:null},observation:null,lastError:null,lastAttempt:null,nextCheck:0,failures:0}));
 describe('500-server fleet',()=>{
   afterEach(()=>vi.unstubAllGlobals());
-  it.each([false,true])('bounds the DOM and keeps scroll on metric updates (ribbon=%s)',async compact=>{
+  it('bounds the DOM and keeps scroll on metric updates',async()=>{
     vi.stubGlobal('ResizeObserver',class { observe(){} unobserve(){} disconnect(){} });
-    const wrapper=mount(FleetGrid,{props:{servers,now:1000,interval:180,compact}});
+    const wrapper=mount(FleetList,{props:{servers,now:1000,interval:180}});
     expect(wrapper.findAll('button').length).toBeLessThan(40);
     const viewport=wrapper.get('.viewport');
     (viewport.element as HTMLElement).scrollTop=3000;
@@ -22,15 +22,15 @@ describe('500-server fleet',()=>{
     expect(wrapper.findAll('button')).toHaveLength(1);
     wrapper.unmount();
   });
-  it.each([false, true])('anchors the focused server after reordering and resets on manual sorting (ribbon=%s)', async compact => {
+  it('anchors the focused server after reordering and resets on manual sorting', async () => {
     vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
-    const wrapper = mount(FleetGrid, { attachTo: document.body, props: { servers, now: 1000, interval: 180, compact, scrollResetKey: 'host' } });
+    const wrapper = mount(FleetList, { attachTo: document.body, props: { servers, now: 1000, interval: 180, scrollResetKey: 'host' } });
     try {
       const viewport = wrapper.get<HTMLElement>('.viewport');
-      const [oldIndex, newIndex, columns, rowHeight] = compact ? [12, 320, 1, 32] : [39, 321, 3, 178];
-      const rowButton = () => wrapper.get<HTMLButtonElement>(compact ? `[data-id="${oldIndex}"] button` : `button[data-id="${oldIndex}"]`);
-      const offset = (index: number) => Math.floor(index / columns) * rowHeight;
-      viewport.element.scrollTop = offset(oldIndex - columns) + 3;
+      const oldIndex = 12, newIndex = 320, rowHeight = 32;
+      const rowButton = () => wrapper.get<HTMLButtonElement>(`[data-id="${oldIndex}"] button`);
+      const offset = (index: number) => index * rowHeight;
+      viewport.element.scrollTop = offset(oldIndex - 1) + 3;
       await viewport.trigger('scroll');
       rowButton().element.focus();
       expect(document.activeElement).toBe(rowButton().element);
@@ -39,7 +39,7 @@ describe('500-server fleet',()=>{
       reordered.splice(newIndex, 0, servers[oldIndex]);
       await wrapper.setProps({ servers: reordered });
       await nextTick();
-      expect(viewport.element.scrollTop).toBe(offset(newIndex - columns) + 3);
+      expect(viewport.element.scrollTop).toBe(offset(newIndex - 1) + 3);
       expect(document.activeElement).toBe(rowButton().element);
       expect(wrapper.findAll('button').length).toBeLessThan(40);
 
@@ -61,7 +61,7 @@ describe('500-server fleet',()=>{
       deliver(element:Element,height:number,width=1000){this.callback([{target:element,contentRect:{height,width}} as ResizeObserverEntry],this as unknown as ResizeObserver);}
     }
     vi.stubGlobal('ResizeObserver',MockObserver);
-    const wrapper=mount(FleetGrid,{props:{servers,now:1000,interval:180,compact:true}});
+    const wrapper=mount(FleetList,{props:{servers,now:1000,interval:180}});
     const viewport=wrapper.get('.viewport');
     (viewport.element as HTMLElement).scrollTop=320;
     await viewport.trigger('scroll');
@@ -91,7 +91,7 @@ describe('500-server fleet',()=>{
   it('preserves the visible server when an offscreen project heading is removed', async () => {
     vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
     const projectStarts = new Map([['0', 'example.com'], ['40', 'example.net']]);
-    const wrapper = mount(FleetGrid, { props: { servers, projectStarts, now: 1000, interval: 180, compact: true } });
+    const wrapper = mount(FleetList, { props: { servers, projectStarts, now: 1000, interval: 180 } });
     try {
       const viewport = wrapper.get<HTMLElement>('.viewport');
       viewport.element.scrollTop = 1656; // Fifty 32px rows, a 24px first heading and a 32px project break.
