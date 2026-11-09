@@ -251,7 +251,7 @@ async function closeDetails(){if(standalone&&!preview){try{await getCurrentWindo
     </nav>
     <div class="sidebar-bottom"><button type="button" class="theme-shortcut" :title="themeShortcutTitle" :aria-label="`${themeShortcutLabel}. ${themeShortcutTitle}`" @click="cycleTheme"><UiIcon :name="theme==='dark'?'moon':'sun'"/><span>{{themeShortcutLabel}}</span></button><div class="monitor-control" :class="{paused:data?.settings.paused}" :title="pollingLabel"><span class="monitor-caption" role="status" :aria-label="pollingLabel"><span class="monitor-full">{{pollingLabel}}</span><span class="monitor-short" aria-hidden="true">{{data?.settings.paused?'Pause':pollingInterval}}</span></span><button type="button" class="monitor-toggle" :disabled="!data||pauseBusy" :aria-busy="pauseBusy" :aria-label="data?.settings.paused?'Resume monitoring':'Pause monitoring'" :title="data?.settings.paused?'Resume monitoring':'Pause polling and automatic investigations'" @click="togglePause"><UiIcon :name="data?.settings.paused?'play':'pause'" :size="16"/></button></div></div>
   </aside>
-  <main v-if="!standalone" class="main" :class="{'fleet-page':page==='fleet'}">
+  <main v-if="!standalone" class="main" :class="{'fleet-page':page==='fleet','incidents-page':page==='incidents'}">
     <header class="page-head" :class="{searching:page==='fleet'&&searchOpen,'activity-head':page==='activity','automation-head':page==='automation'}">
       <div class="page-title">
         <AutomationMode v-if="page==='automation' && data" :settings="data.settings" @saved="automationSaved">
@@ -280,23 +280,25 @@ async function closeDetails(){if(standalone&&!preview){try{await getCurrentWindo
       <div v-else-if="!filtered.length" class="empty"><h2>No servers found</h2><p>Try a different search or reset the filters.</p><button @click="search='';filter='all'">Reset filters</button></div>
       <div v-else class="fleet"><FleetGrid :servers="fleet.servers" :project-starts="fleet.projectStarts" :now="now" :interval="settings.pollSeconds" :compact="compact" :scroll-reset-key="fleetScrollResetKey" @select="openServer($event.id)"/></div>
     </template>
-    <section v-else-if="page==='incidents'" class="scroll-content">
-      <p v-if="notificationIds" class="notification-selection">Incidents from notification <button @click="notificationIds=null">All incidents</button></p>
-      <div class="section-toolbar">
-        <p>{{notificationIds?incidentRows.length:incidents.length}} {{notificationIds?'notice':'open'}}</p>
-        <div class="incident-actions">
-          <label class="checkbox"><input v-model="showResolved" type="checkbox">Show resolved</label>
-          <ResolveAllIncidentsButton :incidents="notificationIds ? incidentRows : incidents"
-            :title="notificationIds ? 'Mark open incidents from the notification' : 'Mark open incidents on all servers'"
-            @updated="reload" @error="report"/>
+    <section v-else-if="page==='incidents'" class="scroll-content incidents-scroll">
+      <div class="incident-content">
+        <p v-if="notificationIds" class="notification-selection">Incidents from notification <button @click="notificationIds=null">All incidents</button></p>
+        <div class="incident-toolbar">
+          <p>{{notificationIds?incidentRows.length:incidents.length}} {{notificationIds?'notice':'open'}}</p>
+          <div class="incident-actions">
+            <label class="checkbox"><input v-model="showResolved" type="checkbox">Show resolved</label>
+            <ResolveAllIncidentsButton :incidents="notificationIds ? incidentRows : incidents"
+              :title="notificationIds ? 'Mark open incidents from the notification' : 'Mark open incidents on all servers'"
+              @updated="reload" @error="report"/>
+          </div>
         </div>
+        <IncidentGroups v-if="!notificationIds" :refresh-key="incidentVersion" :now="now" :show-resolved="showResolved"
+          @ai-settings="openAiSettings" @updated="reload" @count="groupCount=$event"/>
+        <label v-if="groupCount" class="checkbox"><input v-model="showIndividual" type="checkbox">Show individual incidents</label>
+        <IncidentList v-if="!groupCount||showIndividual" :incidents="incidentRows" show-server
+          @open="openServer($event.serverId,'incidents')" @updated="reload" @error="report"/>
+        <div v-if="!groupCount&&!incidentRows.length" class="empty"><UiIcon name="check" :size="32"/><h2>No open incidents</h2><p>Issues detected by monitoring will appear here.<br>Use the Insufficient data filter to find servers without enough data.</p></div>
       </div>
-      <IncidentGroups v-if="!notificationIds" :refresh-key="incidentVersion" :now="now" :show-resolved="showResolved"
-        @ai-settings="openAiSettings" @updated="reload" @count="groupCount=$event"/>
-      <label v-if="groupCount" class="checkbox"><input v-model="showIndividual" type="checkbox">Show individual incidents</label>
-      <IncidentList v-if="!groupCount||showIndividual" :incidents="incidentRows" show-server
-        @open="openServer($event.serverId,'incidents')" @updated="reload" @error="report"/>
-      <div v-if="!groupCount&&!incidentRows.length" class="empty"><UiIcon name="check" :size="32"/><h2>No open incidents</h2><p>Issues detected by monitoring will appear here.<br>Use the Insufficient data filter to find servers without enough data.</p></div>
     </section>
     <section v-else-if="page==='console'" class="scroll-content"><FleetConsole v-if="data" v-model="consoleSelection" :servers="servers" :ai-agent="settings.autoAgent" @ai-settings="openAiSettings"/></section>
     <section v-else-if="page==='activity'" class="scroll-content"><ActivityLog @monitoring="openMonitoring"/></section>
@@ -390,9 +392,31 @@ button,input,select,textarea{font:inherit;color:inherit}button{cursor:pointer;di
 .main{flex:1;min-width:0;display:flex;flex-direction:column;padding:0 28px}.page-head{height:80px;flex-shrink:0;display:flex;align-items:center;justify-content:space-between;gap:12px}.page-title{position:relative;min-width:0}.page-title,.head-actions{display:flex;align-items:center;gap:12px}h1{font-size:23px;font-weight:600;letter-spacing:-.5px;margin:0}.preview{font-size:11px;line-height:20px;padding:0 7px;border:1px solid var(--line);border-radius:4px;color:var(--muted)}.fleet-toolbar{display:flex;align-items:center;gap:10px;padding:5px 0 16px}.view-switch{display:flex;gap:2px}.view-switch button{background:none;border-color:transparent;padding:8px}.view-switch button.active{background:var(--hover);color:var(--accent)}.fleet-filters{display:flex;align-items:center;gap:4px;padding:0 0 16px;flex-wrap:wrap}.fleet-filters button{min-height:32px;padding:5px 10px;border:0;background:none;font-size:12px;color:var(--muted)}.fleet-filters button.chosen{background:var(--hover);color:var(--text)}.fleet-filters button span{font-variant-numeric:tabular-nums;margin-left:2px}.result-count{margin-left:auto;color:var(--muted);font-size:12px}.dot{display:inline-block;width:6px;height:6px;border-radius:50%;flex-shrink:0}.attention-dot{background:var(--warning)}.attention-dot.critical{background:var(--danger)}.fleet{flex:1;min-height:0}
 .manage-servers{font-size:12px;min-height:32px;padding:5px 8px;color:var(--muted)}
 .source-description h3{overflow-wrap:anywhere}
-.incident-actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px 12px}
+.incidents-page { --incident-width: 1120px; --incident-inset: 20px; }
+.incidents-page .page-head {
+  width: min(100% - 2 * var(--incident-inset), var(--incident-width));
+  margin-inline: auto;
+}
+.incidents-scroll {
+  padding-block-start: 6px;
+  padding-inline: var(--incident-inset);
+  scrollbar-gutter: stable both-edges;
+}
+.incident-content { max-width: var(--incident-width); margin-inline: auto; }
+.incident-content .notification-selection { flex-wrap: wrap; }
+.incident-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding-bottom: 20px;
+  color: var(--muted);
+}
+.incident-toolbar p, .incident-actions .checkbox { margin: 0; }
+.incident-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
 .main.fleet-page .page-head{height:60px}
-.scroll-content{flex:1;min-height:0;overflow:auto;padding-bottom:30px;scrollbar-color:var(--line-strong) transparent}.empty{flex:1;min-height:260px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:32px;color:var(--muted)}.empty h2{font-size:20px;color:var(--text);font-weight:550;margin:18px 0 0}.empty p{line-height:1.7;max-width:60ch;margin-bottom:22px}.loading{height:200px;display:grid;place-items:center;color:var(--muted)}.page-intro{color:var(--muted);margin:0 0 24px}.source-row{display:flex;align-items:center;gap:18px;border-bottom:1px solid var(--line);padding:24px 0}.source-row>svg{color:var(--muted)}.source-description{flex:1;min-width:0}.source-description h3{font-size:14px;margin:0;font-weight:600}.source-description h3 span{font-size:11px;color:var(--muted);font-weight:400;margin-left:8px}.source-description p{color:var(--muted);margin:6px 0;font-size:12px}.source-description code{font-size:12px;overflow-wrap:anywhere;color:var(--muted)}.row-actions{display:flex;gap:8px;flex-wrap:wrap}.danger,.text-error{color:var(--danger)}.section-toolbar{display:flex;justify-content:space-between;align-items:center;gap:12px;padding-bottom:14px;color:var(--muted)}
+.scroll-content{flex:1;min-height:0;overflow:auto;padding-bottom:30px;scrollbar-color:var(--line-strong) transparent}.empty{flex:1;min-height:260px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:32px;color:var(--muted)}.empty h2{font-size:20px;color:var(--text);font-weight:550;margin:18px 0 0}.empty p{line-height:1.7;max-width:60ch;margin-bottom:22px}.loading{height:200px;display:grid;place-items:center;color:var(--muted)}.page-intro{color:var(--muted);margin:0 0 24px}.source-row{display:flex;align-items:center;gap:18px;border-bottom:1px solid var(--line);padding:24px 0}.source-row>svg{color:var(--muted)}.source-description{flex:1;min-width:0}.source-description h3{font-size:14px;margin:0;font-weight:600}.source-description h3 span{font-size:11px;color:var(--muted);font-weight:400;margin-left:8px}.source-description p{color:var(--muted);margin:6px 0;font-size:12px}.source-description code{font-size:12px;overflow-wrap:anywhere;color:var(--muted)}.row-actions{display:flex;gap:8px;flex-wrap:wrap}.danger,.text-error{color:var(--danger)}
 .settings{max-width:920px;width:100%}.settings-section{padding:4px 0 28px;margin-bottom:24px;border-bottom:1px solid var(--line)}.settings-section h2{font-size:16px;font-weight:600;margin:0 0 8px}.settings-section p{color:var(--muted);max-width:75ch;margin:8px 0 16px;line-height:1.6}.theme-options{display:flex;gap:8px;margin:20px 0 8px}.theme-options button.selected{background:var(--accent-bg);border-color:var(--accent);color:var(--accent)}.fields{display:flex;gap:16px;margin:20px 0;flex-wrap:wrap}.fields label{flex:1;min-width:140px}label{display:flex;flex-direction:column;gap:8px;font-size:12px;color:var(--muted)}.checkbox{flex-direction:row;align-items:center;gap:8px;margin-block:16px}.schedule{max-width:560px;align-items:end}.schedule p{font-size:12px;flex-basis:100%;margin:0}.storage{display:flex;flex-wrap:wrap;gap:36px;margin:22px 0}.storage dt{color:var(--muted);font-size:12px}.storage dd{margin:5px 0;font-size:14px;font-variant-numeric:tabular-nums}.help{margin:20px 0;color:var(--muted);font-size:12px}.help summary{cursor:pointer;padding:5px 0}.help p{line-height:1.7;max-width:75ch}.error{display:flex;justify-content:space-between;align-items:center;gap:12px;background:var(--danger-bg);color:var(--danger);padding:12px 16px;margin-bottom:16px;border-radius:7px;overflow-wrap:anywhere}.error button{background:none;color:inherit;border:0;flex-shrink:0}
 .management-dialog{width:min(860px,calc(100vw - 32px));max-height:calc(100dvh - 48px);padding:24px;border-radius:12px;box-shadow:var(--shadow);overflow:auto}.management-head{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px}.management-head h2{font-size:20px;font-weight:600;letter-spacing:-.3px;margin:0}.management-head .row-actions{flex-shrink:0}.management-dialog .page-intro{margin:0;color:var(--muted)}.management-dialog .source-row{padding:20px 0}
 dialog{color:var(--text);background:var(--canvas);border:0;padding:0;box-sizing:border-box}dialog::backdrop{background:var(--overlay)}.detail-dialog{margin:0 0 0 auto;width:min(900px,100vw);max-width:100vw;max-height:100dvh;height:100dvh;box-shadow:var(--shadow)}.detail-panel,.standalone-detail{height:100%;width:100%}.standalone{display:block}.source-dialog{width:min(540px,calc(100vw - 32px));max-height:calc(100dvh - 48px);border-radius:14px;box-shadow:var(--shadow)}.source-form{padding:28px}.source-form header{display:flex;align-items:center;justify-content:space-between;gap:12px}.source-form h2{font-size:21px;font-weight:600;margin:0}.source-form label>input,.source-form textarea{width:100%}.source-form textarea{font:13px/1.7 ui-monospace,monospace;resize:vertical}.source-form p{font-size:12px;color:var(--muted);line-height:1.6}.source-form p.text-error{color:var(--danger)}.inventory-picker{display:flex;flex-direction:column;align-items:center;gap:12px;padding:20px 0}.source-form .inventory-name{margin:0;font-size:13px;color:var(--text);overflow-wrap:anywhere;max-width:100%}.source-form footer{display:flex;justify-content:flex-end;gap:10px;margin-top:24px}.tabs{display:flex;border-bottom:1px solid var(--line);gap:20px;margin:22px 0}.tabs button{border:0;border-bottom:2px solid transparent;border-radius:0;background:none;padding:10px 0;color:var(--muted)}.tabs button.active{color:var(--text);border-bottom-color:var(--accent)}
@@ -421,7 +445,7 @@ dialog{color:var(--text);background:var(--canvas);border:0;padding:0;box-sizing:
 .title-search{display:flex;align-items:center;gap:6px;min-width:0}.search-toggle{width:28px;min-height:28px;padding:0;border:0;background:none;color:var(--muted);border-radius:5px}.search-toggle:hover,.search-toggle[aria-expanded=true]{background:var(--hover);color:var(--text)}.title-search input{width:180px;height:28px;min-height:28px;padding:4px 8px;font-size:12px}
 @media(max-width:1100px){.main.fleet-page .page-head.searching{height:96px;padding-bottom:36px;box-sizing:border-box}.title-search input{position:absolute;top:calc(100% + 8px);left:0;width:min(220px,calc(100vw - 112px));z-index:2;box-shadow:var(--shadow)}}
 @media(max-width:900px){.sidebar{width:64px;padding-inline:8px}.brand{justify-content:center;padding:0}.brand strong,.nav-text,.theme-shortcut span{display:none}nav button{justify-content:center;padding:10px}.nav-count{position:absolute;font-size:10px;line-height:15px;margin:0 0 27px 28px}.theme-shortcut{justify-content:center}.monitor-control{flex-direction:column;gap:2px;padding:0}.monitor-full{display:none}.monitor-short{display:inline}.monitor-caption{font-size:10px}.main{padding-inline:22px}.head-actions{gap:4px}}
-@media(max-width:560px){.main{padding-inline:14px}.page-head{height:70px}.page-title{gap:7px}h1{font-size:20px}.fleet-toolbar{flex-wrap:wrap}.view-switch{margin-left:auto}.fleet-filters{gap:0}.fleet-filters button{font-size:11px;padding-inline:7px}.result-count{width:100%;margin-top:8px}.preview{font-size:10px;padding-inline:4px}.head-actions .primary{font-size:12px;padding-inline:8px}.source-row{flex-wrap:wrap}.source-row>svg{display:none}.row-actions{flex-basis:100%}.theme-options{flex-wrap:wrap}.theme-options button{flex:1;font-size:12px;white-space:nowrap}.section-toolbar{flex-wrap:wrap}.storage{gap:20px}.source-form{padding:20px}}
+@media(max-width:560px){.main{padding-inline:14px}.page-head{height:70px}.page-title{gap:7px}h1{font-size:20px}.fleet-toolbar{flex-wrap:wrap}.view-switch{margin-left:auto}.fleet-filters{gap:0}.fleet-filters button{font-size:11px;padding-inline:7px}.result-count{width:100%;margin-top:8px}.preview{font-size:10px;padding-inline:4px}.head-actions .primary{font-size:12px;padding-inline:8px}.source-row{flex-wrap:wrap}.source-row>svg{display:none}.row-actions{flex-basis:100%}.theme-options{flex-wrap:wrap}.theme-options button{flex:1;font-size:12px;white-space:nowrap}.storage{gap:20px}.source-form{padding:20px}}
 @media(max-width:700px){.main .page-head,.main.fleet-page .page-head,.main.fleet-page .page-head.searching{height:auto;min-height:96px;padding-block:10px;flex-wrap:wrap;gap:8px;box-sizing:border-box}.page-title{flex-basis:100%}.head-actions{width:100%;justify-content:space-between}.title-search input{position:static;width:clamp(100px,30vw,180px);box-shadow:none}.page-head.searching .preview{display:none}}
 @media(prefers-reduced-motion:reduce){button{transition:none}}
 

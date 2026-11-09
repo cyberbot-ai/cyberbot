@@ -744,7 +744,7 @@ it.each([false,true])('marks the open incidents in the current scope (from notif
   if(!fromNotification){
    await w.findAll('.sidebar nav button').find(b=>b.text().startsWith('Incidents'))!.trigger('click');
    await flushPromises();
-   await w.get('.scroll-content > .checkbox input').setValue(false);
+   await w.findAll('label').find(label=>label.text()==='Show individual incidents')!.get('input').setValue(false);
    expect(w.find('.incident-row').exists()).toBe(false);
   }
   await w.get('.resolve-all').trigger('click');
@@ -752,7 +752,7 @@ it.each([false,true])('marks the open incidents in the current scope (from notif
   expect(call).toHaveBeenCalledWith('resolve_incidents',{episodes:selected.map(({id,episode})=>({id,episode}))});
   expect(w.find('.resolve-all').exists()).toBe(false);
   expect(w.find('.incident-row').exists()).toBe(false);
-  await w.get('.section-toolbar input').setValue(true);
+  await w.findAll('label').find(label=>label.text()==='Show resolved')!.get('input').setValue(true);
   await flushPromises();
   expect(w.findAll('.incident-row').filter(row=>row.text().includes('Manually resolved'))).toHaveLength(selected.length+1);
  }finally{

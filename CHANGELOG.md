@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.2
+
+- Center the Incidents page, restore padding inside incident group rows, and keep actions and statuses clear of the scrollbar.
+
 ## 0.6.1
 
 - Collect Qdrant metrics from Docker ports published on a verified local host address, and keep checking confirmed service availability on schedule when diagnostics are unavailable.
