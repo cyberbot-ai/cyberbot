@@ -21,9 +21,13 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0--only-blue" alt="GPL-3.0-only license"></a>
 </p>
 
-![Cyberbot fleet with example.com hosts and three sample CVEs listed for s1.app.example.com](docs/screenshots/fleet-vulnerabilities.jpg)
+![Cyberbot fleet overview with all 24 example.com servers and red CVE counts on three rows](docs/screenshots/fleet-overview.jpg)
 
-*The fleet and OS vulnerability panel in browser demo mode. Hostnames and findings are fictional.*
+*Fleet overview with critical CVE counts highlighted in red.*
+
+![Cyberbot OS vulnerability panel listing three sample CVEs for s1.app.example.com](docs/screenshots/fleet-vulnerabilities.jpg)
+
+*OS vulnerability details for one server. Both screenshots use fictional demo data.*
 
 ## What Cyberbot does
 
