@@ -241,8 +241,10 @@ function disconnect() {
 onActivated(() => {
   visible = true;
   void nextTick(() => {
+    if (!visible) return;
     fit();
-    if (visible && phase.value === 'connected') terminal?.focus();
+    if (phase.value === 'connected') terminal?.focus();
+    else if (phase.value === 'idle' || phase.value === 'ended') void connect();
   });
 });
 onDeactivated(() => { visible = false; });

@@ -48,19 +48,26 @@ function receive(event: unknown) {
   args.onEvent.onmessage(event);
 }
 
+function mountServerPage() {
+  const view = mount(ServerDetail, { props: { server, now: 100, interval: 180 } });
+  const tab = (name: string) => view.findAll('nav button').find(button => button.text() === name)!.trigger('click');
+  return { view, tab };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.call.mockImplementation(async (command: string) => command === 'console_open' ? 'session-1' : []);
 });
 
-it('keeps the same terminal and SSH channel across tabs until the server closes', async () => {
-  const view = mount(ServerDetail, { props: { server, now: 100, interval: 180 } });
-  const tab = (name: string) => view.findAll('nav button').find(button => button.text() === name)!.trigger('click');
+it('opens SSH automatically on the Console tab and keeps the session across tabs', async () => {
+  const { view, tab } = mountServerPage();
+  expect(mocks.call).not.toHaveBeenCalledWith('console_open', expect.anything());
   await tab('Console');
   await vi.dynamicImportSettled();
   await flushPromises();
-  expect(mocks.call).not.toHaveBeenCalledWith('console_open', expect.anything());
-  await view.get('.toolbar button').trigger('click');
+  expect(mocks.call).toHaveBeenCalledWith('console_open', expect.objectContaining({ serverId: server.id }));
+  await tab('Overview');
+  await tab('Console');
   await flushPromises();
   receive({ kind: 'ready' });
   await tab('Overview');
@@ -78,6 +85,30 @@ it('keeps the same terminal and SSH channel across tabs until the server closes'
   await flushPromises();
   expect(mocks.call).toHaveBeenCalledWith('console_close', { id: 'session-1' });
   expect(mocks.dispose).toHaveBeenCalledOnce();
+});
+
+it('stays disconnected until the Console tab is opened again', async () => {
+  const { view, tab } = mountServerPage();
+  const opens = () => mocks.call.mock.calls.filter(([command]) => command === 'console_open');
+  await tab('Console');
+  await vi.dynamicImportSettled();
+  await flushPromises();
+  receive({ kind: 'ready' });
+  await view.get('.toolbar button').trigger('click');
+  await flushPromises();
+  expect(mocks.call).toHaveBeenCalledWith('console_close', { id: 'session-1' });
+  receive({ kind: 'end', code: null, error: null });
+  await flushPromises();
+  expect(view.get('[role="status"]').text()).toBe('Session ended');
+  expect(opens()).toHaveLength(1);
+
+  await tab('Overview');
+  await tab('Console');
+  await flushPromises();
+  expect(opens()).toHaveLength(2);
+  expect(view.get('[role="status"]').text()).toBe('Connecting via SSH…');
+  view.unmount();
+  await flushPromises();
 });
 
 it('closes the session if the server page unmounts before registration returns', async () => {
