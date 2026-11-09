@@ -918,11 +918,7 @@ mod tests {
         }
         drop(busy);
         job.await.unwrap();
-        assert!(read(&good)
-            .0
-            .reason
-            .unwrap()
-            .contains("Connection has changed"));
+        assert!(read(&good).0.reason.unwrap().contains("connection changed"));
         assert!(read(&good).1.stdout.is_empty());
         pool.shutdown();
     }

@@ -116,10 +116,13 @@ async fn reuse_lru_trust_proxyjump_expiry_and_shutdown() {
     assert_eq!(pool.stats().connections, 2);
     assert_eq!(pool.stats().evicted, 1);
     assert!(pool.pids().contains(&pid));
-    drop(keep);
     let valid = std::fs::read(&trust).unwrap();
-    std::fs::write(&trust, "").unwrap();
+    let replacement = dir.path().join("new_known_hosts");
+    std::fs::write(&replacement, "").unwrap();
+    std::fs::rename(replacement, &trust).unwrap();
     assert!(pool.acquire(&endpoint(0)).await.is_err());
+    assert!(keep.options().is_err());
+    drop(keep);
     std::fs::write(&trust, &valid).unwrap();
     assert!(command(&pool, &endpoint(0), "true").await.status.success());
     assert!(!pool.pids().contains(&pid));
@@ -188,6 +191,14 @@ async fn reuse_lru_trust_proxyjump_expiry_and_shutdown() {
     let pid = jump_pool.pids()[0];
     assert!(command(&jump_pool, &jump, "true").await.status.success());
     assert_eq!(jump_pool.pids(), [pid]);
+    let lease = jump_pool.acquire(&jump).await.unwrap();
+    let mut config_contents = std::fs::read_to_string(&config).unwrap();
+    config_contents.push_str("  ServerAliveInterval 30\n");
+    std::fs::write(&config, config_contents).unwrap();
+    jump_pool.retain(std::slice::from_ref(&jump));
+    assert!(lease.options().is_err());
+    assert!(command(&jump_pool, &jump, "true").await.status.success());
+    assert_ne!(jump_pool.pids(), [pid]);
     jump_pool.shutdown();
 
     let short = Pool::new(1, Duration::from_secs(1), Some(config)).unwrap();

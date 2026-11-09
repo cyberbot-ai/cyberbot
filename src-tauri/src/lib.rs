@@ -1691,6 +1691,7 @@ fn background(app: tauri::AppHandle, state: Arc<AppState>) {
         let mut advisory_job: Option<tokio::task::JoinHandle<()>> = None;
         let mut matching_job: Option<tokio::task::JoinHandle<()>> = None;
         let mut checks_job: Option<tokio::task::JoinHandle<()>> = None;
+        let mut ssh_refresh: Option<tokio::task::JoinHandle<()>> = None;
         let mut last_tick = now();
         loop {
             let tick = now();
@@ -1710,6 +1711,9 @@ fn background(app: tauri::AppHandle, state: Arc<AppState>) {
                     job.abort();
                 }
                 if let Some(job) = matching_job.take() {
+                    job.abort();
+                }
+                if let Some(job) = ssh_refresh.take() {
                     job.abort();
                 }
                 break;
@@ -1810,6 +1814,11 @@ fn background(app: tauri::AppHandle, state: Arc<AppState>) {
                         .map(|s| s.endpoint.clone())
                         .collect::<Vec<_>>(),
                 );
+                if ssh_refresh.as_ref().is_none_or(|job| job.is_finished()) {
+                    if let Ok(pool) = ssh_pool::global() {
+                        ssh_refresh = Some(tokio::spawn(pool.refresh_changed_directories()));
+                    }
+                }
                 if !snapshot.settings.paused && storage_ok {
                     let active = state.collectors.snapshot().unwrap_or_default();
                     let book = state.store.monitoring_book().unwrap_or_default();

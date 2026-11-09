@@ -536,7 +536,28 @@ mod tests {
 
         let local = tempfile::tempdir().unwrap();
         let config = local.path().join("config");
-        std::fs::write(&config, "").unwrap();
+        let includes = local.path().join("includes");
+        std::fs::create_dir(&includes).unwrap();
+        let proxy = local.path().join("proxy.sh");
+        let scratch = local.path().join("unrelated.tmp");
+        std::fs::write(
+            &proxy,
+            format!(
+                "set -e\ntouch '{}'\nrm '{}'\nexec /usr/bin/nc \"$@\"\n",
+                scratch.display(),
+                scratch.display(),
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            &config,
+            format!(
+                "Include {}/*.conf\nProxyCommand /bin/sh '{}' %h %p\n",
+                includes.display(),
+                proxy.display(),
+            ),
+        )
+        .unwrap();
         let empty_hosts = local.path().join("empty_known_hosts");
         std::fs::write(&empty_hosts, "").unwrap();
         let collector = ssh::write_collector(local.path()).unwrap();
@@ -591,6 +612,16 @@ mod tests {
         input(b"\r");
         expect_output(&sessions, id, &mut events, &mut output, "user:ops\r\n27 93").await;
         assert_eq!(submissions.load(std::sync::atomic::Ordering::Relaxed), 1);
+
+        std::fs::write(&scratch, "unrelated to OpenSSH").unwrap();
+        pool.retain(std::slice::from_ref(&endpoint));
+        pool.refresh_changed_directories().await;
+        std::fs::remove_file(&scratch).unwrap();
+        assert!(ssh::collect(&endpoint, &collector)
+            .await
+            .unwrap()
+            .cpu_percent
+            .is_some());
         input("printf 'Hello, %s\\n' 'SSH'\r".as_bytes());
         expect_output(&sessions, id, &mut events, &mut output, "Hello, SSH\r\n").await;
 
@@ -652,7 +683,17 @@ mod tests {
             "monitoring must reuse the console's master"
         );
 
+        let lease = pool.acquire(&endpoint).await.unwrap();
+        std::fs::write(includes.join("new.conf"), "ServerAliveCountMax 3\n").unwrap();
+        pool.refresh_changed_directories().await;
+        tokio::time::timeout(Duration::from_secs(1), lease.revoked())
+            .await
+            .expect("a newly matched Include must withdraw the master");
+        assert!(lease.options().is_err());
+        drop(lease);
+
         endpoint.known_hosts_file = Some(empty_hosts.to_string_lossy().into_owned());
+        pool.retain(std::slice::from_ref(&endpoint));
         let mut rejected = sessions
             .register("main", "fixture".into(), endpoint.clone(), SIZE)
             .unwrap();

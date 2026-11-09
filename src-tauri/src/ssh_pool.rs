@@ -1,5 +1,5 @@
 //! Application-owned OpenSSH ControlMasters. No commands or sockets are exposed to MCP.
-use crate::{activity, model::Endpoint, process, ssh};
+use crate::{activity, model::Endpoint, process, ssh, ssh_authorization};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeSet, HashMap},
@@ -21,6 +21,8 @@ pub const KEEPALIVE_SECONDS: u64 = 60;
 pub const IDLE_SECONDS: u64 = 15 * 60;
 pub const DEFAULT_LIMIT: usize = 32;
 const STARTUP_LIMIT: usize = 64;
+const SETTINGS_CHANGED: &str = "SSH: server or settings have changed";
+const CONNECTION_SETTINGS_CHANGED: &str = "SSH settings have changed during connection";
 static GLOBAL: OnceLock<Result<Pool, String>> = OnceLock::new();
 
 pub fn install(pool: Pool) -> Result<(), String> {
@@ -107,9 +109,30 @@ struct Entry {
 }
 struct Files {
     configuration_hash: String,
-    authorization_hash: Option<String>,
+    authorization: Option<ssh_authorization::Stamp>,
     paths: Vec<PathBuf>,
     fingerprint: Vec<u8>,
+    directories: Vec<PathBuf>,
+    directory_fingerprint: Vec<u8>,
+    dynamic_match: bool,
+}
+
+impl Files {
+    fn same_settings(&self, current: &Self) -> bool {
+        let same_authorization = match (&self.authorization, &current.authorization) {
+            (Some(old), Some(new)) => {
+                old.paths == new.paths && old.config_hashes == new.config_hashes
+            }
+            (None, None) => true,
+            _ => false,
+        };
+        self.configuration_hash == current.configuration_hash
+            && self.paths == current.paths
+            && self.fingerprint == current.fingerprint
+            && self.directories == current.directories
+            && same_authorization
+            && !current.dynamic_match
+    }
 }
 pub struct Lease {
     pool: Pool,
@@ -163,11 +186,12 @@ impl Entry {
         }
         Ok(pid)
     }
-    fn unchanged(&self) -> bool {
+    fn files_unchanged(&self) -> bool {
         self.files.lock().is_ok_and(|files| {
-            files
-                .as_ref()
-                .is_none_or(|f| fingerprint(&f.paths) == f.fingerprint)
+            files.as_ref().is_none_or(|f| {
+                fingerprint(&f.paths) == f.fingerprint
+                    && (!f.dynamic_match || fingerprint(&f.directories) == f.directory_fingerprint)
+            })
         })
     }
     fn close(&self, reason: &'static str) -> bool {
@@ -295,8 +319,8 @@ impl Pool {
             state.allowed = Some(allowed.clone());
         }
         self.prune(
-            |e| !allowed.contains(&e.key) || !e.unchanged(),
-            "SSH: server or settings have changed",
+            |e| !allowed.contains(&e.key) || !e.files_unchanged(),
+            SETTINGS_CHANGED,
         );
         self.prune(
             |e| {
@@ -307,6 +331,78 @@ impl Pool {
             "SSH: idle",
         );
         self.trim_idle();
+    }
+
+    pub(crate) async fn refresh_changed_directories(&self) {
+        let entries = match self.0.state.lock() {
+            Ok(state) => state
+                .entries
+                .values()
+                .filter(|entry| entry.users.load(Ordering::SeqCst) > 0)
+                .cloned()
+                .collect::<Vec<_>>(),
+            Err(_) => return,
+        };
+        let mut jobs = tokio::task::JoinSet::new();
+        for entry in entries {
+            if jobs.len() == 4 {
+                let _ = jobs.join_next().await;
+            }
+            let pool = self.clone();
+            jobs.spawn(async move {
+                // A concurrent acquire or handshake checks the same settings under this gate.
+                if let Ok(_gate) = entry.gate.try_lock() {
+                    let _ = pool.verify_configuration(&entry).await;
+                }
+            });
+        }
+        while jobs.join_next().await.is_some() {}
+    }
+
+    async fn verify_configuration(&self, entry: &Entry) -> Result<(), String> {
+        let result = tokio::select! {
+            biased;
+            _ = entry.cancel.cancelled() => return Err("SSH connection withdrawn".into()),
+            result = self.refresh_configuration(entry) => result,
+        };
+        if result.is_err() {
+            entry.close(SETTINGS_CHANGED);
+            self.0.changed.notify_waiters();
+        }
+        result
+    }
+
+    // The caller holds the entry's gate so a master and its snapshot are updated together.
+    async fn refresh_configuration(&self, entry: &Entry) -> Result<(), String> {
+        let before = {
+            let files = entry.files.lock().map_err(|e| e.to_string())?;
+            let Some(files) = files.as_ref() else {
+                return Ok(());
+            };
+            if fingerprint(&files.paths) != files.fingerprint {
+                return Err(CONNECTION_SETTINGS_CHANGED.into());
+            }
+            let before = fingerprint(&files.directories);
+            if before == files.directory_fingerprint {
+                return Ok(());
+            }
+            if files.dynamic_match {
+                return Err(CONNECTION_SETTINGS_CHANGED.into());
+            }
+            before
+        };
+        let mut current = self.configuration(&entry.endpoint).await?;
+        let mut files = entry.files.lock().map_err(|e| e.to_string())?;
+        if !files
+            .as_ref()
+            .is_some_and(|old| old.same_settings(&current))
+        {
+            return Err(CONNECTION_SETTINGS_CHANGED.into());
+        }
+        // Leave changes during the probe visible to the next check.
+        current.directory_fingerprint = before;
+        *files = Some(current);
+        Ok(())
     }
     pub(crate) fn startup_until(&self, deadline: Option<Instant>) {
         if let Ok(mut state) = self.0.state.lock() {
@@ -418,7 +514,7 @@ impl Pool {
                 if let Some(entry) = state.entries.get(&identity) {
                     if !entry.closed.load(Ordering::SeqCst)
                         && !entry.retiring.load(Ordering::SeqCst)
-                        && entry.unchanged()
+                        && entry.files_unchanged()
                     {
                         entry.users.fetch_add(1, Ordering::SeqCst);
                         self.0.leases.fetch_add(1, Ordering::SeqCst);
@@ -504,7 +600,7 @@ impl Lease {
             .lock()
             .map_err(|e| e.to_string())?
             .as_ref()
-            .map(|f| f.authorization_hash.clone())
+            .map(|f| f.authorization.as_ref().map(|stamp| stamp.digest()))
             .ok_or_else(|| "No context for master SSH".into())
     }
     pub fn options(&self) -> Result<Vec<String>, String> {
@@ -519,10 +615,12 @@ impl Lease {
         self.entry.cancel.cancelled().await;
     }
     fn channel_options(&self, tty: bool) -> Result<Vec<String>, String> {
-        if self.entry.closed.load(Ordering::SeqCst) || !self.entry.unchanged() {
+        if self.entry.closed.load(Ordering::SeqCst) || !self.entry.files_unchanged() {
             return Err("SSH connection withdrawn".into());
         }
-        let mut args = self.base_options(true, tty)?;
+        let mut endpoint = self.entry.endpoint.clone();
+        endpoint.jump_host = None;
+        let mut args = self.pool.base_options(&endpoint, tty)?;
         // OpenSSH normally falls back to a new TCP connection when mux is gone.
         // Disable that fallback so every connection remains accounted by the pool.
         args.extend([
@@ -534,30 +632,13 @@ impl Lease {
         ]);
         Ok(args)
     }
-    fn base_options(&self, slave: bool, tty: bool) -> Result<Vec<String>, String> {
-        let mut args = Vec::new();
-        if let Some(config) = &self.pool.0.config {
-            args.extend([
-                "-F".into(),
-                config.to_string_lossy().into_owned(),
-                "-oIdentityAgent=none".into(),
-                "-oIdentitiesOnly=yes".into(),
-                "-oGlobalKnownHostsFile=/dev/null".into(),
-            ]);
-        }
-        let mut endpoint = self.entry.endpoint.clone();
-        if slave {
-            endpoint.jump_host = None;
-        }
-        args.extend(ssh::options_with_pty(&endpoint, tty)?);
-        Ok(args)
-    }
     async fn ready(&self) -> Result<(), String> {
         let _gate = self.entry.gate.lock().await;
         if self.entry.closed.load(Ordering::SeqCst) {
             return Err("SSH connection withdrawn".into());
         }
         if self.entry.check_master().is_ok() {
+            self.pool.verify_configuration(&self.entry).await?;
             self.pool.0.reused.fetch_add(1, Ordering::Relaxed);
             activity::info(
                 "ssh",
@@ -585,12 +666,12 @@ impl Lease {
         result
     }
     async fn open(&self) -> Result<(), String> {
-        let files = self.configuration().await?;
+        let files = self.pool.configuration(&self.entry.endpoint).await?;
         *self.entry.files.lock().map_err(|e| e.to_string())? = Some(files);
         if self.entry.closed.load(Ordering::SeqCst) {
             return Err("SSH connection withdrawn".into());
         }
-        let mut args = self.base_options(false, false)?;
+        let mut args = self.pool.base_options(&self.entry.endpoint, false)?;
         args.extend([
             "-N".into(),
             "-oControlMaster=yes".into(),
@@ -603,9 +684,7 @@ impl Lease {
         if !output.success {
             return Err(ssh::classify_error(&output.stderr));
         }
-        if self.entry.closed.load(Ordering::SeqCst) || !self.entry.unchanged() {
-            return Err("SSH settings have changed during connection".into());
-        }
+        self.pool.verify_configuration(&self.entry).await?;
         self.entry
             .check_master()
             .map_err(|e| format!("Checking the SSH connection: {e}"))?;
@@ -613,106 +692,82 @@ impl Lease {
         self.pool.0.opened.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
-    async fn configuration(&self) -> Result<Files, String> {
-        let mut args = self.base_options(false, false)?;
-        args.extend([
-            "-G".into(),
-            "-v".into(),
-            "--".into(),
-            self.entry.endpoint.host.clone(),
-        ]);
+    pub fn invalidate(&self) {
+        self.entry.close("Verify SSH connection");
+        self.pool.0.changed.notify_waiters();
+    }
+}
+
+impl Pool {
+    fn base_options(&self, endpoint: &Endpoint, tty: bool) -> Result<Vec<String>, String> {
+        let mut args = Vec::new();
+        if let Some(config) = &self.0.config {
+            args.extend([
+                "-F".into(),
+                config.to_string_lossy().into_owned(),
+                "-oIdentityAgent=none".into(),
+                "-oIdentitiesOnly=yes".into(),
+                "-oGlobalKnownHostsFile=/dev/null".into(),
+            ]);
+        }
+        args.extend(ssh::options_with_pty(endpoint, tty)?);
+        Ok(args)
+    }
+
+    async fn configuration(&self, endpoint: &Endpoint) -> Result<Files, String> {
+        let mut args = self.base_options(endpoint, false)?;
+        args.extend(["-G".into(), "-v".into(), "--".into(), endpoint.host.clone()]);
         let output = process::bounded("/usr/bin/ssh", &args, None, 10, 65536).await?;
         if !output.success {
             return Err(ssh::classify_error(&output.stderr));
         }
-        let mut paths = BTreeSet::new();
-        if let Some(home) = std::env::var_os("HOME").filter(|_| self.pool.0.config.is_none()) {
-            for file in [".ssh/config", ".ssh/known_hosts", ".ssh/known_hosts2"] {
-                paths.insert(PathBuf::from(&home).join(file));
-            }
-        }
-        for file in [
-            &self.entry.endpoint.identity_file,
-            &self.entry.endpoint.known_hosts_file,
-        ]
-        .into_iter()
-        .flatten()
-        {
-            paths.insert(PathBuf::from(file));
-        }
-        if let Some(config) = &self.pool.0.config {
-            paths.insert(config.clone());
-        }
-        for line in output.stderr.lines() {
-            if let Some(path) = line.strip_prefix("debug1: Reading configuration data ") {
-                paths.insert(PathBuf::from(path.trim()));
-            }
-        }
-        // ssh -G resolves identity and trust file paths without opening a connection.
-        for line in String::from_utf8_lossy(&output.stdout).lines() {
-            if let Some((name, value)) = line.split_once(' ') {
-                if [
-                    "identityfile",
-                    "certificatefile",
-                    "userknownhostsfile",
-                    "globalknownhostsfile",
-                    "revokedhostkeys",
-                ]
-                .contains(&name)
-                {
-                    for value in std::iter::once(value).chain(value.split_whitespace()) {
-                        let value = value.trim_matches('"');
-                        let path = if let Some(suffix) = value.strip_prefix("~/") {
-                            std::env::var_os("HOME")
-                                .map(PathBuf::from)
-                                .map(|p| p.join(suffix))
-                        } else {
-                            Some(PathBuf::from(value))
-                        };
-                        if let Some(path) = path.filter(|p| p.is_absolute()) {
-                            if !path.starts_with("/dev") {
-                                paths.insert(path);
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        let system_config = self.0.config.is_none();
+        let ssh_authorization::ConfigPaths {
+            files: mut paths,
+            include_dirs: mut directories,
+        } = ssh_authorization::config_paths(&output, system_config);
+        paths.extend(
+            [&endpoint.identity_file, &endpoint.known_hosts_file]
+                .into_iter()
+                .flatten()
+                .map(PathBuf::from),
+        );
+        paths.extend(self.0.config.iter().cloned());
         // Record jump-specific files at master creation too. An old master must
         // never be attested against a newer bastion configuration at approval time.
         // Normal monitoring retains its wider SSH compatibility; actions require
         // a successful strict stamp through their separate authorization guard.
-        let authorization = if self.pool.0.config.is_none() {
-            crate::ssh_authorization::capture(&self.entry.endpoint)
-                .await
-                .ok()
+        let mut dynamic_match = ssh_authorization::executes_match(&output.stderr);
+        let authorization = if system_config && !dynamic_match {
+            match ssh_authorization::capture_from_output(&output).await {
+                Ok((stamp, context)) => {
+                    paths.extend(context.files);
+                    directories.extend(context.include_dirs);
+                    Some(stamp)
+                }
+                Err(error) => {
+                    dynamic_match = error == ssh_authorization::DYNAMIC_MATCH;
+                    None
+                }
+            }
         } else {
             None
         };
-        // Directory stamps also detect added Include matches / replacement of missing files.
-        for parent in paths.clone().iter().filter_map(|p| p.parent()) {
-            paths.insert(parent.to_owned());
-        }
-        // Strict stamps already contain their immediate parents; do not track
-        // unrelated ancestor directories and invalidate masters on temp-file churn.
-        if let Some(stamp) = &authorization {
-            paths.extend(stamp.paths.iter().cloned());
-        }
-        if paths.len() > 512 {
+        directories.extend(ssh_authorization::parents(&paths));
+        if paths.union(&directories).count() > 512 {
             return Err("Too many SSH settings files".into());
         }
         let paths = paths.into_iter().collect::<Vec<_>>();
-        let fingerprint = fingerprint(&paths);
+        let directories = directories.into_iter().collect::<Vec<_>>();
         Ok(Files {
+            fingerprint: fingerprint(&paths),
+            directory_fingerprint: fingerprint(&directories),
             paths,
-            fingerprint,
+            directories,
             configuration_hash: format!("{:x}", Sha256::digest(&output.stdout)),
-            authorization_hash: authorization.as_ref().map(|s| s.digest()),
+            authorization,
+            dynamic_match,
         })
-    }
-    pub fn invalidate(&self) {
-        self.entry.close("Verify SSH connection");
-        self.pool.0.changed.notify_waiters();
     }
 }
 impl Drop for Lease {

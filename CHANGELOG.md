@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.2
+
+- Keep SSH consoles and monitoring connected when unrelated files change alongside local SSH settings.
+
 ## 0.5.1
 
 - Restore SSH resource polling on Linux hosts that use Python 3.6 or 3.7.
