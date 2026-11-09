@@ -30,4 +30,5 @@ QDRANT_ADAPTER = observed_service(
     IdentityPolicy("qdrant", stream_tcp=True), qdrant_connector,
     targets=lambda record, config: service_tcp_targets(record, config, config["port"]),
     image="qdrant/qdrant", installed=("/usr/bin/qdrant", "/usr/local/bin/qdrant"),
+    allow_host_address=True,
 )

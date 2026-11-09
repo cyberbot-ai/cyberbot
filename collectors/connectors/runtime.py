@@ -315,7 +315,7 @@ def service_image_repository(reference):
     return repository
 
 
-def service_container_targets(image, internal_port):
+def service_container_targets(image, internal_port, *, allow_host_address=False):
     # Same fixed local read as Docker diagnostics. No inspect, exec or private container IP.
     socket_path = next((path for path in ("/run/docker.sock", "/var/run/docker.sock")
                         if os.path.exists(path)), None)
@@ -350,14 +350,19 @@ def service_container_targets(image, internal_port):
             elif host == "::":
                 host = "::1"
             published = port.get("PublicPort")
-            if host in ("127.0.0.1", "::1") and type(published) is int and 0 < published <= 65535:
-                candidates.append((("container", owner), (host, published)))
+            if type(published) is not int or not 0 < published <= 65535:
+                continue
+            if host not in ("127.0.0.1", "::1"):
+                if not (allow_host_address and literal_ip(host) and local_interface_address(host)):
+                    continue
+                host = str(ipaddress.ip_address(host))
+            candidates.append((("container", owner), (host, published)))
     stopped = bool(states) and all(state in ("exited", "dead", "created") for state in states)
     return candidates, bool(states), "running" in states, stopped or not states or "running" in states
 
 
 def service_observation(kind, config, result, *, process_only=False, binds=None, targets=None,
-                        image=None, installed=()):
+                        image=None, installed=(), allow_host_address=False):
     records, complete = service_runtime(kind_filter=kind, details=True, process_only=process_only,
                                         tcp_binds=binds)
     live = [record for record in records if record["verified"]]
@@ -370,7 +375,7 @@ def service_observation(kind, config, result, *, process_only=False, binds=None,
     container_found, container_running, container_complete = False, False, True
     if image is not None:
         candidates, container_found, container_running, container_complete = service_container_targets(
-            image, CONNECTOR_CATALOG[kind]["port"]
+            image, CONNECTOR_CATALOG[kind]["port"], allow_host_address=allow_host_address,
         )
     detected = bool(records or unit_found or container_found or any(os.path.isfile(path) for path in installed))
     running = process_running or unit_state == "running" or container_running
@@ -406,7 +411,12 @@ def service_observation(kind, config, result, *, process_only=False, binds=None,
         result["identity"] = hashlib.sha256(repr(owner).encode("ascii")).hexdigest()
     choices = {target for _, target in candidates}
     config["endpoint"], config["port"] = requested if requested in choices else min(
-        choices, key=lambda target: (not target[0].startswith("/"), target[0] != "127.0.0.1", target)
+        choices, key=lambda target: (
+            not target[0].startswith("/"),
+            allow_host_address and literal_ip(target[0]) and not ipaddress.ip_address(target[0]).is_loopback,
+            target[0] != "127.0.0.1",
+            target,
+        )
     )
     return True
 

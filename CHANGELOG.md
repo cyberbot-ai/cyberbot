@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.1
+
+- Collect Qdrant metrics from Docker ports published on a verified local host address, and keep checking confirmed service availability on schedule when diagnostics are unavailable.
+
 ## 0.6.0
 
 - Raise the configurable limit for concurrent background SSH checks from 16 to 24.

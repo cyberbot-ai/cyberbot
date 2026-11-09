@@ -1496,12 +1496,16 @@ impl Store {
         s.last_success = Some(at);
         s.error = None;
         let absent = absent(&summary.data, &s.config);
-        let stopped = summary.data.availability == Some(Availability::Stopped);
-        s.failures = if s.config.enabled && !absent && !summary.data.connected && !stopped {
-            s.failures.saturating_add(1)
-        } else {
-            0
-        };
+        let availability_confirmed = matches!(
+            summary.data.availability,
+            Some(Availability::Running | Availability::Stopped)
+        );
+        s.failures =
+            if s.config.enabled && !absent && !summary.data.connected && !availability_confirmed {
+                s.failures.saturating_add(1)
+            } else {
+                0
+            };
         s.next_check =
             at + if s.config.enabled && !absent {
                 s.config
@@ -1708,6 +1712,53 @@ mod tests {
         sample.as_object_mut().unwrap().remove("availability");
         record(&db, &server, "caddy", sample, now() + 1);
         assert_eq!(card(), Some(Availability::Unknown));
+    }
+    #[test]
+    fn running_service_keeps_its_poll_interval_when_statistics_are_unavailable() {
+        let (db, server) = fixture();
+        let kind = "qdrant";
+        let interval = db
+            .service_state(&server.id, kind)
+            .unwrap()
+            .config
+            .interval_seconds as i64;
+        let at = now() - 3 * interval;
+        let mut sample = wire(kind, at);
+        sample["connected"] = json!(false);
+        sample["complete"] = json!(false);
+        sample["issues"] = json!(["source_unavailable"]);
+        for value in sample["metrics"].as_object_mut().unwrap().values_mut() {
+            *value = serde_json::Value::Null;
+        }
+        sample["availability"] = json!("running");
+
+        for time in [at + interval, at + 2 * interval, at + 3 * interval] {
+            record(&db, &server, kind, sample.clone(), time);
+            let state = db.service_state(&server.id, kind).unwrap();
+            assert_eq!(state.failures, 0);
+            assert!((time + interval..time + interval + 30).contains(&state.next_check));
+            let view = db.service_view(&server.id, kind).unwrap();
+            assert_eq!(view.availability, Some(Availability::Running));
+            assert_eq!(view.status, "unknown");
+            assert_eq!(view.summary.unwrap().data.issues, ["source_unavailable"]);
+        }
+
+        sample["availability"] = json!("unknown");
+        let time = at + 4 * interval;
+        record(&db, &server, kind, sample.clone(), time);
+        let state = db.service_state(&server.id, kind).unwrap();
+        assert_eq!(state.failures, 1);
+        assert!((time + 2 * interval..time + 2 * interval + 30).contains(&state.next_check));
+        assert_eq!(
+            db.service_view(&server.id, kind).unwrap().availability,
+            Some(Availability::Unknown)
+        );
+        let time = state.next_check;
+        record(&db, &server, kind, sample, time);
+        let state = db.service_state(&server.id, kind).unwrap();
+        assert_eq!(state.failures, 2);
+        assert!((time + 4 * interval..time + 4 * interval + 30).contains(&state.next_check));
+        assert!(!fresh(&state, state.next_check));
     }
     #[test]
     fn stopped_service_recovers_from_backoff_and_keeps_its_poll_interval() {

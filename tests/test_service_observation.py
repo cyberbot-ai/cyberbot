@@ -245,6 +245,52 @@ class ServiceObservationTests(unittest.TestCase):
         self.assertIn((16333, "/metrics", {"api-key": "fixture-read-only"}), requests)
         self.assertNotIn("fixture-read-only", json.dumps(qdrant))
 
+    def test_qdrant_uses_a_verified_docker_host_address_and_prefers_loopback(self):
+        local = "192.0.2.10"
+        foreign = "192.0.2.20"
+
+        def publication(address, port=6333):
+            return dict(IP=address, PrivatePort=6333, PublicPort=port, Type="tcp")
+
+        container = dict(Image="qdrant/qdrant:v1", Id="a" * 64, State="running",
+                         Ports=[publication(local)])
+        rows = [container]
+        credentials = Mock(return_value={})
+        requests = []
+
+        def response(config, path, **options):
+            requests.append((config["endpoint"], config["port"], path, options.get("headers")))
+            return 200, b"collections_total 2\nrest_responses_total 5\nrest_responses_fail_total 1\n"
+
+        with patch.dict(self.n, service_http=lambda *_: json.dumps(rows).encode(),
+                        service_http_response=response, service_credentials=credentials,
+                        local_interface_address=lambda address: address == local), patch(
+            "os.path.exists", return_value=True
+        ):
+            sample = self.collect("qdrant")
+            self.assertTrue(sample["complete"])
+            self.assertEqual(sample["metrics"], dict(ready=1, collections=2, restResponses=5, restFailures=1))
+            self.assertEqual(requests, [(local, 6333, "/readyz", None), (local, 6333, "/metrics", None)])
+            requests.clear()
+
+            rows.append(dict(container, Id="b" * 64, Ports=[publication(local, 16333)]))
+            self.assertEqual(self.collect("qdrant")["issues"], ["endpoint_ambiguous"])
+            rows.pop()
+            container["Ports"] = [publication(foreign)]
+            sample = self.collect("qdrant")
+            self.assertEqual(sample["availability"], "running")
+            self.assertEqual(sample["issues"], ["source_unavailable"])
+
+            credentials.return_value = {"password": "fixture-read-only"}
+            container["Ports"] = [publication(local)]
+            self.assertEqual(self.collect("qdrant")["issues"], ["credentials_unavailable"])
+            self.assertEqual(requests, [])
+
+            container["Ports"].append(publication("::"))
+            self.assertTrue(self.collect("qdrant")["complete"])
+            self.assertEqual(requests, [("::1", 6333, "/readyz", None),
+                                        ("::1", 6333, "/metrics", {"api-key": "fixture-read-only"})])
+
     def test_nebula_checks_pid_start_time_before_reading_metrics(self):
         self.scan.return_value = ([process("nebula")], True)
         read = Mock(side_effect=lambda path, _: b"7200.00 0" if path == "/proc/uptime" else proc_stat())
