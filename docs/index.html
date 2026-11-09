@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#101913">
+  <meta name="description" content="Monitor Linux servers over SSH from your Mac. See service health, critical Debian and Ubuntu CVEs, and incidents in one open-source desktop app.">
+  <title>Cyberbot | Linux fleet monitoring from your Mac</title>
+  <link rel="stylesheet" href="./site.css">
+</head>
+<body class="cyberbot-site" id="top">
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  <div class="masthead">
+    <header class="site-header wrap">
+      <a class="wordmark" href="#top">
+        <span class="brand-mark" aria-hidden="true">
+          <!--
+            Lucide radar, ISC License
+            Copyright (c) 2026 Lucide Icons and Contributors
+
+            Permission to use, copy, modify, and/or distribute this software for any
+            purpose with or without fee is hereby granted, provided that the above
+            copyright notice and this permission notice appear in all copies.
+
+            THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+            WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+            MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+            ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+            WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+            ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+            OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+          -->
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M19.07 4.93A10 10 0 0 0 6.99 3.34M4 6h.01M2.29 9.62A10 10 0 1 0 21.31 8.35M16.24 7.76A6 6 0 1 0 8.23 16.67M12 18h.01M17.99 11.66A6 6 0 0 0 17.54 9.7M13.41 10.59l5.66-5.66"/>
+            <circle cx="12" cy="12" r="2"/>
+          </svg>
+        </span>
+        Cyberbot
+      </a>
+      <nav class="site-nav" aria-label="Main navigation">
+        <a href="#features">Features</a>
+        <a href="#how-it-works">How it works</a>
+        <a href="#faq">FAQ</a>
+      </nav>
+      <a class="header-link" href="https://github.com/cyberbot-ai/cyberbot">GitHub <span aria-hidden="true">↗</span></a>
+    </header>
+  </div>
+
+  <main id="main" tabindex="-1">
+    <section class="masthead hero-band" aria-labelledby="hero-title">
+      <div class="hero wrap">
+        <div class="hero-copy">
+          <p class="eyebrow"><span class="signal" aria-hidden="true"></span> Linux fleet monitoring · macOS app</p>
+          <h1 id="hero-title">See what <em>needs attention</em> across your Linux servers.</h1>
+          <p class="hero-lead">Monitor your fleet over SSH, investigate incidents, and review proposed actions from a macOS desktop app. Get notified when a critical vulnerability is found on a server.</p>
+          <div class="actions">
+            <a class="button button-primary" href="#install">Install from source <span aria-hidden="true">↓</span></a>
+            <a class="button button-outline" href="https://github.com/cyberbot-ai/cyberbot">View on GitHub <span aria-hidden="true">↗</span></a>
+          </div>
+          <p class="hero-note">Open source · GPL-3.0-only · macOS 12+</p>
+        </div>
+        <figure class="hero-figure">
+          <div class="window">
+            <div class="window-bar">
+              <span class="window-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+              <span>Fleet overview</span>
+              <span class="demo-label">Demo</span>
+            </div>
+            <a class="image-link" href="./screenshots/fleet-overview.jpg" aria-label="Open full-size fleet overview">
+              <img src="./screenshots/fleet-overview.jpg" width="1280" height="950" fetchpriority="high" alt="Cyberbot fleet overview with 24 example.com servers and three rows flagged for critical CVEs">
+            </a>
+          </div>
+          <figcaption>Fleet overview with critical CVE counts in red. All screenshots use fictional demo data.</figcaption>
+        </figure>
+      </div>
+
+      <dl class="principles wrap">
+        <div>
+          <dt>Connect over SSH</dt>
+          <dd>Use your existing keys, config, and jump hosts.</dd>
+        </div>
+        <div>
+          <dt>Store monitoring data locally</dt>
+          <dd>Inventory, settings, and history live in SQLite on your Mac.</dd>
+        </div>
+        <div>
+          <dt>Review proposed changes</dt>
+          <dd>Optional AI investigations keep you in control.</dd>
+        </div>
+      </dl>
+    </section>
+
+    <section class="section wrap" id="features" aria-labelledby="features-title">
+      <div class="section-heading">
+        <p class="eyebrow">Features</p>
+        <h2 id="features-title">See the fleet. Open the evidence.</h2>
+        <p>Follow a warning from the fleet dashboard to the affected service, package, or log entry.</p>
+      </div>
+
+      <div class="feature-list">
+        <article class="feature-row">
+          <div class="feature-copy">
+            <p class="eyebrow">01 / Fleet dashboard</p>
+            <h3>Find the servers that need attention.</h3>
+            <p>See CPU, memory, load, disk space, inodes, services, and incidents across the fleet. Filter by health, search by host, and sort by any resource metric.</p>
+            <ul class="check-list">
+              <li>Import a static Ansible inventory in INI, YAML, or JSON.</li>
+              <li>See when a reading is stale, unavailable, or still pending.</li>
+              <li>Keep polling from the menu bar after closing the window.</li>
+            </ul>
+          </div>
+          <figure class="feature-figure">
+            <a class="image-link" href="./screenshots/fleet-attention.jpg" aria-label="Open full-size filtered fleet dashboard">
+              <img src="./screenshots/fleet-attention.jpg" width="1280" height="470" loading="lazy" decoding="async" alt="Cyberbot fleet dashboard filtered to eight servers that need attention">
+            </a>
+            <figcaption>Fleet dashboard filtered to servers that need attention.</figcaption>
+          </figure>
+        </article>
+
+        <article class="feature-row feature-reverse">
+          <div class="feature-copy">
+            <p class="eyebrow">02 / OS vulnerabilities</p>
+            <h3>See which packages need an update.</h3>
+            <p>Cyberbot checks installed packages against critical advisories for supported Debian and Ubuntu releases. A new finding opens an incident and can trigger a macOS notification.</p>
+            <ul class="check-list">
+              <li>Search the fleet-wide catalog by CVE, package, or server.</li>
+              <li>Compare installed and fixed versions and check APT availability.</li>
+              <li>Copy an upgrade command for one or several eligible findings.</li>
+            </ul>
+          </div>
+          <figure class="feature-figure">
+            <a class="image-link" href="./screenshots/fleet-vulnerabilities.jpg" aria-label="Open full-size OS vulnerability details">
+              <img src="./screenshots/fleet-vulnerabilities.jpg" width="1280" height="720" loading="lazy" decoding="async" alt="OS vulnerability panel with three fictional CVEs, installed and fixed package versions, and an APT command">
+            </a>
+            <figcaption>Package versions, update availability, and a suggested APT command.</figcaption>
+          </figure>
+        </article>
+
+        <article class="feature-row">
+          <div class="feature-copy">
+            <p class="eyebrow">03 / AI investigations</p>
+            <h3>Investigate incidents and review changes.</h3>
+            <p>Use your installed Codex or Claude CLI to investigate a server, incident, or incident group. Each run has a fixed server scope, and the agent requests diagnostics through Cyberbot’s MCP gateway.</p>
+            <ul class="check-list">
+              <li>Review the exact command and target before approving a change.</li>
+              <li>See pending requests, results, and supported rollback options.</li>
+              <li>Run monitoring, vulnerability checks, and incident rules independently of AI.</li>
+            </ul>
+            <a class="text-link" href="https://github.com/cyberbot-ai/cyberbot/blob/master/docs/architecture.md#proposed-actions">Read the action policy <span aria-hidden="true">↗</span></a>
+          </div>
+          <figure class="feature-figure approval-figure">
+            <a class="image-link" href="./screenshots/ai-action-approval.jpg" aria-label="Open full-size AI action approval">
+              <img src="./screenshots/ai-action-approval.jpg" width="760" height="640" loading="lazy" decoding="async" alt="Approval dialog for a proposed Nginx worker_processes change, showing the diff, risk review, and approval controls">
+            </a>
+            <figcaption>Approval request for an Nginx configuration change.</figcaption>
+          </figure>
+        </article>
+      </div>
+
+      <div class="capability-grid">
+        <article class="capability">
+          <h3>Server and fleet consoles</h3>
+          <p>Open a server’s metrics, logs, and interactive SSH session in one panel. Run a command on selected servers and review the output and exit code per host.</p>
+        </article>
+        <article class="capability">
+          <h3>18 service connectors</h3>
+          <p>Track databases, proxies, and runtimes separately from their hosts. Check blocked PostgreSQL sessions, Nginx response codes, Docker, and more.</p>
+          <a class="text-link" href="https://github.com/cyberbot-ai/cyberbot/blob/master/docs/CONNECTORS.md">Browse connectors <span aria-hidden="true">↗</span></a>
+        </article>
+        <article class="capability">
+          <h3>Incidents and correlation</h3>
+          <p>Keep the evidence behind each incident. Group related failures by declared dependencies, shared jump hosts, or matching checks.</p>
+          <a class="text-link" href="https://github.com/cyberbot-ai/cyberbot/blob/master/docs/INCIDENT_GROUPS.md">Explore incident groups <span aria-hidden="true">↗</span></a>
+        </article>
+        <article class="capability">
+          <h3>System and SSH logs</h3>
+          <p>Detect suspicious SSH logins, out-of-memory events, service crashes, disk errors, and Fail2ban failures. See which sources were read and where coverage was incomplete.</p>
+        </article>
+        <article class="capability">
+          <h3>Custom checks</h3>
+          <p>Write declarative checks against collected metrics. Test a draft with fixtures, preview it on a real server, and enable the version you reviewed.</p>
+        </article>
+        <article class="capability">
+          <h3>Activity and preferences</h3>
+          <p>Search the activity log, review storage usage, and schedule light and dark themes. Cyberbot prunes old records automatically.</p>
+          <a class="text-link" href="./screenshots/fleet-light.jpg">View the light theme <span aria-hidden="true">↗</span></a>
+        </article>
+      </div>
+    </section>
+
+    <section class="workflow-band" id="how-it-works" aria-labelledby="workflow-title">
+      <div class="section wrap">
+        <div class="section-heading">
+          <p class="eyebrow">How it works</p>
+          <h2 id="workflow-title">From an SSH check to an incident.</h2>
+          <p>Cyberbot runs a Python collector on demand from the remote account’s cache. Collection needs no always-running daemon, extra listening port, or hosted backend.</p>
+        </div>
+        <ol class="flow">
+          <li>
+            <span class="step-index" aria-hidden="true">01</span>
+            <h3>Connect</h3>
+            <p>Cyberbot schedules the check and connects with OpenSSH using verified host keys.</p>
+          </li>
+          <li>
+            <span class="step-index" aria-hidden="true">02</span>
+            <h3>Collect</h3>
+            <p>The collector reads metrics or logs and returns a bounded, structured result.</p>
+          </li>
+          <li>
+            <span class="step-index" aria-hidden="true">03</span>
+            <h3>Evaluate</h3>
+            <p>The app saves observations locally and evaluates monitoring rules.</p>
+          </li>
+          <li>
+            <span class="step-index" aria-hidden="true">04</span>
+            <h3>Surface</h3>
+            <p>The dashboard shows fleet health and keeps the evidence behind each incident.</p>
+          </li>
+        </ol>
+        <aside class="workflow-note" aria-label="Optional AI investigation">
+          <div>
+            <h3>Optional AI investigation</h3>
+            <p>Your CLI provider may process evidence included in a run. Cyberbot checks the server scope and asks for your approval before running an allowed action that changes a server.</p>
+          </div>
+          <a class="text-link" href="https://github.com/cyberbot-ai/cyberbot/blob/master/docs/architecture.md">Read the architecture <span aria-hidden="true">↗</span></a>
+        </aside>
+      </div>
+    </section>
+
+    <section class="section wrap install" id="install" aria-labelledby="install-title">
+      <div class="section-heading">
+        <p class="eyebrow">Get started</p>
+        <h2 id="install-title">Build Cyberbot on your Mac.</h2>
+        <p>Build from the public source and open Cyberbot from Applications. Verify that <code>ssh user@host</code> works with a known host key, then add your first server or import an Ansible inventory.</p>
+        <a class="text-link" href="https://github.com/cyberbot-ai/cyberbot/releases/latest">View the latest source release <span aria-hidden="true">↗</span></a>
+      </div>
+      <div class="install-panel">
+        <div class="terminal">
+          <div class="terminal-label"><span aria-hidden="true">&gt;_</span> Terminal</div>
+          <pre><code>git clone https://github.com/cyberbot-ai/cyberbot.git
+cd cyberbot
+make install</code></pre>
+        </div>
+        <dl class="requirements">
+          <div><dt>Your Mac</dt><dd>macOS 12+, Xcode Command Line Tools, Node.js 22.22.2 or newer 22.x, and stable Rust.</dd></div>
+          <div><dt>Monitored servers</dt><dd>Linux with SSH, rsync, and Python 3.5+. Service status needs systemd.</dd></div>
+          <div><dt>Optional AI</dt><dd>An installed and authenticated Codex or Claude CLI.</dd></div>
+        </dl>
+        <details class="disclosure">
+          <summary>Try the local browser demo</summary>
+          <div class="answer">
+            <p>From the source directory, run <code>make deps</code> and then <code>make web-dev</code>. Open the local URL printed by Vite. The demo uses fictional data with SSH and AI disabled.</p>
+          </div>
+        </details>
+      </div>
+    </section>
+
+    <section class="section wrap faq" id="faq" aria-labelledby="faq-title">
+      <div class="section-heading">
+        <p class="eyebrow">FAQ</p>
+        <h2 id="faq-title">Before you connect.</h2>
+        <p>Find more detail in the setup and platform guides.</p>
+        <a class="text-link" href="https://github.com/cyberbot-ai/cyberbot/blob/master/docs/user-guide.md">Read the user guide <span aria-hidden="true">↗</span></a>
+      </div>
+      <div class="faq-list">
+        <details class="disclosure">
+          <summary>Do I have to install an agent on my servers?</summary>
+          <div class="answer"><p>Cyberbot copies a Python collector to <code>~/.cache/cyberbot</code> in the remote account and runs it over SSH when a check is due. No Cyberbot daemon stays running on the server.</p></div>
+        </details>
+        <details class="disclosure">
+          <summary>Does my data leave my Mac?</summary>
+          <div class="answer"><p>Monitoring data is stored locally. Cyberbot connects over SSH, downloads public package advisories, and probes a public host on TCP port 443 to check its internet connection. If you use AI investigations, your CLI provider processes evidence included in the run.</p></div>
+        </details>
+        <details class="disclosure">
+          <summary>Do I need an AI subscription?</summary>
+          <div class="answer"><p>Monitoring, incidents, vulnerability checks, and custom checks run without a model. Optional AI investigations use your own CLI login.</p></div>
+        </details>
+        <details class="disclosure">
+          <summary>Can the agent change my servers on its own?</summary>
+          <div class="answer"><p>Actions with side effects need your approval for the exact script and target. Cyberbot applies its action policy after you approve.</p></div>
+        </details>
+        <details class="disclosure">
+          <summary>Which Linux distributions are supported?</summary>
+          <div class="answer"><p>Resource metrics work on Linux hosts with Python 3.5 or later. Service status needs systemd, and package advisories cover supported Debian and Ubuntu releases. See the <a href="https://github.com/cyberbot-ai/cyberbot/blob/master/docs/LINUX_PLATFORMS.md">Linux coverage matrix</a>.</p></div>
+        </details>
+        <details class="disclosure">
+          <summary>Is there a version for Windows or Linux desktops?</summary>
+          <div class="answer"><p>Cyberbot is currently a macOS desktop app that you build from source.</p></div>
+        </details>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap footer-inner">
+      <div><a class="wordmark" href="#top">Cyberbot</a><p>Open-source Linux fleet monitoring for macOS.</p></div>
+      <nav aria-label="Project links">
+        <a href="https://github.com/cyberbot-ai/cyberbot">GitHub</a>
+        <a href="https://github.com/cyberbot-ai/cyberbot#documentation">Documentation</a>
+        <a href="https://github.com/cyberbot-ai/cyberbot/blob/master/CONTRIBUTING.md">Contribute</a>
+        <a href="https://github.com/cyberbot-ai/cyberbot/blob/master/LICENSE">GPL-3.0-only</a>
+      </nav>
+    </div>
+  </footer>
+</body>
+</html>
