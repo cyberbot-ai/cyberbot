@@ -10,7 +10,10 @@
 </p>
 
 <p align="center">
+  <a href="#features">Features</a> ·
+  <a href="#how-it-works">How it works</a> ·
   <a href="#get-started">Get started</a> ·
+  <a href="#faq">FAQ</a> ·
   <a href="docs/user-guide.md">User guide</a> ·
   <a href="CONTRIBUTING.md">Contribute</a>
 </p>
@@ -23,24 +26,151 @@
 
 ![Cyberbot fleet overview with all 24 example.com servers and red CVE counts on three rows](docs/screenshots/fleet-overview.jpg)
 
-*Fleet overview with critical CVE counts highlighted in red.*
+*Fleet overview with critical CVE counts highlighted in red. All screenshots use fictional demo data.*
+
+## Why Cyberbot
+
+- **Nothing to run on your servers.** Cyberbot connects with the OpenSSH setup you already have and copies a Python collector into the remote account's cache. It needs no always-running daemon, no extra listening port, and no hosted backend.
+- **Your data stays on your Mac.** Settings, inventory, and monitoring history live in a local SQLite database with fixed size limits.
+- **Missing data is never shown as healthy.** Stale, unavailable, and pending readings are marked as such. Missing permissions and unsupported capabilities are listed next to the measurements that are available.
+- **AI is optional and supervised.** Polling, rules, and incidents work without a model. If you connect a Codex or Claude CLI, the agent sees a fixed set of servers, and anything that can change a server waits for your approval.
+
+## Features
+
+### Fleet dashboard
+
+![Cyberbot grid view filtered to eight servers that need attention, including critical, warning, failed, and stale ones](docs/screenshots/fleet-attention.jpg)
+
+*Grid view filtered to the servers that need attention.*
+
+- Watch CPU, memory, swap, load, disk space, inodes, detected services, and open incidents for every server on one screen.
+- Switch between a compact list and a grid. Filter by **Needs attention**, **Healthy**, or **Insufficient data**, search by name or address, and sort by any resource metric to compare servers.
+- Add servers by address or import a [static Ansible inventory](docs/INVENTORY.md). In the list, inventories are grouped by domain.
+- Pause and resume polling from the sidebar. Cyberbot keeps polling from the menu bar after you close the window and stops while your Mac is asleep.
+
+### Server details and SSH console
+
+Open a server to see its overview, incidents, services, logs, vulnerabilities, checks, AI conversations, and console in one panel.
+
+- The overview shows current metrics, recent CPU history, every mount point with space and inode usage, and the operating system and services that were detected.
+- The **Console** tab opens an interactive SSH session and keeps it open while you switch tabs.
+- Polling, file sync, and the console share pooled OpenSSH connections. Host aliases, keys, and jump hosts from your SSH configuration keep working.
+
+### Service connectors
+
+Cyberbot detects application services and monitors each one separately from the host, with its own schedule, history, and incidents. Several connectors support multiple instances on one server, such as two PostgreSQL clusters on different ports.
+
+| Category | Built-in connectors |
+| --- | --- |
+| Web servers and proxies | Nginx, Caddy, Envoy |
+| Databases and stores | PostgreSQL, MySQL or MariaDB, MongoDB, CockroachDB, ClickHouse, Redis, Qdrant |
+| Connection poolers and proxies | PgBouncer, ProxySQL, Twemproxy |
+| Runtimes | Docker, PHP-FPM |
+| Network, security, and voice | Nebula, Fail2ban, Asterisk |
+
+Diagnostics use local endpoints and credentials that already exist on the server. See [connectors](docs/CONNECTORS.md) for the requirements of each service.
+
+### Incidents and correlation
+
+- Deterministic rules turn metrics, logs, service results, and package advisories into incidents. Every incident keeps its own evidence and history.
+- Related incidents on different servers are grouped using the dependencies you declare, a shared jump host, or the same failing check. See [incident groups](docs/INCIDENT_GROUPS.md).
+- Search incidents and groups by server, check, evidence, severity, or status. Mark an incident resolved to clear it from the dashboard and keep its history.
+- Automatic recovery has to be confirmed by observations. Missing coverage cannot confirm it.
+- Optional macOS notifications announce new incidents, including while the window is hidden.
+
+### Vulnerabilities and logs
 
 ![Cyberbot OS vulnerability panel listing three sample CVEs for s1.app.example.com](docs/screenshots/fleet-vulnerabilities.jpg)
 
-*OS vulnerability details for one server. Both screenshots use fictional demo data.*
+*OS vulnerability details for one server.*
 
-## What Cyberbot does
+- Cyberbot matches installed packages against critical advisories for supported Debian and Ubuntu releases. Matching runs locally and does not use AI.
+- Each finding shows the installed and required versions, whether an update is available, and the command that installs it. Hide a package you have accepted until its installed version changes.
+- System and SSH logs are summarized on the server. Cyberbot reads them incrementally and receives a summary with redacted examples.
 
-- **Monitor a fleet from one screen.** View CPU, memory, load, disks, services, and incident status. Cyberbot shows when readings are stale, unavailable, or still pending.
-- **Go from an alert to the evidence.** Open a server to inspect service metrics, incremental log summaries, critical package advisories on supported Ubuntu and Debian releases, and related incidents. Open an interactive SSH console when you need it.
-- **Monitor application services independently.** Track databases, proxies, containers, and other services with [18 built-in connectors](docs/CONNECTORS.md). Several connectors support multiple instances on one host.
-- **Investigate with an optional AI agent.** Use an installed Codex or Claude CLI to investigate incidents. The agent's server requests go through Cyberbot's Model Context Protocol (MCP) gateway, which limits access to the servers in scope. Read-only diagnostics can run without approval; shell commands and other supported actions that can change a server require your approval. Requests that violate the [action policy](docs/architecture.md#proposed-actions) are blocked. Routine monitoring runs without a model.
+### Fleet console
 
-Cyberbot stores settings and monitoring history locally. It uses OpenSSH and deploys a versioned Python collector over rsync to the remote account's cache. It needs no always-running server daemon. See the [architecture](docs/architecture.md) for the data and trust boundaries.
+Run one command on a selection of servers, or on the whole fleet, and read the output for each server in one place. The same page has an AI chat scoped to the selected servers.
+
+### AI investigations with approvals
+
+<p align="center">
+  <img src="docs/screenshots/ai-action-approval.jpg" width="620" alt="Cyberbot approval window for a proposed Nginx worker_processes change, with a diff, a risk review result, and Decline and Allow once buttons">
+</p>
+
+*Approval request for a proposed Nginx configuration change.*
+
+- Use an installed Codex or Claude CLI to investigate a server, an incident, or an incident group. The agent replies in the language of your latest message.
+- The agent's server requests go through Cyberbot's Model Context Protocol (MCP) gateway. Each run gets a fixed server scope that cannot grow while it is active.
+- Read-only diagnostics can run without approval. Shell commands and other supported actions that can change a server require your approval, after a separate risk review. Requests that violate the [action policy](docs/architecture.md#proposed-actions) are blocked.
+- An approval is bound to the exact script, inputs, and SSH context. If any of them change, the approval is no longer valid.
+- The managed Nginx change backs up and validates the configuration, records a receipt, and offers rollback.
+- Automatic investigations are off by default. When you turn them on, they run from a queue with the daily token and run limits you set, one run per incident, and cooldowns. Choose a model for each of the low, medium, and high profiles.
+
+### Custom checks and the monitoring library
+
+- The **Library** lists every built-in check with its source, operations, and settings. Settings inherit from the factory defaults through the fleet, the server, and the service instance, and you can override them at each level.
+- Write your own checks as declarative rules over metrics that Cyberbot has already collected. Test a draft with fixtures, preview it on a real server, and enable the version you reviewed. You can roll back to an earlier version.
+- An agent can draft a check for you. Enabled checks run on a schedule in an isolated runner without a model.
+
+### Everyday details
+
+![Cyberbot grid view of the fleet in the light theme](docs/screenshots/fleet-light.jpg)
+
+*The same fleet in the light theme.*
+
+- Use the light or dark theme, or switch between them on a schedule.
+- The **Activity log** records operations with their timing and results.
+- Cyberbot checks its own internet connection, so a network outage on your side is not recorded as a failure of every server.
+- Storage settings show how much space the database, advisory cache, and activity log use. Old records are pruned automatically.
+
+## How it works
+
+```mermaid
+flowchart LR
+    subgraph mac["Your Mac"]
+        app["Cyberbot<br/>scheduler, rules, SQLite"]
+        gateway["MCP gateway<br/>scope and action policy"]
+        agent["Codex or Claude CLI<br/>(optional)"]
+    end
+    subgraph server["Linux server"]
+        collector["Python collector<br/>~/.cache/cyberbot"]
+    end
+    app -- "OpenSSH and rsync" --> collector
+    collector -- "bounded structured results" --> app
+    agent -- "tool requests" --> gateway
+    gateway --> app
+    app -. "approval request" .-> operator(["You"])
+```
+
+1. Cyberbot schedules checks through bounded queues and a pool of OpenSSH connections. Host keys are verified.
+2. It deploys a versioned Python collector with rsync into the remote account's cache. The collector runs a fixed operation and returns a bounded, structured result.
+3. The desktop app validates the result, stores the observation, and evaluates deterministic rules. A metric that cannot be read stays unknown.
+4. If you use AI, a local agent process reads monitoring data through the MCP gateway. Actions with side effects stop at an approval window.
+
+The app is built with Tauri 2, Rust, and Vue 3. See the [architecture](docs/architecture.md) for the data and trust boundaries.
+
+## Security and privacy
+
+- **Local storage.** Settings and monitoring history are stored under `~/Library/Application Support/dev.cyberbot.desktop`. Activity logs avoid storing action scripts and full results.
+- **Your SSH trust.** Cyberbot uses OpenSSH with your keys, configuration, and verified host keys. Use a dedicated account with the minimum permissions your checks need.
+- **Bounded collection.** Monitoring collectors run fixed read operations and return bounded results. Service connectors keep row data, secrets, and full command output out of observations.
+- **Scoped AI.** The CLI and the provider you choose handle authentication and inference. A run can include the monitoring evidence you select, and the provider may process it. The gateway checks the server identity, endpoint, and scope on every request.
+- **Your approval.** The action broker applies its own policy even after review and approval.
+
+## Requirements
+
+| Component | Requirement |
+| --- | --- |
+| Your Mac | macOS 12 or later. Building from source needs Xcode Command Line Tools, Node.js 22.22.2 or a newer 22.x release, and stable Rust. |
+| Monitored server | Linux with SSH access, rsync, and Python 3.5 or later. |
+| Service status | systemd. |
+| Package advisories | dpkg on supported Debian and Ubuntu releases. |
+| AI investigations | Optional. An installed and authenticated Codex or Claude CLI. |
+
+Resource metrics work on any distribution that meets the server requirement. See the [Linux coverage matrix](docs/LINUX_PLATFORMS.md) for distro-specific capabilities.
 
 ## Get started
-
-You need macOS 12 or later, Xcode Command Line Tools, Node.js 22.22.2 or a newer 22.x release, and stable Rust. The monitored Linux host needs SSH access, rsync, and Python 3. See the [Linux coverage matrix](docs/LINUX_PLATFORMS.md) for distro-specific capabilities.
 
 1. Download a source archive from [GitHub Releases](https://github.com/cyberbot-ai/cyberbot/releases/latest), or clone the repository.
 
@@ -54,7 +184,29 @@ You need macOS 12 or later, Xcode Command Line Tools, Node.js 22.22.2 or a newer
 
 Releases contain source archives. Local builds use ad-hoc macOS signing. To update, quit Cyberbot from its menu, open the new source version, and run `make install` again. The installer preserves the app's data.
 
-For a browser demo with fictional data, run `make deps` followed by `make web-dev`, then open the local URL printed by Vite.
+### Try the demo
+
+To explore the interface with fictional data in a browser, run `make deps` followed by `make web-dev`, then open the local URL printed by Vite. SSH and AI are disabled in the demo.
+
+## FAQ
+
+**Do I have to install an agent on my servers?**
+No. Cyberbot copies a Python collector to `~/.cache/cyberbot` in the remote account and runs it over SSH when a check is due. No Cyberbot daemon stays running on the server.
+
+**Does my data leave my Mac?**
+Monitoring data is stored locally. Cyberbot connects to your servers over SSH, downloads public advisory data for Debian and Ubuntu packages, and probes a public host on TCP port 443 to check its own internet connection. If you use AI investigations, the evidence included in a run is processed by the provider behind your Codex or Claude CLI.
+
+**Do I need an AI subscription?**
+No. Monitoring, incidents, vulnerability checks, and custom checks run without a model. AI investigations are an optional addition that uses your own CLI login.
+
+**Can the agent change my servers on its own?**
+No. Actions with side effects need your approval for the exact script and target, and the action policy still applies after you approve.
+
+**Which Linux distributions are supported?**
+Resource metrics work on Linux hosts with Python 3.5 or later. Service status needs systemd. Package advisories cover supported Debian and Ubuntu releases. See [Linux platforms](docs/LINUX_PLATFORMS.md).
+
+**Is there a version for Windows or Linux desktops?**
+Not at the moment. Cyberbot is a macOS app that you build from source.
 
 ## Documentation
 
@@ -64,5 +216,11 @@ For a browser demo with fictional data, run `make deps` followed by `make web-de
 | SSH collection, storage, and action approvals | [Architecture](docs/architecture.md) |
 | Hosts, services, and incident grouping | [Inventory](docs/INVENTORY.md) · [Linux platforms](docs/LINUX_PLATFORMS.md) · [Connectors](docs/CONNECTORS.md) · [Incident groups](docs/INCIDENT_GROUPS.md) |
 | Building, testing, and releasing | [Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md) |
+
+## Contributing
+
+Bug reports and pull requests are welcome. See [Contributing](CONTRIBUTING.md) for the development setup, checks, and release process. The [connector contract](docs/CONNECTORS.md#adding-a-connector) and the [platform adapter guide](docs/LINUX_PLATFORMS.md#adding-a-platform-adapter) explain how to extend coverage.
+
+## License
 
 Cyberbot is licensed under [GPL-3.0-only](LICENSE). See [third-party notices](THIRD_PARTY_NOTICES.md) for separately licensed components.
