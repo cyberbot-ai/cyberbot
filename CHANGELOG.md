@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.1
+
+- Restore SSH resource polling on Linux hosts that use Python 3.6 or 3.7.
+
 ## 0.5.0
 
 - Connect over SSH automatically when opening a server's Console tab, and reuse the active session when returning to the tab.

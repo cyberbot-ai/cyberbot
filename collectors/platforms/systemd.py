@@ -22,7 +22,8 @@ def linux_systemd_services(platform):
                 *(unit[:-8] for unit in units),
             ],
             stdin=subprocess.DEVNULL,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             timeout=4,
             env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"},
         )

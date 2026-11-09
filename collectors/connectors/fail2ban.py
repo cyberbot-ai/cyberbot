@@ -44,7 +44,11 @@ def fail2ban_connector(config, result):
             if release and tuple(map(int, release.groups())) >= (1, 1):
                 data = service_process([*args, "stats"], limit=16384, timeout=2)
                 data = data.replace("║".encode(), b"|").replace("│".encode(), b"|")
-                rows = [match.groups() for line in data.splitlines() if (match := FAIL2BAN_STATS_ROW.fullmatch(line))]
+                rows = []
+                for line in data.splitlines():
+                    match = FAIL2BAN_STATS_ROW.fullmatch(line)
+                    if match is not None:
+                        rows.append(match.groups())
                 if len(rows) == count:
                     result["metrics"]["currentlyBanned"] = service_number(sum(int(row[0]) for row in rows))
                     result["metrics"]["totalBanned"] = service_number(sum(int(row[1]) for row in rows))

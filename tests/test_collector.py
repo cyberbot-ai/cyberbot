@@ -1,13 +1,18 @@
+import ast
 import pathlib
 import tempfile
 import unittest
 
-from collectors.bundle import module
+from collectors.bundle import module, source
 
 collector = module()
 
 
 class CollectorTests(unittest.TestCase):
+    def test_bundle_parses_on_python_36(self):
+        # Every connector must parse before any poll can run.
+        ast.parse(source(), filename="collector.py", feature_version=(3, 6))
+
     def test_incremental_logs_do_not_repeat(self):
         with tempfile.TemporaryDirectory() as d:
             p = pathlib.Path(d) / "auth.log"
