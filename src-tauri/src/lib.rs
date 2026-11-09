@@ -2063,6 +2063,7 @@ pub fn run() {
             power::install(app.handle().clone(), state.clone());
             ai_actions::install_events(app.handle().clone());
             main_window.show()?;
+            window_size::track(&main_window, &state.root);
             notifications::start(app.handle().clone(), state.clone());
             if notification_smoke {
                 notifications::seed_smoke(state.clone(), app.handle().clone())?;
@@ -2108,7 +2109,9 @@ pub fn run() {
             }
             if window.label() == "main" {
                 match event {
-                    tauri::WindowEvent::Resized(_) => window_size::resized(window),
+                    tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_) => {
+                        window_size::geometry_changed(window);
+                    }
                     tauri::WindowEvent::CloseRequested { api, .. } => {
                         api.prevent_close();
                         window_size::flush(window.app_handle());

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.1
+
+- Restore the main window's size and position on macOS, including when it fills the available work area.
+
 ## 0.3.0
 
 - Sort the server dashboard by hostname suffix, CPU, load, memory, swap, disk space, or inode usage. Disk sorting uses the fullest mount point.
