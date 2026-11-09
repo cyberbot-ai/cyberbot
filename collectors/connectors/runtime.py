@@ -173,20 +173,22 @@ def service_credentials(kind, instance="default"):
     return v
 
 
-def service_process(args, data=b"", limit=32768, timeout=3, env=None, *, statuses=(0,)):
+def service_process(args, data=b"", limit=32768, timeout=3, env=None, *,
+                    statuses=(0,), classify_error=None, preexec_fn=None):
     clean = {"PATH": "/usr/bin:/bin:/usr/sbin", "HOME": "/nonexistent", "LC_ALL": "C"}
     if env:
         clean.update(env)
+    end = time.monotonic() + timeout
     p = subprocess.Popen(
         args,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         env=clean,
+        preexec_fn=preexec_fn,
     )
     out = bytearray()
     errors = bytearray()
-    end = time.monotonic() + timeout
     try:
         p.stdin.write(data)
         p.stdin.close()
@@ -194,9 +196,10 @@ def service_process(args, data=b"", limit=32768, timeout=3, env=None, *, statuse
             sel.register(p.stdout, selectors.EVENT_READ, out)
             sel.register(p.stderr, selectors.EVENT_READ, errors)
             while sel.get_map():
-                if time.monotonic() > end:
+                remaining = end - time.monotonic()
+                if remaining <= 0:
                     raise ValueError("query_timeout")
-                for key, _ in sel.select(0.05):
+                for key, _ in sel.select(min(0.05, remaining)):
                     b = os.read(key.fd, 4096)
                     if not b:
                         sel.unregister(key.fileobj)
@@ -204,8 +207,12 @@ def service_process(args, data=b"", limit=32768, timeout=3, env=None, *, statuse
                     key.data.extend(b)
                     if len(out) > limit or len(errors) > 4096:
                         raise ValueError("response_limit")
-        if p.wait(timeout=0.5) not in statuses:
-            raise ValueError("source_unavailable")
+        try:
+            status = p.wait(timeout=max(0, end - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            raise ValueError("query_timeout") from None
+        if status not in statuses:
+            raise ValueError(classify_error(errors) if classify_error else "source_unavailable")
         return bytes(out)
     finally:
         if p.poll() is None:

@@ -43,6 +43,8 @@ For exact metrics, endpoints, and permission requirements, consult the in-app mo
 
 Where supported, a default Redis, MongoDB, ClickHouse, ProxySQL, or Qdrant profile reads credentials from `~/.cache/cyberbot/credentials/<kind>.json` on the monitored server. Use a regular file owned by the SSH user with mode `0600`. The JSON fields are `user` and `password`. Qdrant uses `password` for its read-only API key. Additional Redis, MongoDB, and ClickHouse instances use `credentials/<kind>/<instance-id>.json` and have separate credentials. PostgreSQL and CockroachDB can use the remote user's `.pgpass`.
 
+PgBouncer diagnostics use `psql` to run `SHOW POOLS`. With automatic address detection and an empty diagnostic role, a collector running as root can connect without a password through a verified Unix socket. The query runs as the operating-system account that owns the PgBouncer process, using the built-in `pgbouncer` console login. For a manual address or a password-based connection, set **Diagnostic role** to an existing `stats_users` role and put any required password in the SSH user's `~/.pgpass` on the monitored server. Use `pgbouncer` in the database field and set the file mode to `0600`.
+
 ## Adding a connector
 
 1. Register its stable ID, Python module, operations, metrics, endpoint rules, and requirements in the catalog.

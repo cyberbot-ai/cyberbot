@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.4
+
+- Collect PgBouncer pool statistics over a verified local socket when automatic diagnostics run as root without a configured role, and report missing credentials and denied access separately.
+
 ## 0.2.3
 
 - Correct English labels, statuses, and errors across the app, including SSH commands, AI approvals, monitoring checks, and service metrics.

@@ -903,7 +903,7 @@
     ],
     "port": 6432,
     "credentials": "pgpass",
-    "rights": "Existing psql, local listener, and stats_users role with .pgpass or peer access.",
+    "rights": "Requires psql and a local listener. Automatic diagnostics as root can use the verified PgBouncer Unix socket. A configured role needs console access, with .pgpass if a password is required.",
     "metrics": [
       {
         "key": "activeClients",

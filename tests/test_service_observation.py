@@ -2,7 +2,7 @@ import json
 import stat
 import unittest
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 from collectors.bundle import namespace
 
@@ -46,6 +46,120 @@ class ServiceObservationTests(unittest.TestCase):
         self.assertIn("--host=/tmp", self.source.call_args.args[0])
         self.assertIn("--port=16432", self.source.call_args.args[0])
         self.assertEqual(self.source.call_args.args[1], b"SHOW POOLS;\n")
+
+    def pgbouncer_root_fixture(self):
+        socket_path = "/run/postgresql/.s.PGSQL.6432"
+        self.scan.return_value = ([process("pgbouncer", listeners=[("127.0.0.1", 6432)],
+                                           sockets=[socket_path])], True)
+        self.source.return_value = b"database,cl_active,cl_waiting,sv_active,sv_idle\na,2,1,5,4\n"
+        for target, replacement in (
+            ("os.getuid", Mock(return_value=0)),
+            ("os.geteuid", Mock(return_value=0)),
+            ("os.path.isfile", Mock(return_value=True)),
+            ("pwd.getpwuid", Mock(side_effect=lambda uid: SimpleNamespace(
+                pw_name="pgbouncer-owner" if uid == 123 else "root", pw_dir="/root",
+            ))),
+        ):
+            patcher = patch(target, replacement)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.pgbouncer_proc = Mock(side_effect=lambda path, _: (
+            b"Uid:\t123\t123\t123\t123\nGid:\t456\t456\t456\t456\n"
+            if path.endswith("/status") else proc_stat()
+        ))
+        proc = patch.dict(self.n, service_read_file=self.pgbouncer_proc)
+        proc.start()
+        self.addCleanup(proc.stop)
+        socket = patch("os.lstat", return_value=SimpleNamespace(st_uid=123, st_mode=stat.S_IFSOCK))
+        self.pgbouncer_lstat = socket.start()
+        self.addCleanup(socket.stop)
+
+    def test_pgbouncer_root_uses_owned_socket_and_drops_privileges(self):
+        self.pgbouncer_root_fixture()
+        result = self.collect("pgbouncer")
+        self.assertTrue(result["complete"])
+        self.pgbouncer_lstat.assert_called_once_with("/run/postgresql/.s.PGSQL.6432")
+        args, query = self.source.call_args.args
+        self.assertIn("--host=/run/postgresql", args)
+        self.assertIn("--username=pgbouncer", args)
+        self.assertEqual(query, b"SHOW POOLS;\n")
+        options = self.source.call_args.kwargs
+        self.assertEqual(options["env"]["PGREQUIREPEER"], "pgbouncer-owner")
+        self.assertEqual(options["env"]["PGPASSFILE"], "/dev/null")
+        calls = Mock()
+        with patch.multiple("os", setgroups=calls.groups, setresgid=calls.gid,
+                            setresuid=calls.uid, create=True):
+            options["preexec_fn"]()
+        self.assertEqual(calls.mock_calls, [
+            call.groups([]), call.gid(456, 456, 456), call.uid(123, 123, 123),
+        ])
+
+    def test_pgbouncer_root_does_not_pick_a_socket_from_another_process(self):
+        self.pgbouncer_root_fixture()
+        records, _ = self.scan.return_value
+        records.append(process("pgbouncer", pid=43, sockets=["/tmp/.s.PGSQL.6432"]))
+        self.assertEqual(self.collect("pgbouncer")["issues"], ["endpoint_ambiguous"])
+        self.pgbouncer_lstat.assert_not_called()
+        self.source.assert_not_called()
+
+    def test_pgbouncer_preserves_explicit_role_and_manual_address(self):
+        self.pgbouncer_root_fixture()
+        for profile in ({"user": "stats"}, {"autoEndpoint": False}):
+            with self.subTest(profile=profile):
+                self.assertTrue(self.collect("pgbouncer", **profile)["complete"])
+                self.assertIn("--host=127.0.0.1", self.source.call_args.args[0])
+                self.assertEqual("--username=stats" in self.source.call_args.args[0], "user" in profile)
+                self.assertEqual(self.source.call_args.kwargs["env"]["PGPASSFILE"], "/root/.pgpass")
+                self.assertIsNone(self.source.call_args.kwargs["preexec_fn"])
+        self.pgbouncer_lstat.assert_not_called()
+
+    def test_pgbouncer_root_skips_socket_with_wrong_owner_or_stale_pid(self):
+        self.pgbouncer_root_fixture()
+        self.pgbouncer_lstat.return_value.st_uid = 789
+        self.assertTrue(self.collect("pgbouncer")["complete"])
+        self.assertIsNone(self.source.call_args.kwargs["preexec_fn"])
+
+        self.pgbouncer_lstat.return_value.st_uid = 123
+        self.pgbouncer_proc.side_effect = [
+            b"Uid:\t123\t123\t123\t123\nGid:\t456\t456\t456\t456\n", proc_stat(started=234),
+        ]
+        self.assertTrue(self.collect("pgbouncer")["complete"])
+        self.assertIsNone(self.source.call_args.kwargs["preexec_fn"])
+
+    def test_pgbouncer_access_failure_falls_back_within_original_budget(self):
+        self.pgbouncer_root_fixture()
+        current = 10
+        output = self.source.return_value
+
+        def query(*args, **kwargs):
+            nonlocal current
+            if kwargs["preexec_fn"]:
+                current += 2
+                raise ValueError("connection_denied")
+            raise ValueError(kwargs["classify_error"](b"psql: error: fe_sendauth: no password supplied"))
+
+        self.source.side_effect = query
+        with patch("time.monotonic", side_effect=lambda: current):
+            result = self.collect("pgbouncer")
+        self.assertEqual(result["availability"], "running")
+        self.assertFalse(result["connected"])
+        self.assertEqual(result["issues"], ["credentials_unavailable"])
+        self.assertEqual([call.kwargs["timeout"] for call in self.source.call_args_list], [3, 1])
+
+        self.source.reset_mock()
+        self.source.side_effect = [ValueError("query_timeout"), output]
+        self.assertEqual(self.collect("pgbouncer")["issues"], ["query_timeout"])
+        self.source.assert_called_once()
+
+    def test_pgbouncer_classifies_only_known_client_errors(self):
+        for message, expected in (
+            (b'FATAL:  password authentication failed for user "secret"', "credentials_unavailable"),
+            (b"FATAL:  not allowed", "connection_denied"),
+            (b"ERROR: permission denied for command", "connection_denied"),
+            (b"unexpected private client output", "source_unavailable"),
+        ):
+            with self.subTest(expected=expected):
+                self.assertEqual(self.n["pgbouncer_error"](message), expected)
 
     def test_proxysql_uses_only_confirmed_admin_port_and_stats_query(self):
         query = Mock(return_value=[
