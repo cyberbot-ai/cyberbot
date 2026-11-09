@@ -15,7 +15,7 @@ const labels = {
   idle: 'Ready to connect',
   connecting: 'SSH connection…',
   connected: 'SSH connected',
-  closing: 'Shutdown…',
+  closing: 'Disconnecting…',
   ended: 'Session concluded',
 };
 
@@ -264,7 +264,7 @@ onBeforeUnmount(() => {
       <button v-if="phase === 'idle' || phase === 'ended'" type="button" @click="connect">
         {{ phase === 'idle' ? 'Connect' : 'Connect again' }}
       </button>
-      <button v-else type="button" :disabled="phase === 'closing'" @click="disconnect">Shut down</button>
+      <button v-else type="button" :disabled="phase === 'closing'" @click="disconnect">Disconnect</button>
     </header>
     <p v-if="preview" class="notice">SSH console is available in the Cyberbot desktop app.</p>
     <p v-if="error" class="error" role="alert">{{ error }}</p>

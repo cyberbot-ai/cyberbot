@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.2
+
+- Label the SSH console button Disconnect to clarify that it ends the session.
+
 ## 0.2.1
 
 - Close the AI action approval window automatically after approval succeeds.
