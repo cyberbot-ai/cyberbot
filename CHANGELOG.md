@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.0
+
+- Reply in the language of the latest user message in server and fleet AI chats.
+
 ## 0.1.1
 
 - Rename the Conversations tab in server details to AI.
