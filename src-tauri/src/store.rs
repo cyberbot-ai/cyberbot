@@ -848,7 +848,9 @@ mod tests {
         };
         db.save_settings(&initial).unwrap();
         let updated = db
-            .update_settings(serde_json::from_str(r#"{"pollSeconds":900}"#).unwrap())
+            .update_settings(
+                serde_json::from_str(r#"{"pollSeconds":900,"concurrency":24}"#).unwrap(),
+            )
             .unwrap();
         assert_eq!(updated.poll_seconds, 900);
         assert!(updated.paused);
@@ -862,6 +864,7 @@ mod tests {
         assert_eq!(cleared.daily_token_limit, None);
         assert_eq!(cleared.daily_run_limit, Some(3));
         assert_eq!(cleared.poll_seconds, 900);
+        assert_eq!(cleared.concurrency, 24);
     }
     #[test]
     fn invalid_settings_patch_leaves_the_whole_profile_unchanged() {
@@ -869,6 +872,7 @@ mod tests {
         let before = serde_json::to_value(db.settings().unwrap()).unwrap();
         for json in [
             r#"{"pollSeconds":1,"paused":true}"#,
+            r#"{"concurrency":25,"paused":true}"#,
             r#"{"mode":"unknown"}"#,
             r#"{"dailyTokenLimit":999}"#,
             r#"{"runTokenLimit":9007199254740992}"#,

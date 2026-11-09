@@ -246,8 +246,8 @@ impl Settings {
         if !(60..=86400).contains(&self.log_poll_seconds) {
             return Err("Enter a log check interval from 60 to 86,400 seconds.".into());
         }
-        if !(30..=86400).contains(&self.poll_seconds) || !(1..=16).contains(&self.concurrency) {
-            return Err("Interval: 30–86400 seconds; parallelism: 1–16".into());
+        if !(30..=86400).contains(&self.poll_seconds) || !(1..=24).contains(&self.concurrency) {
+            return Err("Interval: 30–86400 seconds; parallelism: 1–24".into());
         }
         self.connectivity_probe.validate()
     }

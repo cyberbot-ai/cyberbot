@@ -73,8 +73,12 @@ describe('monitoring autosave',()=>{
   it('flushes pending valid edits on blur and navigation and notifies the app after unmount',async()=>{
     const observed=vi.fn(),off=onSettingsSaved(observed);
     const w=mount(MonitoringSettings,{props:{settings:{...stored}}});
-    await w.findAll('input')[2].setValue('8');await w.findAll('input')[2].trigger('blur');await flushPromises();
-    expect(stored.concurrency).toBe(8);
+    const concurrency = w.get('input[max="24"]');
+    await concurrency.setValue('25');await settle();
+    expect(mocks.call).not.toHaveBeenCalled();
+    expect(w.get('[role="alert"]').text()).toContain('1 to 24');
+    await concurrency.setValue('24');await concurrency.trigger('blur');await flushPromises();
+    expect(stored.concurrency).toBe(24);
     await w.findAll('input')[0].setValue('600');w.unmount();await flushPromises();
     expect(stored.pollSeconds).toBe(600);expect(observed).toHaveBeenLastCalledWith(stored);off();
   });

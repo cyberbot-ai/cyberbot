@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.0
+
+- Raise the configurable limit for concurrent background SSH checks from 16 to 24.
+
 ## 0.5.4
 
 - Prefer Ansible inventory domain names when displaying servers and use the configured address for SSH.
