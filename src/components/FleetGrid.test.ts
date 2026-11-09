@@ -88,4 +88,23 @@ describe('500-server fleet',()=>{
     wrapper.unmount();
     expect(observers.every(o=>o.disconnected)).toBe(true);
   });
+  it('preserves the visible server when an offscreen project heading is removed', async () => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+    const projectStarts = new Map([['0', 'example.com'], ['40', 'example.net']]);
+    const wrapper = mount(FleetGrid, { props: { servers, projectStarts, now: 1000, interval: 180, compact: true } });
+    try {
+      const viewport = wrapper.get<HTMLElement>('.viewport');
+      viewport.element.scrollTop = 1656; // Fifty 32px rows, a 24px first heading and a 32px project break.
+      await viewport.trigger('scroll');
+      expect(wrapper.find('[data-id="40"]').exists()).toBe(false);
+      expect(wrapper.findAll('[data-id]')[0].attributes('data-id')).toBe('48');
+
+      await wrapper.setProps({ projectStarts: new Map([['0', 'example.com']]) });
+      await nextTick();
+      expect(viewport.element.scrollTop).toBe(1624);
+      expect(wrapper.findAll('[data-id]')[0].attributes('data-id')).toBe('48');
+    } finally {
+      wrapper.unmount();
+    }
+  });
 });

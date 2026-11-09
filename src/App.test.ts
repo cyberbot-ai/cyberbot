@@ -270,6 +270,54 @@ describe('fleet ribbon integration', () => {
       app.unmount();
     }
   });
+  it('shows separate domain projects within each inventory and moves the heading when filtering', async () => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+    const server = (id: string, host: string, sourceId = 'production', name = host): Server => ({
+      id, name, sourceId, endpoint: { host, user: 'ops', port: 22, identityFile: null, jumpHost: null },
+      observation: null, lastError: null, lastAttempt: null, nextCheck: 0, failures: 0,
+    });
+    const servers = [
+      server('api', 'api.ops.example.com'),
+      server('db', 'db.example.com'),
+      server('proxy', '192.0.2.7', 'production', 'proxy.example.com'),
+      server('uk', 'worker.example.co.uk'),
+      server('bare', 'worker'),
+      server('ipv6', '2001:db8::10'),
+      server('staging', 'metrics.example.com', 'staging'),
+      server('manual', 'lab.example.org', 'manual'),
+    ];
+    const sources = [
+      { id: 'production', name: 'hosts.ini', kind: 'ansible', location: '/ops/prod/hosts.ini' },
+      { id: 'staging', name: 'hosts.ini', kind: 'ansible', location: '/ops/stage/hosts.ini' },
+      { id: 'manual', name: 'Manual list', kind: 'manual', location: 'lab.example.org' },
+    ].map(source => ({ ...source, lastSync: null, error: null }));
+    vi.mocked(call).mockImplementation(async command => command === 'snapshot' ? {
+      servers, sources, incidents: [], logStatus: {}, collectedAt: Date.now() / 1000,
+      settings: { mode: 'manual', dailyRunLimit: null, dailyTokenLimit: null, runTokenLimit: 50000, autoAgent: 'codex', pollSeconds: 180, logPollSeconds: 600, paused: false, concurrency: 4 },
+    } : {});
+    const app = mount(App);
+    try {
+      await flushPromises();
+      const rows = () => app.getComponent(FleetGrid).findAll('[data-id]');
+      const projects = () => app.findAll('.ribbon-project').map(heading => heading.text());
+      const ids = rows().map(row => row.attributes('data-id'));
+      expect([...projects()].sort()).toEqual(['example.co.uk', 'example.com', 'example.com', 'prod']);
+      expect(ids.slice(ids.indexOf('proxy'), ids.indexOf('proxy') + 3)).toEqual(['proxy', 'db', 'api']);
+      expect(app.get('[data-id="manual"]').find('h2').exists()).toBe(false);
+
+      await app.get('button[aria-label="Search servers"]').trigger('click');
+      await app.get('input[aria-label="Search servers"]').setValue('db.example.com');
+      expect(app.get('[data-id="db"] h2').text()).toBe('example.com');
+      expect(rows()).toHaveLength(1);
+
+      await app.get('button[aria-label="Close search"]').trigger('click');
+      await app.findAll('.fleet-sort button').find(button => button.text() === 'CPU')!.trigger('click');
+      expect(projects()).toEqual([]);
+      expect(rows()).toHaveLength(servers.length);
+    } finally {
+      app.unmount();
+    }
+  });
   it('updates the attention indicator with the worst fleet state and hides it after recovery',async()=>{
     vi.stubGlobal('ResizeObserver',class{observe(){}unobserve(){}disconnect(){}});
     const now=Date.now()/1000;

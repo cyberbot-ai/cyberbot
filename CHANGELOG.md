@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.0
+
+- In the server list sorted by hostname, show Ansible projects with headings and spacing. Split each inventory by domain and use the inventory folder for hosts without a domain.
+
 ## 0.3.2
 
 - Give the server sorting controls a compact text style with an arrow on the active column.

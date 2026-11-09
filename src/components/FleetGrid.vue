@@ -4,23 +4,39 @@ import ServerCard from './ServerCard.vue';
 import ServerRibbon from './ServerRibbon.vue';
 import type { Server } from '../types';
 
-const props = defineProps<{ servers: Server[]; now: number; interval: number; compact: boolean; scrollResetKey?: string }>();
+const props = defineProps<{
+  servers: Server[];
+  projectStarts?: ReadonlyMap<string, string>;
+  now: number;
+  interval: number;
+  compact: boolean;
+  scrollResetKey?: string;
+}>();
 defineEmits<{ select: [server: Server] }>();
 const root = ref<HTMLElement>();
 const width = ref(1000), height = ref(600), top = ref(0), measuredVersion = ref(0);
 const measured = new Map<string, number>(), elements = new Map<string, Element>();
 const cardRowHeight = 178;
+const projectHeadingHeight = 24;
+const projectHeadingSize = `${projectHeadingHeight}px`;
+const projectGap = 8;
 const columns = computed(() => props.compact ? 1 : Math.max(1, Math.floor((width.value + 12) / 270)));
-const rowIds = computed(() => props.servers.map(server => server.id));
-// Only visible rows are measured. Prefix offsets also cover wrapped service lists.
-function rowOffsets(ids: string[]) {
+const rows = computed(() => props.servers.map((server, index) => {
+  const project = props.compact ? props.projectStarts?.get(server.id) : undefined;
+  const leading = project ? projectHeadingHeight + (index > 0 ? projectGap : 0) : 0;
+  return { server, project, leading };
+}));
+// Heading space is known even when its server is outside the viewport.
+function rowOffsets(layout: typeof rows.value) {
   const positions = [0];
-  for (const id of ids) positions.push(positions[positions.length - 1] + (measured.get(id) ?? 32));
+  for (const row of layout) {
+    positions.push(positions[positions.length - 1] + row.leading + (measured.get(row.server.id) ?? 32));
+  }
   return positions;
 }
 const offsets = computed(() => {
   void measuredVersion.value;
-  return rowOffsets(rowIds.value);
+  return rowOffsets(rows.value);
 });
 function rowAt(position: number, positions = offsets.value) {
   let low = 0, high = positions.length - 1;
@@ -36,7 +52,7 @@ function rowOffset(index: number, positions?: number[]) {
 }
 const first = computed(() => props.compact ? Math.max(0, rowAt(top.value) - 2) : Math.max(0, Math.floor(top.value / cardRowHeight) - 2) * columns.value);
 const end = computed(() => Math.min(props.servers.length, props.compact ? rowAt(top.value + height.value) + 3 : first.value + (Math.ceil(height.value / cardRowHeight) + 4) * columns.value));
-const visible = computed(() => props.servers.slice(first.value, end.value));
+const visible = computed(() => rows.value.slice(first.value, end.value));
 const before = computed(() => rowOffset(first.value, props.compact ? offsets.value : undefined));
 const after = computed(() => props.compact ? offsets.value[props.servers.length] - offsets.value[end.value] : Math.max(0, Math.ceil(props.servers.length / columns.value) - Math.ceil(end.value / columns.value)) * cardRowHeight);
 let viewportObserver: ResizeObserver | undefined, rowObserver: ResizeObserver | undefined;
@@ -99,10 +115,12 @@ onMounted(() => {
   for (const element of elements.values()) rowObserver.observe(element);
 });
 onBeforeUnmount(() => { viewportObserver?.disconnect(); rowObserver?.disconnect(); });
-watch([rowIds, () => props.compact, () => props.scrollResetKey], ([ids, compact, resetKey], [previousIds, previousCompact, previousResetKey]) => {
+watch([rows, () => props.compact, () => props.scrollResetKey], ([layout, compact, resetKey], [previousLayout, previousCompact, previousResetKey]) => {
   const reset = compact !== previousCompact || resetKey !== previousResetKey;
-  if (!reset && ids.length === previousIds.length && ids.every((id, index) => id === previousIds[index])) return;
+  if (!reset && layout.length === previousLayout.length && layout.every((row, index) =>
+    row.server.id === previousLayout[index].server.id && row.leading === previousLayout[index].leading)) return;
 
+  const ids = layout.map(row => row.server.id);
   const remaining = new Set(ids);
   let position = 0;
   let focused: HTMLElement | undefined;
@@ -111,12 +129,12 @@ watch([rowIds, () => props.compact, () => props.scrollResetKey], ([ids, compact,
     const active = root.value?.ownerDocument.activeElement;
     if (active instanceof HTMLElement && root.value?.contains(active)) focused = active;
     const focusedId = focused?.closest<HTMLElement>('[data-id]')?.dataset.id;
-    const previousOffsets = compact ? rowOffsets(previousIds) : undefined;
+    const previousOffsets = compact ? rowOffsets(previousLayout) : undefined;
     const firstVisible = previousOffsets ? rowAt(top.value, previousOffsets) : Math.floor(top.value / cardRowHeight) * columns.value;
-    const anchorId = focusedId && remaining.has(focusedId) ? focusedId : previousIds[firstVisible];
-    const nextIndex = ids.indexOf(anchorId);
+    const anchorId = focusedId && remaining.has(focusedId) ? focusedId : previousLayout[firstVisible]?.server.id;
+    const nextIndex = anchorId === undefined ? -1 : ids.indexOf(anchorId);
     if (nextIndex >= 0) {
-      const previousIndex = previousIds.indexOf(anchorId);
+      const previousIndex = previousLayout.findIndex(row => row.server.id === anchorId);
       position = top.value - rowOffset(previousIndex, previousOffsets) + rowOffset(nextIndex, compact ? offsets.value : undefined);
     }
   }
@@ -131,11 +149,12 @@ watch([rowIds, () => props.compact, () => props.scrollResetKey], ([ids, compact,
       <div aria-hidden="true" :style="{ height: `${before}px` }"></div>
       <div class="grid" :class="{ ribbon: compact }" :style="{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }" :role="compact ? 'list' : undefined" aria-label="Servers">
         <template v-if="compact">
-          <div v-for="(server, index) in visible" :key="server.id" :ref="element => observeRow(element, server.id)" class="ribbon-slot" :data-id="server.id" role="listitem" :aria-posinset="first + index + 1" :aria-setsize="servers.length">
+          <div v-for="({ server, project, leading }, index) in visible" :key="server.id" :ref="element => observeRow(element, server.id)" class="ribbon-slot" :style="project ? { paddingTop: `${leading}px` } : undefined" :data-id="server.id" role="listitem" :aria-posinset="first + index + 1" :aria-setsize="servers.length">
+            <h2 v-if="project" class="ribbon-project" :style="{ top: `${leading - projectHeadingHeight}px` }" :title="project">{{ project }}</h2>
             <ServerRibbon :server="server" :now="now" :interval="interval" :alternate="(first + index) % 2 === 1" @select="$emit('select', $event)" />
           </div>
         </template>
-        <template v-else><ServerCard v-for="server in visible" :key="server.id" :data-id="server.id" :server="server" :now="now" :interval="interval" @select="$emit('select', $event)" /></template>
+        <template v-else><ServerCard v-for="{ server } in visible" :key="server.id" :data-id="server.id" :server="server" :now="now" :interval="interval" @select="$emit('select', $event)" /></template>
       </div>
       <div aria-hidden="true" :style="{ height: `${after}px` }"></div>
     </div>
@@ -143,5 +162,20 @@ watch([rowIds, () => props.compact, () => props.scrollResetKey], ([ids, compact,
 </template>
 
 <style scoped>
-.fleet-grid{height:100%;display:flex;flex-direction:column;min-height:0}.viewport{flex:1;min-height:0;overflow:auto;overflow-anchor:none;padding:2px 3px 8px;box-sizing:border-box;scrollbar-color:var(--line-strong) transparent;scrollbar-width:thin}.grid{display:grid;gap:12px}.grid.ribbon{gap:0}.viewport.ribbon{padding:0}.ribbon-slot{min-width:0}
+.fleet-grid{height:100%;display:flex;flex-direction:column;min-height:0}.viewport{flex:1;min-height:0;overflow:auto;overflow-anchor:none;padding:2px 3px 8px;box-sizing:border-box;scrollbar-color:var(--line-strong) transparent;scrollbar-width:thin}.grid{display:grid;gap:12px}.grid.ribbon{gap:0}.viewport.ribbon{padding:0}
+/* ResizeObserver measures the content box, so the cached server height excludes the heading. */
+.ribbon-slot { min-width: 0; position: relative; }
+.ribbon-project {
+  position: absolute;
+  inset-inline: 0;
+  margin: 0;
+  padding-inline: 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: v-bind(projectHeadingSize);
+}
 </style>

@@ -6,6 +6,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { call, preview } from './api';
 import { health } from './health';
 import { fleetSortColumns, sortFleet, type FleetSort, type FleetSortKey } from './fleetSort';
+import { groupFleetProjects } from './fleetProjects';
 import RelativeDate from './components/RelativeDate.vue';
 import { useClock } from './useClock';
 import type { AgentStatus, InventoryFile, Server, Settings, Snapshot, StorageStatus } from './types';
@@ -150,6 +151,12 @@ const filtered=computed(()=>servers.value.filter(s=>{
   return (!query||[s.name,s.endpoint.host].some(v=>v.toLowerCase().includes(query)))&&(filter.value==='all'||(filter.value==='problems'?['critical','warning','unreachable','stale'].includes(state):filter.value==='unknown'?state==='unknown':state===filter.value));
 }));
 const orderedServers = computed(() => sortFleet(filtered.value, fleetSort.value, now.value, settings.value.pollSeconds));
+const fleet = computed(() => {
+  const servers = orderedServers.value;
+  return compact.value && fleetSort.value.key === 'host'
+    ? groupFleetProjects(servers, data.value?.sources ?? [])
+    : { servers, projectStarts: undefined };
+});
 let reloadTimer: ReturnType<typeof setTimeout> | undefined;
 let reloading: Promise<void> | undefined, followUp: Promise<void> | undefined;
 let unlisten:UnlistenFn|undefined;let stopSettingsListener:(()=>void)|undefined;let stopped=false,settingsRevision=0;
@@ -271,7 +278,7 @@ async function closeDetails(){if(standalone&&!preview){try{await getCurrentWindo
       <div v-if="!data" class="loading" role="status">Loading infrastructure…</div>
       <div v-else-if="servers.length===0" class="empty"><UiIcon name="servers" :size="36"/><h2>Connect your servers</h2><p>Add an Ansible inventory or a list of hosts.<br>Metrics appear after the first SSH poll.</p><button class="primary" @click="sourceForm=true">Add server</button></div>
       <div v-else-if="!filtered.length" class="empty"><h2>No servers found</h2><p>Try a different search or reset the filters.</p><button @click="search='';filter='all'">Reset filters</button></div>
-      <div v-else class="fleet"><FleetGrid :servers="orderedServers" :now="now" :interval="settings.pollSeconds" :compact="compact" :scroll-reset-key="fleetScrollResetKey" @select="openServer($event.id)"/></div>
+      <div v-else class="fleet"><FleetGrid :servers="fleet.servers" :project-starts="fleet.projectStarts" :now="now" :interval="settings.pollSeconds" :compact="compact" :scroll-reset-key="fleetScrollResetKey" @select="openServer($event.id)"/></div>
     </template>
     <section v-else-if="page==='incidents'" class="scroll-content">
       <p v-if="notificationIds" class="notification-selection">Incidents from notification <button @click="notificationIds=null">All incidents</button></p>

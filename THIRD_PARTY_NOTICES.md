@@ -34,6 +34,14 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
+## tldts and tldts-core
+
+Source: https://github.com/remusao/tldts
+
+Copyright (c) 2017 Thomas Parisot, 2018 Rémi Berson
+
+MIT License (see the license text above). The domain data comes from the [Public Suffix List](https://publicsuffix.org/list/public_suffix_list.dat), which is licensed under the [Mozilla Public License 2.0](https://mozilla.org/MPL/2.0/).
+
 ## Lucide radar
 
 Source: https://github.com/lucide-icons/lucide/blob/main/icons/radar.svg

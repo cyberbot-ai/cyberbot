@@ -11,6 +11,7 @@ Cyberbot starts polling automatically and writes its versioned collector under `
 ## Read the dashboard and investigate incidents
 
 - **Servers** shows resource and service status across your fleet. The first poll after startup or wake establishes fresh status. An unknown or stale reading is shown separately from a healthy result. The polling control at the bottom of the sidebar pauses or resumes collection.
+- In list view, **Host** sorting groups each Ansible inventory by domain, such as `example.com`. Hosts without a domain appear under the inventory folder name. Sort by a resource metric to compare all servers together.
 - Open a server for its overview, service panels, logs, vulnerabilities, checks, AI conversations, and interactive SSH console. The service panels show missing permissions and unsupported capabilities alongside the measurements that are available.
 - The **Incidents** page groups related episodes and shows their evidence. Use **Mark resolved** to clear an active episode from the dashboard while retaining its history. Recurring bad observations stay suppressed until recovery is confirmed. See [incident groups](INCIDENT_GROUPS.md) for correlation and recovery.
 - Enable macOS notifications in Cyberbot settings and grant permission in System Settings if you want incident notifications. The **Activity log** records operations, timing, and results. Retention and storage usage are shown in settings.
