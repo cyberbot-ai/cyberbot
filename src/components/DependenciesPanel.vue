@@ -2,6 +2,7 @@
 import UiInput from './UiInput.vue';
 import { computed, reactive, ref, watch } from 'vue';
 import { call, preview } from '../api';
+import { serverDisplayHost } from '../serverDirectory';
 import type { ServerDependencies } from '../types';
 
 const props = defineProps<{ serverId: string }>();
@@ -16,6 +17,7 @@ const visible = computed(() => {
   return editor.value?.available.filter(s => [s.host, s.name].some(value => value?.toLocaleLowerCase().includes(query))) ?? [];
 });
 const message = (e: unknown) => String(e).replace(/^Error: /, '');
+const displayHost = ({ name, host }: ServerDependencies['available'][number]) => serverDisplayHost(name, host ?? name);
 
 async function load(id: string) {
   const current = reactive<Editor>({ id, available: [], dependsOn: [], loading: true, saving: false,
@@ -26,7 +28,8 @@ async function load(id: string) {
     const result = await call<ServerDependencies>('server_dependencies', { id });
     const selected = new Set(result.dependsOn);
     // Show existing links first on load; toggling a checkbox never moves its row.
-    current.available = result.available.filter(s => s.id !== id).sort((a, b) => Number(selected.has(b.id)) - Number(selected.has(a.id)) || (a.host ?? a.name).localeCompare(b.host ?? b.name, 'en-US', { numeric: true }));
+    current.available = result.available.filter(s => s.id !== id).sort((a, b) =>
+      Number(selected.has(b.id)) - Number(selected.has(a.id)) || displayHost(a).localeCompare(displayHost(b), 'en-US', { numeric: true }));
     const allowed = new Set(current.available.map(s => s.id));
     current.dependsOn = [...new Set(result.dependsOn.filter(id => allowed.has(id)))];
   } catch (e) { current.loadError = message(e); }
@@ -87,7 +90,7 @@ function retry() {
             <input type="checkbox" :value="server.id" :checked="editor.dependsOn.includes(server.id)"
               :disabled="preview || (!editor.dependsOn.includes(server.id) && editor.dependsOn.length >= 64)"
               @change="toggle(server.id, ($event.target as HTMLInputElement).checked)">
-            <span :title="[server.name, server.address].filter(Boolean).join(' · ')">{{ server.host ?? server.name }}</span>
+            <span :title="[server.name, server.address].filter(Boolean).join(' · ')">{{ displayHost(server) }}</span>
           </label>
           <p v-if="!visible.length" class="empty">No servers found.</p>
         </div>

@@ -48,8 +48,10 @@ it('selects 30 matches, toggles a range with Shift and keeps explicit empty sepa
 
 it('submits only on Enter, runs selected hosts immediately and loads output on expansion', async () => {
   const open = vi.fn();
-  const directory = serverDirectory(servers);
-  const wrapper = mount(FleetConsole, { props: { servers, modelValue: ['0'] }, global: { provide: { [serverDirectoryKey as symbol]: { current: () => directory, open } } } });
+  const [first, ...others] = servers;
+  const targets = [{ ...first, name: 'db-1.example.com', endpoint: { ...first.endpoint, host: '192.0.2.7' } }, ...others];
+  const directory = serverDirectory(targets);
+  const wrapper = mount(FleetConsole, { props: { servers: targets, modelValue: ['0'] }, global: { provide: { [serverDirectoryKey as symbol]: { current: () => directory, open } } } });
   const command = wrapper.get('textarea');
   await command.setValue('df -h');
   await command.trigger('keydown', { key: 'Enter', shiftKey: true });
@@ -61,11 +63,12 @@ it('submits only on Enter, runs selected hosts immediately and loads output on e
   expect(wrapper.text()).toContain('1 OK');
   expect(call).not.toHaveBeenCalledWith('console_batch_output', expect.anything());
   const host = wrapper.get('.result-row .server-link');
-  expect(host.text()).toBe('db-1.prod');
+  expect(host.text()).toBe('db-1.example.com');
+  expect(host.attributes('title')).toBe('db-1.example.com · ops@192.0.2.7:22');
   await host.trigger('click');
   expect(open).toHaveBeenCalledWith('0', undefined);
   expect(call).not.toHaveBeenCalledWith('console_batch_output', expect.anything());
-  await wrapper.get('button.disclosure').trigger('click');
+  await wrapper.get('button[aria-label="Command output · db-1.example.com"]').trigger('click');
   await flushPromises();
   expect(wrapper.text()).toContain('Filesystem');
   wrapper.unmount();

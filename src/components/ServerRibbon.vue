@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { serverHint } from '../serverDirectory';
+import { serverDisplayHost, serverHint } from '../serverDirectory';
 import { computed } from 'vue';
 import { health, healthLabel, serverHealthLabel, partialHealthReason, ribbonMetricsUnavailable } from '../health';
 import { exactMetric, formatMetric } from '../metrics';
@@ -8,6 +8,7 @@ import type { Health, Server } from '../types';
 
 const props = defineProps<{ server: Server; now: number; interval: number; alternate?: boolean }>();
 defineEmits<{ select: [server: Server] }>();
+const displayHost = computed(() => serverDisplayHost(props.server.name, props.server.endpoint.host));
 const status = computed(() => health(props.server, props.now, props.interval));
 const pending = computed(() => Boolean(props.server.networkOffline || props.server.awaitingFirstCheck));
 const unavailable = computed(() => ribbonMetricsUnavailable(props.server, status.value));
@@ -71,8 +72,8 @@ const description = computed(() => {
 </script>
 
 <template>
-  <button type="button" class="ribbon" :class="[status, { alternate }]" :title="description" :aria-label="`${server.endpoint.host}, ${serverHealthLabel(server,status)}. Open diagnostics`" @click="$emit('select', server)">
-    <span class="identity"><span class="status-dot" aria-hidden="true"></span><strong>{{ server.endpoint.host }}</strong></span>
+  <button type="button" class="ribbon" :class="[status, { alternate }]" :title="description" :aria-label="`${displayHost}, ${serverHealthLabel(server,status)}. Open diagnostics`" @click="$emit('select', server)">
+    <span class="identity"><span class="status-dot" aria-hidden="true"></span><strong>{{ displayHost }}</strong></span>
     <span class="indicators">
       <span v-for="m in metrics" :key="m.key" class="metric indicator" :class="m.state" :data-metric="m.key" :title="`${m.help}: ${m.exact}`" :aria-label="`${m.help}: ${m.exact}`"><span class="code">{{ m.label }}</span><b>{{ m.value }}</b></span>
       <span v-for="(s, index) in services" :key="s.key" class="service indicator" :class="[s.state, { 'first-service': index === 0, 'with-value': s.value!=null }]" :data-service="s.key" :title="[`${s.name}: ${stateLabel(s.state)}`, s.exact, s.unitFailure].filter(Boolean).join(' · ')"><span>{{ s.name }}</span><b v-if="s.value">{{ s.value }}</b></span>

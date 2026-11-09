@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { presentServiceAction } from '../serviceActions';
 import ServerLink from './ServerLink.vue';
-import { actionLabelAddress, actionRequestAddress, capturedActionServers } from '../serverDirectory';
+import { actionLabelReference, actionRequestReference, capturedActionServers } from '../serverDirectory';
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { call, preview } from '../api';
@@ -41,8 +41,8 @@ const selectedCard = computed(() => cards.value.find(r => r.id === selected.valu
 const proposedAction = computed(() => current.value?.artifact.spec.action);
 const waiting = computed(() => current.value?.state === 'awaitingApproval');
 const planning = computed(() => current.value && activeStates.has(current.value.state) && current.value.state !== 'rollbackRunning');
-const scope = computed(() => capturedActionServers(current.value?.artifact.scopeEndpoints ?? {}));
-const capturedAddress = computed(() => actionRequestAddress(current.value));
+const scope = computed(() => capturedActionServers(current.value));
+const requestServer = computed(() => actionRequestReference(current.value));
 const author = computed(() => {
   const provider = current.value?.artifact.provider;
   return provider === 'codex' ? 'Codex' : provider === 'claude' ? 'Claude Code' : provider || 'AI';
@@ -229,7 +229,7 @@ onUnmounted(() => {
               </span>
               <UiIcon name="chevron" :size="15"/>
             </button>
-            <div class="request-server"><ServerLink :id="r.serverId" :address="actionLabelAddress(r.serverLabel)"/></div>
+            <div class="request-server"><ServerLink :id="r.serverId" v-bind="actionLabelReference(r.serverLabel)"/></div>
           </li>
         </ul>
       </section>
@@ -265,7 +265,7 @@ onUnmounted(() => {
       </header>
       <dl class="facts">
         <div><dt>Proposed by</dt><dd>{{ author }}</dd></div>
-        <div><dt>Server</dt><dd><ServerLink :id="current.serverId" :address="capturedAddress" captured/></dd></div>
+        <div><dt>Server</dt><dd><ServerLink v-bind="requestServer" captured/></dd></div>
       </dl>
 
       <section class="impact">
@@ -324,7 +324,7 @@ onUnmounted(() => {
           <p v-else-if="current.decision === 'session'">You approved actions for this AI run.</p>
           <p v-if="current.artifactHash">Code and parameter hash <code>{{ current.artifactHash }}</code></p>
           <p v-if="scope.length">Servers in scope</p>
-          <ul v-if="scope.length"><li v-for="target in scope" :key="target.id"><ServerLink :id="target.id" :address="target.address" captured/></li></ul>
+          <ul v-if="scope.length"><li v-for="target in scope" :key="target.id"><ServerLink v-bind="target" captured/></li></ul>
           <details><summary>Inputs and execution limits</summary><pre>{{ JSON.stringify({ inputs: current.artifact.inputs, isolation: current.artifact.isolation }, null, 2) }}</pre></details>
           <details v-if="serviceAction?.rollback && current.artifact.spec.rollbackPlan"><summary>Proposed rollback plan</summary><p>{{ current.artifact.spec.rollbackPlan }}</p></details>
           <details v-if="current.artifact.prepared.before && !planning"><summary>Configuration change</summary>

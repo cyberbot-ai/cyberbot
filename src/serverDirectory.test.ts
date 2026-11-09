@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { activityServerReference, serverAddress, serverDirectory, serverLabel } from './serverDirectory';
+import { activityServerReference, serverAddress, serverDirectory, serverDisplayHost, serverLabel } from './serverDirectory';
 import type { ActivityEvent } from './types';
 
 const endpoint = { host: '2001:db8::1', user: 'ops', port: 2222, jumpHost: 'bastion' };
@@ -8,6 +8,18 @@ const second = { ...first, id: 'second', name: 'inventory-secondary' };
 const address = 'ops@[2001:db8::1]:2222 via bastion';
 const event: ActivityEvent = { id: 'log', at: 1, category: 'ssh', action: 'connect', phase: 'completed',
   operationId: 'op', target: address, runId: null, durationMs: 1 };
+
+it.each([
+  ['proxy.example.com', '192.0.2.7', 'proxy.example.com'],
+  ['DB.internal.', '2001:db8::1', 'DB.internal.'],
+  ['proxy.example.com', 'ssh.example.net', 'proxy.example.com'],
+  ['proxy', 'ssh.example.net', 'ssh.example.net'],
+  ['192.0.2.7', '192.0.2.7', '192.0.2.7'],
+  ['192.0.2.7', '192.0.2.8', '192.0.2.8'],
+  ['ops@proxy.example.com:22', '192.0.2.7', '192.0.2.7'],
+])('displays %s at %s as %s', (name, host, expected) => {
+  expect(serverDisplayHost(name, host)).toBe(expected);
+});
 
 it('resolves an old SSH address only when the full endpoint is unique', () => {
   expect(serverAddress(endpoint)).toBe(address);

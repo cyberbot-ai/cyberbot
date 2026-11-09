@@ -1,4 +1,5 @@
 import { health, ribbonMetricsUnavailable } from './health';
+import { serverDisplayHost } from './serverDirectory';
 import type { Disk, Observation, Server } from './types';
 
 export const fleetSortColumns = [
@@ -55,7 +56,7 @@ export function sortFleet(servers: Server[], { key, direction }: FleetSort, now:
     const observation = server.observation;
     const value = key !== 'host' && observation && !ribbonMetricsUnavailable(server, health(server, now, interval))
       ? metricValue[key](observation) : null;
-    return { server, host: hostParts(server.endpoint.host), value: Number.isFinite(value) ? value : null };
+    return { server, host: hostParts(serverDisplayHost(server.name, server.endpoint.host)), value: Number.isFinite(value) ? value : null };
   });
 
   rows.sort((left, right) => {

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.4
+
+- Prefer Ansible inventory domain names when displaying servers and use the configured address for SSH.
+
 ## 0.5.3
 
 - Restore SSH polling on Linux hosts that use Python 3.5.

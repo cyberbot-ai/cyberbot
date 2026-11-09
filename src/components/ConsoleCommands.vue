@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import ServerLink from './ServerLink.vue';
-import { serverLabel } from '../serverDirectory';
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { serverDirectoryKey, serverLabel } from '../serverDirectory';
+import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { call, preview } from '../api';
 
 type Target = { id: string; name: string; address: string };
@@ -11,6 +11,7 @@ type Review = { ticket: string; confirmAll: boolean; targets: Target[] };
 type Output = { stdout: string; stderr: string; truncated: boolean };
 
 const props = defineProps<{ ids: string[]; all: boolean; active: boolean }>();
+const directory = inject(serverDirectoryKey, undefined);
 const draft = ref('');
 const batch = ref<Batch>();
 const review = ref<Review>();
@@ -207,7 +208,7 @@ function seconds(ms: number) {
       <div class="results">
         <div v-for="row in rows" :key="row.id" class="result">
           <div class="result-row" @click="toggle(row)">
-            <button type="button" class="disclosure" :aria-expanded="expanded.has(row.id)" :aria-label="`Command output · ${serverLabel(row).host}`">
+            <button type="button" class="disclosure" :aria-expanded="expanded.has(row.id)" :aria-label="`Command output · ${serverLabel(row, directory?.current().resolve(row)).host}`">
               {{ expanded.has(row.id) ? '▾' : '▸' }}
             </button>
             <ServerLink :id="row.id" :name="row.name" :address="row.address"/>

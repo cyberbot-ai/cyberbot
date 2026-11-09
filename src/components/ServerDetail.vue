@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { serverAddress, serverHint } from '../serverDirectory';
+import { serverAddress, serverDisplayHost, serverHint } from '../serverDirectory';
 import ServerTabBar from './ServerTabBar.vue';
 import MetricValue from './MetricValue.vue';
 import RelativeDate from './RelativeDate.vue';
@@ -112,7 +112,7 @@ async function refreshMetrics() {
   }
 }
 </script>
-<template><section class="detail"><header class="server-header"><div class="server-title"><h2 :title="serverHint(server)">{{server.endpoint.host}}</h2><p>{{serverAddress(server.endpoint)}}</p>
+<template><section class="detail"><header class="server-header"><div class="server-title"><h2 :title="serverHint(server)">{{serverDisplayHost(server.name, server.endpoint.host)}}</h2><p>{{serverAddress(server.endpoint)}}</p>
 <div class="status" :class="status"><span class="state"><i></i>{{serverHealthLabel(server,status)}}</span><span v-if="server.observation?.platform">{{server.observation.platform.distro}} {{server.observation.platform.versionId}}</span></div>
 <div v-if="coverageNote" class="coverage-note">{{ coverageNote }}</div></div>
 <div class="header-actions"><button v-if="!standalone" class="icon-button" :disabled="preview" title="Open in new window" aria-label="Open in new window" @click="emit('detach')"><UiIcon name="external"/></button><button class="icon-button" aria-label="Close server" @click="$emit('close')"><UiIcon name="close"/></button></div></header>

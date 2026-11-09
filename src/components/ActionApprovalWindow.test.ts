@@ -12,6 +12,15 @@ let request:ActionRequest;
 beforeEach(()=>{vi.useFakeTimers();mock.call.mockReset();mock.close.mockReset();request=actionFixture();mock.call.mockImplementation(async(command,args)=>{if(command==='action_request')return structuredClone(request);if(command==='decide_action'){request.state=args.decision==='deny'?'denied':'approved';return structuredClone(request);}});});
 afterEach(()=>{vi.useRealTimers();document.body.innerHTML='';});
 it('shows only consent, keeps details collapsed and decisions outside the scrolling body',async()=>{const w=mount(ActionApprovalWindow,{props:{requestId:request.id},attachTo:document.body});await flushPromises();expect(w.get('h1').text()).toBe('Allow action?');expect(w.get('.server').text()).toBe('node');expect(w.text()).not.toContain('Automatic launches');expect(w.find('script').exists()).toBe(false);expect(w.get('pre').text()).toContain('<script>');expect(w.get('details').attributes('open')).toBeUndefined();expect(w.get('.content').element.contains(w.get('footer').element)).toBe(false);expect(document.activeElement?.textContent).toBe('Decline');expect(mock.call.mock.calls.map(c=>c[0])).toEqual(['action_request']);w.unmount();});
+it('shows the recorded domain and the SSH address captured for the action',async()=>{
+  request.serverLabel='api.example.com · ops@192.0.2.7:22';
+  request.artifact.endpoint=JSON.stringify({host:'192.0.2.8',user:'ops',port:2222});
+  const w=mount(ActionApprovalWindow,{props:{requestId:request.id}});await flushPromises();
+  expect(w.get('.server').text()).toBe('api.example.com');
+  expect(w.get('.server [title]').attributes('title')).toBe('api.example.com · ops@192.0.2.8:2222');
+  expect(w.get('details li').text()).toBe('api.example.com');
+  w.unmount();
+});
 it('binds one-time approval to exact ID/hash and closes only after it succeeds',async()=>{
   const w=mount(ActionApprovalWindow,{props:{requestId:request.id}});await flushPromises();
   let done!:(value:ActionRequest)=>void;

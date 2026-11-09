@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { presentServiceAction } from '../serviceActions';
 import ServerLink from './ServerLink.vue';
-import { actionRequestAddress, capturedActionServers } from '../serverDirectory';
+import { actionRequestReference, capturedActionServers } from '../serverDirectory';
 import {computed,nextTick,onMounted,onUnmounted,ref} from 'vue';
 import {listen,type UnlistenFn} from '@tauri-apps/api/event';
 import {getCurrentWindow} from '@tauri-apps/api/window';
@@ -11,8 +11,8 @@ import type {ActionRequest} from '../types';
 const props=defineProps<{requestId:string}>();
 const request=ref<ActionRequest>(),error=ref(''),busy=ref(false),loading=ref(true),session=ref(false),denyButton=ref<HTMLButtonElement>();
 const now=useClock();
-const scope = computed(() => capturedActionServers(request.value?.artifact.scopeEndpoints ?? {}));
-const capturedAddress = computed(() => actionRequestAddress(request.value));
+const scope = computed(() => capturedActionServers(request.value));
+const requestServer = computed(() => actionRequestReference(request.value));
 const waiting=computed(()=>request.value?.state==='awaitingApproval');
 const expired=computed(()=>Boolean(request.value&&request.value.expiresAt<=now.value));
 const verdict=computed(()=>request.value?.review?.verdict);
@@ -49,7 +49,7 @@ onUnmounted(()=>{disposed=true;sequence++;clearInterval(timer);off?.();document.
 </script>
 <template>
 <main class="approval" aria-labelledby="approval-title">
-  <header><p class="eyebrow">AI action approval</p><h1 id="approval-title">{{waiting?'Allow action?':loading?'Loading request…':statusLabels[request?.state??'']??'Request closed'}}</h1><p v-if="request" class="server"><ServerLink :id="request.serverId" :address="capturedAddress" captured/></p></header>
+  <header><p class="eyebrow">AI action approval</p><h1 id="approval-title">{{waiting?'Allow action?':loading?'Loading request…':statusLabels[request?.state??'']??'Request closed'}}</h1><p v-if="request" class="server"><ServerLink v-bind="requestServer" captured/></p></header>
   <div class="content">
     <p v-if="error" class="error" role="alert">{{error}}</p>
     <template v-if="request">
@@ -70,8 +70,8 @@ onUnmounted(()=>{disposed=true;sequence++;clearInterval(timer);off?.();document.
       <p v-else-if="allowed" class="review-ok">Risk review passed</p>
       <p v-if="expired&&waiting" class="error" role="status">This request expired before it was approved.</p>
       <p v-else-if="!waiting" class="result" role="status">{{statusLabels[request.state]??'This request is closed'}}. You can close this window.</p>
-      <details v-if="action?.kind==='shell'"><summary>Servers and execution limits</summary><p>Up to {{request.artifact.isolation.wallSeconds}} s</p><ul><li v-for="target in scope" :key="target.id"><ServerLink :id="target.id" :address="target.address" captured/></li></ul></details>
-      <details v-else><summary>Code and technical details</summary><pre>{{request.artifact.spec.code}}</pre><p>Python is limited to 4 seconds of CPU time, 8 seconds of wall time, and 96 MiB of memory. File access, networking, and process creation are blocked.</p><details><summary>Prepared inputs</summary><pre>{{JSON.stringify(request.artifact.inputs,null,2)}}</pre></details><p v-if="request.review">{{request.review.model??request.artifact.profile.low.model}} · {{request.review.tokens.toLocaleString('en-US')}} tokens<br>{{request.review.verdict.explanation}}</p><p v-if="serviceAction?.rollback && request.artifact.spec.rollbackPlan">{{request.artifact.spec.rollbackPlan}}</p><ul><li v-for="target in scope" :key="target.id"><ServerLink :id="target.id" :address="target.address" captured/></li></ul><p class="hash">Artifact {{request.artifactHash}}</p></details>
+      <details v-if="action?.kind==='shell'"><summary>Servers and execution limits</summary><p>Up to {{request.artifact.isolation.wallSeconds}} s</p><ul><li v-for="target in scope" :key="target.id"><ServerLink v-bind="target" captured/></li></ul></details>
+      <details v-else><summary>Code and technical details</summary><pre>{{request.artifact.spec.code}}</pre><p>Python is limited to 4 seconds of CPU time, 8 seconds of wall time, and 96 MiB of memory. File access, networking, and process creation are blocked.</p><details><summary>Prepared inputs</summary><pre>{{JSON.stringify(request.artifact.inputs,null,2)}}</pre></details><p v-if="request.review">{{request.review.model??request.artifact.profile.low.model}} · {{request.review.tokens.toLocaleString('en-US')}} tokens<br>{{request.review.verdict.explanation}}</p><p v-if="serviceAction?.rollback && request.artifact.spec.rollbackPlan">{{request.artifact.spec.rollbackPlan}}</p><ul><li v-for="target in scope" :key="target.id"><ServerLink v-bind="target" captured/></li></ul><p class="hash">Artifact {{request.artifactHash}}</p></details>
     </template>
   </div>
   <footer>

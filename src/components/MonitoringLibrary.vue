@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import ServerLink from './ServerLink.vue';
-import { serverHint } from '../serverDirectory';
+import { serverDisplayHost, serverHint } from '../serverDirectory';
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import { call } from '../api';
 import type { MonitoringDefinition, MonitoringLibraryEntry, MonitoringTarget, Server } from '../types';
@@ -144,7 +144,7 @@ onBeforeUnmount(() => { generation++; });
       <div v-if="tab !== 'jobs'" class="toolbar">
         <UiSelect v-model="server" aria-label="Servers" :disabled="busy" @change="changeServer">
           <option value="">All servers</option>
-          <option v-for="item in servers" :key="item.id" :value="item.id" :title="serverHint(item)">{{ item.endpoint.host }}</option>
+          <option v-for="item in servers" :key="item.id" :value="item.id" :title="serverHint(item)">{{ serverDisplayHost(item.name, item.endpoint.host) }}</option>
         </UiSelect>
         <label v-if="tab === 'builtin' && server" class="filter"><input ref="filter" v-model="onlyExceptions" type="checkbox" :disabled="busy"> Overrides only</label>
         <UiInput v-if="tab === 'builtin'" v-model="query" type="search" placeholder="Find a check" aria-label="Search checks" :disabled="busy"/>

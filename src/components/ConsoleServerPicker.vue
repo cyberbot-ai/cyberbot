@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import ServerLink from './ServerLink.vue';
-import { serverAddress, serverHint } from '../serverDirectory';
+import { serverAddress, serverDisplayHost, serverHint } from '../serverDirectory';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type { Server } from '../types';
 import UiIcon from './UiIcon.vue';
@@ -16,7 +16,8 @@ const input = ref<HTMLInputElement>();
 let anchor: string | undefined;
 
 const sorted = computed(() => [...props.servers].sort((a, b) =>
-  a.name.localeCompare(b.name, 'en-US', { numeric: true }) || a.id.localeCompare(b.id)));
+  serverDisplayHost(a.name, a.endpoint.host).localeCompare(serverDisplayHost(b.name, b.endpoint.host), 'en-US', { numeric: true })
+  || a.id.localeCompare(b.id)));
 const selected = computed(() => new Set(selection.value ?? []));
 const chosen = computed(() => sorted.value.filter(server => selected.value.has(server.id)));
 const matches = computed(() => {
@@ -120,7 +121,7 @@ async function searchKey(event: KeyboardEvent) {
           class="option" role="option" :aria-selected="selected.has(server.id)" :data-active="active === index"
           @mousedown.prevent @click="mark(server, $event.shiftKey)">
           <span class="tick" aria-hidden="true"><UiIcon v-if="selected.has(server.id)" name="check" :size="12"/></span>
-          <span class="name" :title="serverHint(server)">{{ server.endpoint.host }}</span>
+          <span class="name" :title="serverHint(server)">{{ serverDisplayHost(server.name, server.endpoint.host) }}</span>
         </div>
         <p v-if="!matches.length" class="nothing">No servers found</p>
       </div>

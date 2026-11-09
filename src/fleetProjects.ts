@@ -1,4 +1,5 @@
 import { getDomain } from 'tldts';
+import { serverDisplayHost } from './serverDirectory';
 import type { Server, Source } from './types';
 
 function hostnameDomain(host: string) {
@@ -17,7 +18,7 @@ export function groupFleetProjects(ordered: Server[], sources: Source[]) {
       continue;
     }
 
-    const domain = hostnameDomain(server.endpoint.host) ?? hostnameDomain(server.name);
+    const domain = hostnameDomain(serverDisplayHost(server.name, server.endpoint.host));
     const key = JSON.stringify([source.id, domain]);
     let group = groups.get(key);
     if (!group) {

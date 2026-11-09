@@ -278,7 +278,7 @@ describe('fleet ribbon integration', () => {
     });
     const servers = [
       server('api', 'api.ops.example.com'),
-      server('db', 'db.example.com'),
+      server('db', 'ssh.example.net', 'production', 'db.example.com'),
       server('proxy', '192.0.2.7', 'production', 'proxy.example.com'),
       server('uk', 'worker.example.co.uk'),
       server('bare', 'worker'),
@@ -294,7 +294,7 @@ describe('fleet ribbon integration', () => {
     vi.mocked(call).mockImplementation(async command => command === 'snapshot' ? {
       servers, sources, incidents: [], logStatus: {}, collectedAt: Date.now() / 1000,
       settings: { mode: 'manual', dailyRunLimit: null, dailyTokenLimit: null, runTokenLimit: 50000, autoAgent: 'codex', pollSeconds: 180, logPollSeconds: 600, paused: false, concurrency: 4 },
-    } : {});
+    } : command === 'history' ? [] : {});
     const app = mount(App);
     try {
       await flushPromises();
@@ -302,13 +302,30 @@ describe('fleet ribbon integration', () => {
       const projects = () => app.findAll('.ribbon-project').map(heading => heading.text());
       const ids = rows().map(row => row.attributes('data-id'));
       expect([...projects()].sort()).toEqual(['example.co.uk', 'example.com', 'example.com', 'prod']);
-      expect(ids.slice(ids.indexOf('proxy'), ids.indexOf('proxy') + 3)).toEqual(['proxy', 'db', 'api']);
+      expect(ids.slice(ids.indexOf('db'), ids.indexOf('db') + 3)).toEqual(['db', 'api', 'proxy']);
+      expect(app.get('[data-id="db"] .ribbon strong').text()).toBe('db.example.com');
+      const proxy = app.get('[data-id="proxy"] .ribbon');
+      expect(proxy.get('strong').text()).toBe('proxy.example.com');
+      expect(proxy.attributes('aria-label')).toContain('proxy.example.com');
+      expect(proxy.attributes('title')).toContain('ops@192.0.2.7:22');
       expect(app.get('[data-id="manual"]').find('h2').exists()).toBe(false);
 
       await app.get('button[aria-label="Search servers"]').trigger('click');
       await app.get('input[aria-label="Search servers"]').setValue('db.example.com');
       expect(app.get('[data-id="db"] h2').text()).toBe('example.com');
       expect(rows()).toHaveLength(1);
+
+      await app.get('input[aria-label="Search servers"]').setValue('192.0.2.7');
+      expect(rows().map(row => row.attributes('data-id'))).toEqual(['proxy']);
+      expect(app.get('[data-id="proxy"] h2').text()).toBe('example.com');
+      await app.get('[data-id="proxy"] .ribbon').trigger('click');
+      await flushPromises();
+      expect(app.get('.detail-dialog .server-title h2').text()).toBe('proxy.example.com');
+      expect(app.get('.detail-dialog .server-title p').text()).toBe('ops@192.0.2.7:22');
+      await app.get('[aria-label="Close server"]').trigger('click');
+      await app.get('[aria-label="Grid view"]').trigger('click');
+      expect(app.get('.card[data-id="proxy"] .identity strong').text()).toBe('proxy.example.com');
+      await app.get('[aria-label="List view"]').trigger('click');
 
       await app.get('button[aria-label="Close search"]').trigger('click');
       await app.findAll('.fleet-sort button').find(button => button.text() === 'CPU')!.trigger('click');

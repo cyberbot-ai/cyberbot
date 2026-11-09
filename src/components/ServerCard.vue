@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { serverHint } from '../serverDirectory';
+import { serverDisplayHost, serverHint } from '../serverDirectory';
 import MetricValue from './MetricValue.vue';
 import RelativeDate from './RelativeDate.vue';
 import { computed } from 'vue';
@@ -9,6 +9,7 @@ import { dashboardConnectors, hideServiceUnit, serviceAvailabilityLabels, servic
 import type { Server } from '../types';
 const props=defineProps<{server:Server; now:number; interval:number; compact?:boolean}>();
 defineEmits<{select:[server:Server]}>();
+const displayHost = computed(() => serverDisplayHost(props.server.name, props.server.endpoint.host));
 const status=computed(()=>health(props.server,props.now,props.interval));
 const hideMetrics=computed(()=>props.server.networkOffline || props.server.awaitingFirstCheck);
 const disk=computed(()=>props.server.observation?.disks.reduce((max,d)=>Math.max(max,d.usedPercent),0));
@@ -30,8 +31,8 @@ const services=computed(()=>{
    .sort((a,b)=>servicePriority(a.state)-servicePriority(b.state));
 });
 </script>
-<template><button class="card" :class="[status,{compact}]" :aria-label="`${server.endpoint.host}, ${serverHealthLabel(server,status)}, CPU ${percent(hideMetrics?null:server.observation?.cpuPercent)}, memory ${percent(hideMetrics?null:server.observation?.memoryPercent)}, disk ${percent(hideMetrics?null:disk)}`" @click="$emit('select',server)">
-  <div class="identity"><span class="status-dot" :title="partialHealthReason(server, status) ?? serverHealthLabel(server, status)"></span><div><strong :title="serverHint(server)">{{server.endpoint.host}}</strong><span v-if="compact" class="narrow-status health">{{serverHealthLabel(server,status)}}</span></div><RelativeDate v-if="!compact && !server.networkOffline" class="freshness" :at="server.observation?.at" empty="Not checked yet"/></div>
+<template><button class="card" :class="[status,{compact}]" :aria-label="`${displayHost}, ${serverHealthLabel(server,status)}, CPU ${percent(hideMetrics?null:server.observation?.cpuPercent)}, memory ${percent(hideMetrics?null:server.observation?.memoryPercent)}, disk ${percent(hideMetrics?null:disk)}`" @click="$emit('select',server)">
+  <div class="identity"><span class="status-dot" :title="partialHealthReason(server, status) ?? serverHealthLabel(server, status)"></span><div><strong :title="serverHint(server)">{{displayHost}}</strong><span v-if="compact" class="narrow-status health">{{serverHealthLabel(server,status)}}</span></div><RelativeDate v-if="!compact && !server.networkOffline" class="freshness" :at="server.observation?.at" empty="Not checked yet"/></div>
   <div class="meters"><div v-for="meter in meters" :key="meter.label" class="meter"><span>{{meter.label}}</span><b :class="{hot:(meter.value??0)>=90}"><MetricValue :value="meter.value" :precision="0" unit="%"/></b><span v-if="!compact" class="track"><i :class="{hot:(meter.value??0)>=90}" :style="{width:`${Math.max(0,Math.min(100,Number.isFinite(meter.value)?meter.value??0:0))}%`}"></i></span></div></div>
   <div class="card-bottom"><span class="health">{{serverHealthLabel(server,status)}}</span><span class="services"><span v-for="(s,index) in services.slice(0,2)" :key="index" :class="s.state" :title="[`${s.name}: ${s.state}`, s.exact, s.unitFailure].filter(Boolean).join(' · ')">{{s.name}}</span><span v-if="services.length>2" :title="services.slice(2).map(s=>s.name).join(', ')">+{{services.length-2}}</span></span></div>
 </button></template>

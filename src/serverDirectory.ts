@@ -7,13 +7,21 @@ export type ServerIdentity = Pick<Server, 'id' | 'name'> & {
 export type ServerReference = { id?: string | null; address?: string | null; name?: string | null };
 export type ServerSection = 'incidents';
 
+const dnsLabel = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i;
+
+export function serverDisplayHost(name: string | null | undefined, host: string) {
+  if (!name || name === host || !name.includes('.')) return host;
+  const labels = name.replace(/\.$/, '').split('.');
+  const suffix = labels[labels.length - 1];
+  return labels.length > 1 && /[a-z]/i.test(suffix) && labels.every(label => dnsLabel.test(label)) ? name : host;
+}
+
 export function serverAddress({ host, user, port, jumpHost }: ServerIdentity['endpoint']) {
   return `${user ? user + '@' : ''}${host.includes(':') ? '[' + host + ']' : host}:${port}${jumpHost ? ' via ' + jumpHost : ''}`;
 }
 
 export function serverHint(server: ServerIdentity) {
-  const { host } = server.endpoint;
-  return [server.name === host ? '' : server.name, serverAddress(server.endpoint)].filter(Boolean).join(' · ');
+  return serverLabel({}, server).hint;
 }
 
 export function isInternalId(value: string) {
@@ -48,8 +56,12 @@ export const serverDirectoryKey: InjectionKey<{
 }> = Symbol('server directory');
 
 export function serverLabel(reference: ServerReference, server?: ServerIdentity) {
-  const host = server?.endpoint.host || (reference.address && parseAddress(reference.address)) || 'Server unavailable';
-  const hint = server ? serverHint(server) : [reference.name && !isInternalId(reference.name) ? reference.name : '', host !== 'Server unavailable' ? reference.address : ''].filter(Boolean).join(' · ');
+  const recordedHost = reference.address && parseAddress(reference.address);
+  const name = server?.name ?? (reference.name && !isInternalId(reference.name) ? reference.name : undefined);
+  const connectionHost = server?.endpoint.host || recordedHost;
+  const host = serverDisplayHost(name, connectionHost || 'Server unavailable');
+  const address = server ? serverAddress(server.endpoint) : recordedHost && reference.address;
+  const hint = [name === connectionHost ? undefined : name, address].filter(Boolean).join(' · ');
   return { host, hint };
 }
 
@@ -79,19 +91,26 @@ function capturedAddress(value?: string) {
   }
 }
 
-export function capturedActionServers(endpoints: Record<string, string>) {
-  return Object.entries(endpoints).map(([id, value]) => ({ id, address: capturedAddress(value) }));
+export function capturedActionServers(request?: ActionRequest) {
+  if (!request) return [];
+  const { name } = actionLabelReference(request.serverLabel);
+  return Object.entries(request.artifact.scopeEndpoints ?? {}).map(([id, value]) => ({
+    id, name: id === request.serverId ? name : undefined, address: capturedAddress(value),
+  }));
 }
 
-export function actionLabelAddress(label: string) {
+export function actionLabelReference(label: string): Pick<ServerReference, 'name' | 'address'> {
   const separator = label.lastIndexOf(' · ');
   const address = separator < 0 ? label : label.slice(separator + 3);
-  return parseAddress(address) ? address : undefined;
+  if (!parseAddress(address)) return {};
+  return { address, name: separator < 0 ? undefined : label.slice(0, separator) };
 }
 
-export function actionRequestAddress(request?: ActionRequest) {
-  if (!request) return undefined;
-  return capturedAddress(request.artifact.endpoint)
+export function actionRequestReference(request?: ActionRequest): ServerReference {
+  if (!request) return {};
+  const recorded = actionLabelReference(request.serverLabel);
+  const address = capturedAddress(request.artifact.endpoint)
     ?? capturedAddress(request.artifact.scopeEndpoints?.[request.serverId])
-    ?? actionLabelAddress(request.serverLabel);
+    ?? recorded.address;
+  return { id: request.serverId, name: recorded.name, address };
 }

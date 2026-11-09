@@ -13,12 +13,12 @@ describe('action journal',()=>{
   const result=page('Collect metrics');result.events[0].monitoring={definitionId:'redis',serverId:'one',instanceId:'cache',trigger:'schedule',version:'definition-v1',revision:1};mocks.call.mockResolvedValue(result);
   const w=mount(ActivityLog);await flushPromises();expect(w.text()).toContain('redis · scheduled');await w.get('.definition').trigger('click');expect(w.emitted('monitoring')).toEqual([[{definitionId:'redis',serverId:'one',instanceId:'cache'}]]);expect(mocks.call.mock.calls.every(c=>c[0]==='activity_log')).toBe(true);w.unmount();
  });
- it('shows the captured host with its alias and SSH address in the hint',async()=>{
+ it('shows the captured domain with its SSH address in the hint',async()=>{
   const result=page('poll');
   result.events[0]={...result.events[0],category:'server',target:'57add7696be9440cd8ef78b4',server:{name:'db.production',address:'ops@10.20.1.11:2222'}};
   mocks.call.mockResolvedValue(result);
   const w=mount(ActivityLog);await flushPromises();
-  expect(w.get('.target').text()).toBe('10.20.1.11');
+  expect(w.get('.target').text()).toBe('db.production');
   expect(w.get('.target [title]').attributes('title')).toBe('db.production · ops@10.20.1.11:2222');
   expect(w.text()).not.toContain('57add7696be9440cd8ef78b4');
   expect(mocks.call.mock.calls.every(c=>c[0]==='activity_log')).toBe(true);w.unmount();
