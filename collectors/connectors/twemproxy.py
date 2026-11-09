@@ -2,7 +2,7 @@
 
 
 def twemproxy_binds(record):
-    root = f'/proc/{record["pid"]}'
+    root = '/proc/{}'.format(record["pid"])
     args = service_read_file(root + "/cmdline", 32768).decode("ascii").rstrip("\0").split("\0")
     if process_stat(service_read_file(root + "/stat", 2048).decode("ascii"))[1] != record["started"]:
         raise ValueError("source_unavailable")
@@ -42,7 +42,7 @@ def twemproxy_values(config):
             stream.settimeout(remaining)
             part = stream.recv(min(4096, limit + 1 - len(data)))
             if not part:
-                return json.loads(data)
+                return load_collector_json(data)
             data.extend(part)
         raise ValueError("response_limit")
 

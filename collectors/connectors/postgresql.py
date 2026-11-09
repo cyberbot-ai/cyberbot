@@ -84,7 +84,7 @@ def pg_query(config,sql):
                     key.data.extend(data)
                     if len(out)>16384 or len(errors)>4096:raise ValueError('query_output_limit')
         if proc.wait(timeout=1)!=0:raise ValueError('connection_or_query_denied')
-        return json.loads(out)
+        return load_collector_json(out)
     finally:
         if proc.poll() is None:proc.kill()
         proc.wait(timeout=1);proc.stdout.close();proc.stderr.close()
@@ -94,7 +94,7 @@ def pg_owned_endpoint(config, records, scan_complete):
     host, port = config['host'], config['port']
     if not host.startswith('/'):
         return owned_listener('postgresql', host, port, records)
-    path = f'{host}/.s.PGSQL.{port}'
+    path = '{}/.s.PGSQL.{}'.format(host, port)
     canonical = os.path.realpath(path)
     if any(record['complete'] and any(os.path.realpath(s) == canonical for s in record['sockets'])
            for record in records):
@@ -110,10 +110,10 @@ def pg_owned_endpoint(config, records, scan_complete):
             client.connect(path)
             size = struct.calcsize('iII')
             pid, uid, _ = struct.unpack('iII', client.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, size))
-            if pid <= 0 or text(f'/proc/{pid}/comm', 64).strip() not in ('postgres', 'postmaster'):
+            if pid <= 0 or text('/proc/{}/comm'.format(pid), 64).strip() not in ('postgres', 'postmaster'):
                 return False
             try:
-                name = os.path.basename(os.readlink(f'/proc/{pid}/exe')).split(' (deleted)', 1)[0]
+                name = os.path.basename(os.readlink('/proc/{}/exe'.format(pid))).split(' (deleted)', 1)[0]
                 return name in ('postgres', 'postmaster')
             except PermissionError:
                 return uid == pwd.getpwnam('postgres').pw_uid

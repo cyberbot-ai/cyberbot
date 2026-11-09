@@ -135,7 +135,7 @@ class MongoRead:
 
     def auth(self, user, password):
         # ASCII identities only; apply RFC 4013 SASLprep to passwords.
-        if not user.isascii():
+        if any(ord(char) > 127 for char in user):
             raise ValueError("credentials_unavailable")
         password = "".join(
             " " if stringprep.in_table_c12(x) else x

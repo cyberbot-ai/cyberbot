@@ -28,7 +28,7 @@ def pgbouncer_peer(config):
     for record in config["_observed_processes"]:
         if not record["complete"] or target not in pgbouncer_targets(record, config):
             continue
-        proc = f'/proc/{record["pid"]}'
+        proc = '/proc/{}'.format(record["pid"])
         for path in record["sockets"]:
             if not path.endswith(suffix) or not re.fullmatch(PGBOUNCER_SOCKET, path):
                 continue

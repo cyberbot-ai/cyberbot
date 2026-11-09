@@ -68,7 +68,7 @@ def action_worker():
     # Separate exec with empty environment/closed descriptors: no broker memory,
     # SSH secrets, config buffers, receipt descriptors or capabilities are inherited.
     try:
-        payload = json.loads(sys.stdin.buffer.read(ACTION_INPUT_LIMIT + 1))
+        payload = load_collector_json(sys.stdin.buffer.read(ACTION_INPUT_LIMIT + 1))
         code = payload['code']
         if not isinstance(code, str) or len(code.encode()) > 16384:
             raise ActionError('script_limit')
@@ -133,7 +133,7 @@ def run_action_python(code, inputs):
                     break
         if proc.wait(timeout=1) != 0:
             raise ActionError('script_failed_or_isolation_unavailable')
-        result = json.loads(output)
+        result = load_collector_json(output)
         if not isinstance(result, dict) or set(result) != {'ok', 'result'} or result['ok'] is not True:
             raise ActionError('invalid_script_result')
         return result['result']
@@ -408,7 +408,7 @@ def _action_main_locked(request, watch_fd):
     receipt_path = os.path.join(directory, 'receipt.json')
     if operation in ('result', 'rollback') or os.path.lexists(directory):
         previous, _ = _action_read(receipt_path, 32768)
-        receipt = json.loads(previous)
+        receipt = load_collector_json(previous)
         if receipt.get('hash') != artifact_hash:
             raise ActionError('action_identity_conflict')
         if operation != 'rollback':
@@ -492,7 +492,7 @@ def action_trim(root):
             total += child.stat().st_size
             files.append(child.path)
         receipt, _ = _action_read(os.path.join(entry.path, 'receipt.json'), 32768)
-        state = json.loads(receipt).get('state')
+        state = load_collector_json(receipt).get('state')
         if state in ('running', 'rollbackRunning') and entry.stat().st_mtime < time.time() - 60:
             state = 'unknown'
         # Unknown side effects retain their evidence until the 7-day policy expires.

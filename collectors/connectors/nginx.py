@@ -85,8 +85,8 @@ def nginx_configuration():
                 for listen, _ in server:
                     if listen and listen[0]=='listen' and len(listen)>=2 and 'ssl' not in listen:
                         match = re.fullmatch(r'(?:(?:127\.0\.0\.1|0\.0\.0\.0|\*):)?([0-9]{1,5})', listen[1])
-                        if match and 1<=int(match[1])<=65535 and re.fullmatch(r'/[A-Za-z0-9_./-]{0,127}', path):
-                            endpoints.append((int(match[1]), path))
+                        if match and 1<=int(match.group(1))<=65535 and re.fullmatch(r'/[A-Za-z0-9_./-]{0,127}', path):
+                            endpoints.append((int(match.group(1)), path))
             visit(children, current_server, current_location)
     visit(tree)
     def select(entries):
@@ -173,21 +173,21 @@ class NginxAnalysis(LogAnalysis):
         else:
             match = re.match(r'^(\d{4}/\d\d/\d\d \d\d:\d\d:\d\d) \[(\w+)\] \d+#\d+: (.*)', line)
             if not match: self.counts['unparsed'] += 1; self.gap('unknown_format', source); return
-            try: at = int(datetime.datetime.strptime(match[1],'%Y/%m/%d %H:%M:%S').timestamp())
+            try: at = int(datetime.datetime.strptime(match.group(1),'%Y/%m/%d %H:%M:%S').timestamp())
             except ValueError: self.gap('unknown_timestamp',source); return
             if at < self.cutoff: return
             if at > self.now+300: self.gap('clock_changed',source); return
-            message = re.split(r', (?:client|server|request|upstream|host):', match[3], maxsplit=1)[0]; category = None
+            message = re.split(r', (?:client|server|request|upstream|host):', match.group(3), maxsplit=1)[0]; category = None
             for name, text in [('upstream_timeout','upstream timed out'),('upstream_connect','connect() failed'),('upstream_unavailable','no live upstreams'),('capacity','worker_connections are not enough')]:
                 if text in message: category=name; break
             # Common probing/404/denied requests are statistics, never incidents.
             noise = any(s in message for s in ('No such file or directory','access forbidden by rule','client sent invalid','SSL_do_handshake() failed'))
             if noise: self.counts['client_noise'] += 1; return
-            if category is None and match[2] in ('emerg','alert','crit'): category='critical_error'
+            if category is None and match.group(2) in ('emerg','alert','crit'): category='critical_error'
             if category:
                 self.counts[category] += 1
                 if len(self.examples)<10: self.examples.append({'at':at,'category':category})
-            elif match[2] == 'error': self.counts['other_errors'] += 1
+            elif match.group(2) == 'error': self.counts['other_errors'] += 1
 
     def status(self, config, generation):
         import http.client
@@ -231,7 +231,7 @@ def nginx_detection():
     except (OSError, IndexError): pass
     if service!='active':
         try:
-            result = subprocess.run(['systemctl','show','nginx.service','--property=LoadState,ActiveState'],capture_output=True,timeout=1,env={'PATH':'/usr/bin:/bin','LC_ALL':'C'})
+            result = subprocess.run(['systemctl','show','nginx.service','--property=LoadState,ActiveState'],stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=1,env={'PATH':'/usr/bin:/bin','LC_ALL':'C'})
             if result.returncode==0 and len(result.stdout)<1024:
                 props = dict(line.split('=',1) for line in result.stdout.decode().splitlines() if '=' in line)
                 if props.get('LoadState')=='loaded':

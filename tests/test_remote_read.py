@@ -1,4 +1,3 @@
-import importlib.util
 import os
 from pathlib import Path
 import sys
@@ -6,10 +5,9 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-spec = importlib.util.spec_from_file_location(
-    'remote_read', Path(__file__).resolve().parents[1] / 'collectors/remote_read.py')
-reader = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(reader)
+from collectors.bundle import module
+
+reader = module()
 
 
 @unittest.skipUnless(sys.platform == 'linux', 'Linux descriptor-based file reader')

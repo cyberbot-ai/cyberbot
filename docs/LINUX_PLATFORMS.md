@@ -1,6 +1,6 @@
 # Linux platforms
 
-Cyberbot needs SSH, rsync, and Python 3 on the remote host. Its general resource checks read Linux kernel interfaces. Each additional capability depends on the host's utilities, init system, data sources, and permissions.
+Cyberbot needs SSH, rsync, and Python 3.5 or later on the remote host. Its general resource checks read Linux kernel interfaces. Each additional capability depends on the host's utilities, init system, data sources, and permissions.
 
 | Capability | Current coverage |
 | --- | --- |

@@ -4,10 +4,13 @@ No remote input can select a profile, command or path. A family is a layout hint
 not a claim of package/advisory compatibility or sufficient diagnostic rights.
 """
 
+import contextlib
+import json
 import os
 import re
 import shlex
 import subprocess
+import sys
 
 LINUX_PROFILES = {
     "debian": {
@@ -62,6 +65,26 @@ LINUX_PACKAGE_DATABASES = {
 }
 LINUX_PACKAGE_ADAPTERS = {}  # Registered by the bundled, trusted adapter modules.
 LINUX_SERVICE_ADAPTERS = {}
+
+
+def load_collector_json(data):
+    # Python 3.5's JSON decoder requires text.
+    if sys.version_info < (3, 6) and isinstance(data, (bytes, bytearray)):
+        data = data.decode("utf-8-sig")
+    return json.loads(data)
+
+
+@contextlib.contextmanager
+def scan_directory(path):
+    # Keep descriptor-based reads anchored on Python versions without scandir(fd).
+    if isinstance(path, int) and sys.version_info < (3, 7):
+        path = "/proc/self/fd/{}".format(path)
+    entries = os.scandir(path)
+    if sys.version_info < (3, 6):
+        yield entries
+    else:
+        with entries as directory:
+            yield directory
 
 
 def linux_command(name):

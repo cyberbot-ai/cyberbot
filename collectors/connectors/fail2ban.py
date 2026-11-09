@@ -31,7 +31,7 @@ def fail2ban_connector(config, result):
     jails = re.search(rb"\bNumber of jail:\s*([0-9]+)\s*$", body, re.M)
     if jails is None:
         raise ValueError("unsupported_version")
-    count = int(jails[1])
+    count = int(jails.group(1))
     result["metrics"]["jails"] = service_number(count)
     result.update(connected=True, availability="running")
     if count == 0:

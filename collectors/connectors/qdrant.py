@@ -5,7 +5,7 @@ def qdrant_connector(config, result):
     credentials = service_credentials("qdrant")
     key = credentials.get("password")
     if key and (not ipaddress.ip_address(config["endpoint"]).is_loopback
-                or not key.isascii() or any(ord(char) < 32 or ord(char) == 127 for char in key)):
+                or any(not 32 <= ord(char) < 127 for char in key)):
         raise ValueError("credentials_unavailable")
     status, _ = service_http_response(config, "/readyz", limit=4096, statuses=(200, 404, 503))
     if status in (200, 503):

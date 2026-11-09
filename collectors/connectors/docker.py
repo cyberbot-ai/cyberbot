@@ -3,7 +3,7 @@
 def docker_connector(c, r):
     if not service_begin(c, r, ["/run/docker.sock", "/var/run/docker.sock"]):
         return
-    info = json.loads(service_http(c, "/info", limit=131072))
+    info = load_collector_json(service_http(c, "/info", limit=131072))
     r.update(
         detected=True,
         connected=True,
@@ -17,7 +17,7 @@ def docker_connector(c, r):
         ("containers", "Containers"),
     ]:
         m[k] = service_number(info.get(v))
-    rows = json.loads(service_http(c, "/containers/json?all=1&limit=129", limit=262144))
+    rows = load_collector_json(service_http(c, "/containers/json?all=1&limit=129", limit=262144))
     if not isinstance(rows, list):
         raise ValueError("source_unavailable")
     if len(rows) > 128 or m["containers"] is None or len(rows) != m["containers"]:

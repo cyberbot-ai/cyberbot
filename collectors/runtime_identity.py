@@ -45,7 +45,7 @@ class RuntimeIdentityRegistry:
         for kind, policy in policies.items():
             for name in policy.process_names:
                 if name in self.by_name:
-                    raise ValueError(f'Duplicate process name: {name}')
+                    raise ValueError('Duplicate process name: {}'.format(name))
                 self.by_name[name] = kind
             if policy.process_pattern is not None:
                 self.process_patterns.append((policy.process_pattern, kind))
@@ -121,12 +121,12 @@ def service_runtime(proc='/proc', kind_filter=None, details=False, *, tcp_binds=
                 yield fields
 
     def stat(pid):
-        return process_stat(read(f'{proc}/{pid}/stat', 2048))
+        return process_stat(read('{}/{}/stat'.format(proc, pid), 2048))
 
     try:
-        namespace = os.readlink(f'{proc}/self/ns/net')
+        namespace = os.readlink('{}/self/ns/net'.format(proc))
         processes = {}
-        with os.scandir(proc) as entries:
+        with scan_directory(proc) as entries:
             for index, entry in enumerate(entries):
                 if index >= 4096:
                     complete = False
@@ -134,10 +134,10 @@ def service_runtime(proc='/proc', kind_filter=None, details=False, *, tcp_binds=
                 if not entry.name.isdecimal():
                     continue
                 try:
-                    kind = RUNTIME_IDENTITIES.kind(read(f'{entry.path}/comm', 64).strip())
+                    kind = RUNTIME_IDENTITIES.kind(read(entry.path + '/comm', 64).strip())
                     if not kind or kind_filter is not None and kind != kind_filter:
                         continue
-                    process_namespace = os.readlink(f'{entry.path}/ns/net')
+                    process_namespace = os.readlink(entry.path + '/ns/net')
                     if not process_namespace and details:
                         complete = False  # Some procfs implementations hide inaccessible targets.
                     if process_namespace != namespace:
@@ -166,7 +166,7 @@ def service_runtime(proc='/proc', kind_filter=None, details=False, *, tcp_binds=
         tables = ('tcp', 'tcp6', 'udp', 'udp6') if kind_filter is None else ('tcp', 'tcp6')
         for table in (() if process_only else tables):
             try:
-                path = f'{proc}/net/{table}'
+                path = '{}/net/{}'.format(proc, table)
                 if tcp_binds is not None or policy is not None and policy.stream_tcp:
                     rows = tcp_listener_rows(path)
                 else:
@@ -191,7 +191,7 @@ def service_runtime(proc='/proc', kind_filter=None, details=False, *, tcp_binds=
                 network_complete = False
         if not process_only and tcp_binds is None:
             try:
-                for row in read(f'{proc}/net/unix', table_limit).splitlines()[1:]:
+                for row in read('{}/net/unix'.format(proc), table_limit).splitlines()[1:]:
                     fields = row.split(maxsplit=7)
                     if (len(fields) == 8 and fields[3:6] == ['00010000', '0001', '01']
                             and RUNTIME_IDENTITIES.accepts_socket(fields[7], policy)):
@@ -207,7 +207,7 @@ def service_runtime(proc='/proc', kind_filter=None, details=False, *, tcp_binds=
             verified, inodes = False, {}
             try:
                 if kind_filter is not None:
-                    exe_path = f'{proc}/{pid}/exe'
+                    exe_path = '{}/{}/exe'.format(proc, pid)
                     executable = os.path.basename(os.readlink(exe_path)).split(' (deleted)', 1)[0]
                     if not policy.matches_executable(executable, exe_path):
                         continue
@@ -218,11 +218,11 @@ def service_runtime(proc='/proc', kind_filter=None, details=False, *, tcp_binds=
                         inode: address for inode, address in sockets.items()
                         if any(tcp_bind_matches(address, bind) for bind in binds)
                     }
-                    inodes, scanned = owned_tcp_listeners(f'{proc}/{pid}/fd', candidates, deadline)
+                    inodes, scanned = owned_tcp_listeners('{}/{}/fd'.format(proc, pid), candidates, deadline)
                     ports.update(inodes.values())
                     covered = covered and scanned
                 elif not process_only:
-                    with os.scandir(f'{proc}/{pid}/fd') as descriptors:
+                    with scan_directory('{}/{}/fd'.format(proc, pid)) as descriptors:
                         for index, fd in enumerate(descriptors):
                             if index >= fd_limit or time.monotonic() >= deadline:
                                 covered = False
@@ -280,7 +280,7 @@ def local_interface_address(address, proc='/proc'):
         return False
     try:
         table = 'if_inet6' if ip.version == 6 else 'fib_trie'
-        with open(f'{proc}/net/{table}', encoding='ascii') as stream:
+        with open('{}/net/{}'.format(proc, table), encoding='ascii') as stream:
             rows = stream.read(131073)
         if len(rows) > 131072:
             return False
@@ -352,10 +352,10 @@ def tcp_bind_matches(listener, bind):
 def owned_tcp_listeners(path, candidates, deadline):
     """Match socket inodes without inspecting descriptors past the last match."""
     found = {}
-    pending = {f'socket:[{inode}]': inode for inode in candidates}
+    pending = {'socket:[{}]'.format(inode): inode for inode in candidates}
     if not pending:
         return found, True
-    with os.scandir(path) as descriptors:
+    with scan_directory(path) as descriptors:
         for fd in descriptors:
             if time.monotonic() >= deadline:
                 return found, False

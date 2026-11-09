@@ -14,7 +14,7 @@ COCKROACH_METRICS = {
 
 
 def cockroach_options(record):
-    root = f'/proc/{record["pid"]}'
+    root = '/proc/{}'.format(record["pid"])
     fields = {
         b'--http-addr': b'COCKROACH_HTTP_ADDR',
         b'--sql-addr': b'COCKROACH_SQL_ADDR',
@@ -72,7 +72,7 @@ def cockroach_samples(body):
         key = names[name]
         # Prometheus labels may contain spaces and escaped quotes. Do not forward them.
         sample = re.fullmatch(rb'[^\s{]+(?:\{(?:[^"{}]|"(?:[^"\\]|\\.)*")*\})?[ \t]+([^\s]+)(?:[ \t]+-?\d+)?[ \t]*', line)
-        values[key] = service_number(sample[1]) if key not in values and sample else None
+        values[key] = service_number(sample.group(1)) if key not in values and sample else None
     return values
 
 
@@ -86,9 +86,9 @@ def cockroach_scrape(record, options, target):
     if tls is not None:
         certs = options.get('certs-dir', 'certs')
         if certs.startswith('~/'):
-            certs = os.path.join(pwd.getpwuid(os.stat(f'/proc/{record["pid"]}').st_uid).pw_dir, certs[2:])
+            certs = os.path.join(pwd.getpwuid(os.stat('/proc/{}'.format(record["pid"])).st_uid).pw_dir, certs[2:])
         elif not os.path.isabs(certs):
-            certs = os.path.join(f'/proc/{record["pid"]}/cwd', certs)
+            certs = os.path.join('/proc/{}/cwd'.format(record["pid"]), certs)
         try:
             ca = service_read_file(os.path.join(certs, 'ca.crt'), 131072)
             tls.load_verify_locations(cadata=ca.decode('ascii'))

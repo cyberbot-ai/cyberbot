@@ -21,7 +21,7 @@ def clickhouse_connector(c, r):
     visibility = False
     try:
         sql = "SELECT (countIf(access_type IN ('SHOW TABLES','SHOW','ALL') AND database IS NULL AND table IS NULL AND is_partial_revoke=0)>0 AND countIf(is_partial_revoke=1 AND access_type IN ('SHOW TABLES','SHOW','ALL'))=0) AS visible FROM system.grants WHERE user_name=currentUser() OR role_name IN (SELECT role_name FROM system.enabled_roles)"
-        rows = json.loads(
+        rows = load_collector_json(
             service_http(
                 c,
                 "/?readonly=1&max_execution_time=1&max_result_bytes=16384&result_overflow_mode=throw",
@@ -58,7 +58,7 @@ def clickhouse_connector(c, r):
         if not visibility and "system.processes" not in sql:
             continue
         try:
-            rows = json.loads(
+            rows = load_collector_json(
                 service_http(
                     c,
                     "/?readonly=1&max_execution_time=1&max_result_bytes=16384&result_overflow_mode=throw",

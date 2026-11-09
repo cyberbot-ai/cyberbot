@@ -2,6 +2,8 @@ import ast
 import pathlib
 import tempfile
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from collectors.bundle import module, source
 
@@ -9,9 +11,14 @@ collector = module()
 
 
 class CollectorTests(unittest.TestCase):
-    def test_bundle_parses_on_python_36(self):
+    def test_bundle_parses_on_python_35(self):
         # Every connector must parse before any poll can run.
-        ast.parse(source(), filename="collector.py", feature_version=(3, 6))
+        ast.parse(source(), filename="collector.py", feature_version=(3, 5))
+
+    def test_legacy_python_parses_iso_log_timestamps(self):
+        with patch.object(collector, "sys", SimpleNamespace(version_info=(3, 5, 3))):
+            self.assertEqual(collector.event_time("1970-01-01T00:00:01Z host", 0), 1)
+            self.assertEqual(collector.event_time("1969-12-31T19:00:01.5-05:00 host", 0), 1)
 
     def test_incremental_logs_do_not_repeat(self):
         with tempfile.TemporaryDirectory() as d:

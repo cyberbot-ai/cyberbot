@@ -163,13 +163,27 @@ TEMPLATES = {"oom": "Memory exhaustion", "disk_io": "Storage or filesystem error
 UNSUPPORTED_FAIL2BAN_STATS = re.compile(r"\bCommand \['stats'\] has failed\. Received Exception\('Invalid command'\)\s*$")
 
 
+def iso_log_time(stamp):
+    stamp = stamp.replace("Z", "+00:00")
+    if sys.version_info >= (3, 7):
+        return datetime.datetime.fromisoformat(stamp)
+    pattern = "%Y-%m-%d" + stamp[10:11] + "%H:%M:%S"
+    if stamp[19:20] == ".":
+        pattern += ".%f"
+    offset = re.search(r"[+-]\d{2}:?\d{2}$", stamp[19:])
+    if offset:
+        stamp = stamp[:19 + offset.start()] + offset.group().replace(":", "")
+        pattern += "%z"
+    return datetime.datetime.strptime(stamp, pattern)
+
+
 def event_time(line, fallback):
     try:
         stamp = line.split()[0]
         if re.match(r"\d{4}-\d\d-\d\dT", stamp):
-            return int(datetime.datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp())
+            return int(iso_log_time(stamp).timestamp())
         if re.match(r"\d{4}-\d\d-\d\d$", stamp):
-            return int(datetime.datetime.fromisoformat(line[:19]).timestamp())
+            return int(iso_log_time(line[:19]).timestamp())
         stamp = datetime.datetime.strptime(line[:15], "%b %d %H:%M:%S").replace(year=datetime.datetime.fromtimestamp(fallback).year)
         value = int(stamp.timestamp())
         if value > fallback + 86400:
@@ -264,7 +278,7 @@ class LogAnalysis:
         if is_firewall:
             self.counts["ssh_blocked"] += 1
             m = re.search(r"\bSRC=(\S+)", line)
-            if m: self.banned.add(self.pseudonym(m[1]))
+            if m: self.banned.add(self.pseudonym(m.group(1)))
             return
         if is_protection:
             if UNSUPPORTED_FAIL2BAN_STATS.search(line):
@@ -272,7 +286,7 @@ class LogAnalysis:
             ban = re.search(r"\bBan\s+(\S+)", line)
             if ban:
                 self.counts["ssh_banned"] += 1
-                self.banned.add(self.pseudonym(ban[1]))
+                self.banned.add(self.pseudonym(ban.group(1)))
             # Found/Ignore/Unban and error-looking rejected login messages are noise.
             if (re.search(r"\b(ERROR|CRITICAL)\b", line) or "failed to start" in lower or "failed with result" in lower) and not re.search(r"\b(?:Found|Ban|Unban|Ignore)\b", line):
                 template = None
@@ -421,9 +435,14 @@ class LogAnalysis:
             # journalctl may seek to a nearby entry when the cursor was vacuumed.
             # Verify the anchor explicitly before claiming continuous coverage.
             try:
-                probe = subprocess.run(["journalctl", "--system", "--no-pager", "--output=json", "--output-fields=__CURSOR", "--cursor="+cursor, "--lines=1"], stdin=subprocess.DEVNULL, capture_output=True, timeout=2, env={"PATH":"/usr/bin:/bin","LC_ALL":"C"})
+                probe = subprocess.run(
+                    ["journalctl", "--system", "--no-pager", "--output=json",
+                     "--output-fields=__CURSOR", "--cursor="+cursor, "--lines=1"],
+                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    timeout=2, env={"PATH":"/usr/bin:/bin","LC_ALL":"C"},
+                )
                 self.bytes_read += len(probe.stdout)+len(probe.stderr)
-                anchor = json.loads(probe.stdout) if len(probe.stdout)<=4096 else {}
+                anchor = load_collector_json(probe.stdout) if len(probe.stdout)<=4096 else {}
                 if probe.returncode or anchor.get("__CURSOR") != cursor:
                     self.gap("journal_cursor_lost", "journal"); cursor=None
             except (OSError, ValueError, subprocess.TimeoutExpired):
@@ -456,7 +475,7 @@ class LogAnalysis:
                         raw, _, rest = buf.partition(b"\n"); buf[:] = rest
                         if len(raw) > MAX_LINE: self.gap("long_line", "journal"); continue
                         try:
-                            e = json.loads(raw)
+                            e = load_collector_json(raw)
                             c = e.get("__CURSOR")
                             if not isinstance(c, str) or len(c) > 512: raise ValueError()
                             self.next["journal"] = c
@@ -621,7 +640,7 @@ def main():
     else:
         data = sys.stdin.buffer.read(49153)
     if len(data)>49152: raise ValueError("Input limit")
-    request = json.loads(data)
+    request = load_collector_json(data)
     if not isinstance(request, dict) or set(request) - {"kind", "cursors", "state", "salt", "interval"}:
         raise ValueError("Unsupported input")
     kind = request.get("kind")

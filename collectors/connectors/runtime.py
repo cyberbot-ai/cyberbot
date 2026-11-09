@@ -1,6 +1,6 @@
 """Connector host: closed profiles, local transport, bounded output, no shell tools."""
 
-import os, json, time, hashlib, re, selectors, subprocess, socket, struct, stat, pwd, http.client, base64
+import os, time, hashlib, re, selectors, subprocess, socket, struct, stat, pwd, http.client, base64
 
 SERVICE_ISSUES = (
     "endpoint_ambiguous",
@@ -34,7 +34,7 @@ def register_service_actions(adapters):
     for adapter in adapters.values():
         for action in adapter.actions:
             if action.name in ACTION_HANDLERS:
-                raise ValueError(f'Duplicate action: {action.name}')
+                raise ValueError('Duplicate action: {}'.format(action.name))
             ACTION_HANDLERS[action.name] = action
 
 
@@ -161,7 +161,7 @@ def service_credentials(kind, instance="default"):
             or st.st_size > 8192
         ):
             raise ValueError("credentials_unavailable")
-        v = json.loads(f.read(8193))
+        v = load_collector_json(f.read(8193))
     if (
         not isinstance(v, dict)
         or set(v) - {"user", "password"}
@@ -322,7 +322,7 @@ def service_container_targets(image, internal_port):
     if socket_path is None:
         return [], False, False, True
     try:
-        rows = json.loads(service_http({"endpoint": socket_path}, "/containers/json?all=1&limit=129"))
+        rows = load_collector_json(service_http({"endpoint": socket_path}, "/containers/json?all=1&limit=129"))
     except (OSError, ValueError, http.client.HTTPException):
         return [], False, False, False
     if not isinstance(rows, list) or len(rows) > 128 or any(not isinstance(row, dict) for row in rows):
@@ -444,8 +444,8 @@ def service_prometheus(body, names):
             line,
         )
         key = names[name]
-        labels = (sample[1] or b"") if sample else b""
-        value = service_number(sample[2]) if sample else None
+        labels = (sample.group(1) or b"") if sample else b""
+        value = service_number(sample.group(2)) if sample else None
         values = series.setdefault(key, {})
         values[labels] = None if labels in values else value
     return {

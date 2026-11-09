@@ -29,7 +29,7 @@ def fpm_pools(main):
                 if any(char in directory for char in '*?['):
                     continue
                 matches = []
-                with os.scandir(directory) as entries:
+                with scan_directory(directory) as entries:
                     for i, entry in enumerate(entries):
                         if i >= 256:
                             raise ValueError('response_limit')
@@ -55,12 +55,12 @@ def fpm_targets(record, address):
 
 
 def fpm_status_sources(record):
-    root = f'/proc/{record["pid"]}'
+    root = '/proc/{}'.format(record["pid"])
     title = service_read_file(root + '/cmdline', 4096).split(b'\0', 1)[0]
     match = re.fullmatch(rb'php-fpm: master process \((/[^()\r\n]{1,1024})\)', title)
     if not match:
         return []
-    pools = fpm_pools(os.fsdecode(match[1]))
+    pools = fpm_pools(os.fsdecode(match.group(1)))
     sources = []
     for pool in pools:
         path = pool.get('pm.status_path', '')
@@ -148,11 +148,11 @@ def fpm_fastcgi_status(target, path):
     if (not sep or fields.get(b'content-type', b'').split(b';', 1)[0] != b'application/json'
             or fields.get(b'status', b'200').split(b' ', 1)[0] != b'200'):
         raise ValueError('source_unavailable')
-    return json.loads(body)
+    return load_collector_json(body)
 
 
 def fpm_live_master(record):
-    path = f'/proc/{record["pid"]}/stat'
+    path = '/proc/{}/stat'.format(record["pid"])
     return process_stat(service_read_file(path, 2048).decode('ascii'))[1] == record['started']
 
 
@@ -164,8 +164,8 @@ def fpm_workers(record):
     try:
         for pid in record['children']:
             try:
-                parent, _ = process_stat(service_read_file(f'/proc/{pid}/stat', 2048).decode('ascii'))
-                if parent == master and os.path.samefile(f'/proc/{pid}/exe', f'/proc/{master}/exe'):
+                parent, _ = process_stat(service_read_file('/proc/{}/stat'.format(pid), 2048).decode('ascii'))
+                if parent == master and os.path.samefile('/proc/{}/exe'.format(pid), '/proc/{}/exe'.format(master)):
                     count += 1
             except FileNotFoundError:
                 continue
@@ -259,7 +259,7 @@ def php_fpm_connector(c, r):
         return
     for path in ["/fpm-status?json", "/status?json"]:
         try:
-            if fpm_status_result(json.loads(service_http(c, path, limit=16384)), r):
+            if fpm_status_result(load_collector_json(service_http(c, path, limit=16384)), r):
                 return
         except (ValueError, OSError, http.client.HTTPException):
             pass

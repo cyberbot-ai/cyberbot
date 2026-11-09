@@ -46,7 +46,7 @@ def _read_open(parent, name, directory):
         info = os.fstat(reference)
         if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
             raise ValueError('not_a_regular_file')
-        fd = os.open(f'/proc/self/fd/{reference}', os.O_RDONLY | os.O_NONBLOCK)
+        fd = os.open('/proc/self/fd/{}'.format(reference), os.O_RDONLY | os.O_NONBLOCK)
         try:
             opened = os.fstat(fd)
             if not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1 or (
@@ -97,7 +97,7 @@ class RemoteRead:
             return
         if operation == 'du':
             self.allocated += os.fstat(fd).st_blocks * 512
-        with os.scandir(fd) as directory:
+        with scan_directory(fd) as directory:
             for entry in directory:
                 if (time.monotonic() >= self.deadline or self.entries >= READ_ENTRY_LIMIT
                         or self.bytes >= READ_LIMIT or 'output_limit' in self.gaps):

@@ -14,7 +14,7 @@ def asterisk_connector(c, r):
         ("processed", r"(\d+) calls? processed"),
     ]:
         hit = re.search(pattern, text)
-        r["metrics"][key] = int(hit[1]) if hit else None
+        r["metrics"][key] = int(hit.group(1)) if hit else None
     if r["metrics"]["channels"] is None:
         raise ValueError("source_unavailable")
     r.update(detected=True, connected=True)
@@ -23,7 +23,7 @@ def asterisk_connector(c, r):
             ["/usr/sbin/asterisk", "-rx", "core show uptime seconds"], limit=4096
         ).decode("ascii", "replace")
         hit = re.search(r"System uptime:\s*(\d+)", up)
-        r["uptime"] = int(hit[1]) if hit else None
+        r["uptime"] = int(hit.group(1)) if hit else None
         text = service_process(
             ["/usr/sbin/asterisk", "-rx", "pjsip show registrations"], limit=32768
         ).decode("ascii", "replace")

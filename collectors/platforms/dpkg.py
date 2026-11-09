@@ -10,7 +10,7 @@ def dpkg_package_rows():
     def stamp():
         s = os.stat("/var/lib/dpkg/status")
         updates = []
-        with os.scandir("/var/lib/dpkg/updates") as it:
+        with scan_directory("/var/lib/dpkg/updates") as it:
             for entry in __import__("itertools").islice(it, 128):
                 if entry.name.isdigit():
                     updates.append(entry.name)
@@ -90,7 +90,8 @@ def apt_cache(args, timeout):
     # Disable its persistent caches and grant the temporary file limit only to the child.
     result = subprocess.run(
         ["apt-cache", "-o", "Dir::Cache::pkgcache=", "-o", "Dir::Cache::srcpkgcache=", *args],
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         timeout=timeout,
         env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"},
         preexec_fn=apt_temp_file_limit,
@@ -189,7 +190,7 @@ def dpkg_candidates(state, result, rows):
             candidate["sourceVersion"] = source.group(2) or fields["Version"]
     stamps = []
     try:
-        with os.scandir("/var/lib/apt/lists") as files:
+        with scan_directory("/var/lib/apt/lists") as files:
             for f in __import__("itertools").islice(files, 1024):
                 if f.name.endswith(("InRelease", "_Release")):
                     stamps.append(int(f.stat(follow_symlinks=False).st_mtime))

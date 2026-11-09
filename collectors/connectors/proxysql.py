@@ -19,7 +19,7 @@ def proxysql_connector(config, result):
         if any(char in value for char in "\r\n"):
             raise ValueError("credentials_unavailable")
         quoted = value.replace("\\", "\\\\").replace('"', '\\"')
-        options.append(f'{key}="{quoted}"')
+        options.append('{}="{}"'.format(key, quoted))
     names = ", ".join("'" + name + "'" for name in PROXYSQL_STATS)
     query = "SELECT Variable_Name, Variable_Value FROM stats_mysql_global WHERE Variable_Name IN (" + names + ")"
     client = {"host": config["endpoint"], "port": config["port"], "user": config["user"]}

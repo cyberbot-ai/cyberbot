@@ -8,7 +8,7 @@ def nebula_connector(config, result):
     if len(records) != 1:
         raise ValueError("endpoint_ambiguous")
     record = records[0]
-    raw = service_read_file(f'/proc/{record["pid"]}/stat', 2048).decode("ascii")
+    raw = service_read_file('/proc/{}/stat'.format(record["pid"]), 2048).decode("ascii")
     if process_stat(raw)[1] != record["started"]:
         raise ValueError("source_unavailable")
     fields = raw[raw.rfind(")") + 2:].split()
