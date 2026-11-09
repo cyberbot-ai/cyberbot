@@ -34,7 +34,7 @@
 - **Monitor a fleet from one screen.** View CPU, memory, load, disks, services, and incident status. Cyberbot shows when readings are stale, unavailable, or still pending.
 - **Go from an alert to the evidence.** Open a server to inspect service metrics, incremental log summaries, critical package advisories on supported Ubuntu and Debian releases, and related incidents. Open an interactive SSH console when you need it.
 - **Monitor application services independently.** Track databases, proxies, containers, and other services with [18 built-in connectors](docs/CONNECTORS.md). Several connectors support multiple instances on one host.
-- **Investigate with an optional AI agent.** Use an installed Codex or Claude CLI to investigate incidents with scoped context. Routine monitoring runs without a model. Eligible changes go through Cyberbot's action policy and approval flow.
+- **Investigate with an optional AI agent.** Use an installed Codex or Claude CLI to investigate incidents. The agent's server requests go through Cyberbot's Model Context Protocol (MCP) gateway, which limits access to the servers in scope. Read-only diagnostics can run without approval; shell commands and other supported actions that can change a server require your approval. Requests that violate the [action policy](docs/architecture.md#proposed-actions) are blocked. Routine monitoring runs without a model.
 
 Cyberbot stores settings and monitoring history locally. It uses OpenSSH and deploys a versioned Python collector over rsync to the remote account's cache. It needs no always-running server daemon. See the [architecture](docs/architecture.md) for the data and trust boundaries.
 
