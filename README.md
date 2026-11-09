@@ -6,7 +6,8 @@
 
 <p align="center">
   <strong>See what needs attention across your Linux servers.</strong><br>
-  Monitor your fleet over SSH, investigate incidents, and review proposed actions from a macOS desktop app.
+  Monitor your fleet over SSH, investigate incidents, and review proposed actions from a macOS desktop app.<br>
+  Get notified automatically when a critical vulnerability is found on one of your servers.
 </p>
 
 <p align="center">
@@ -101,6 +102,7 @@ Diagnostics use local endpoints and credentials that already exist on the server
 
 - Cyberbot matches installed packages against critical advisories for supported Debian and Ubuntu releases. Matching runs locally and does not use AI.
 - Each finding shows the installed and required versions, whether an update is available, and the command that installs it. Hide a package you have accepted until its installed version changes.
+- Checks run on a schedule, and a new finding opens an incident. With macOS notifications enabled, you hear about it without opening the app.
 - System and SSH logs are summarized on the server. Cyberbot reads them incrementally and receives a summary with redacted examples.
 
 </details>
