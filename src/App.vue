@@ -5,6 +5,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { call, preview } from './api';
 import { health } from './health';
+import { fleetSortColumns, sortFleet, type FleetSort, type FleetSortKey } from './fleetSort';
 import RelativeDate from './components/RelativeDate.vue';
 import { useClock } from './useClock';
 import type { AgentStatus, InventoryFile, Server, Settings, Snapshot, StorageStatus } from './types';
@@ -56,6 +57,13 @@ async function openAiSettings() {
 }
 const pauseBusy=ref(false);
 const page=ref('fleet');const data=ref<Snapshot>();const now=useClock();const search=ref('');const filter=ref('all');const compact=ref(true);
+const fleetSort = ref<FleetSort>({ key: 'host', direction: 'ascending' });
+function changeFleetSort(key: FleetSortKey) {
+  const { key: current, direction } = fleetSort.value;
+  const ascending = key === current ? direction === 'descending' : key === 'host';
+  fleetSort.value = { key, direction: ascending ? 'ascending' : 'descending' };
+}
+const fleetScrollResetKey = computed(() => JSON.stringify([fleetSort.value.key, fleetSort.value.direction, search.value, filter.value]));
 const searchOpen=ref(false),searchInput=ref<HTMLInputElement>(),searchButton=ref<HTMLButtonElement>();
 function closeSearch(){search.value='';searchOpen.value=false;void nextTick(()=>searchButton.value?.focus());}
 async function toggleSearch(){if(searchOpen.value){closeSearch();return;}searchOpen.value=true;await nextTick();searchInput.value?.focus();}
@@ -141,6 +149,7 @@ const filtered=computed(()=>servers.value.filter(s=>{
   const query=search.value.toLowerCase();const state=health(s,now.value,settings.value.pollSeconds);
   return (!query||[s.name,s.endpoint.host].some(v=>v.toLowerCase().includes(query)))&&(filter.value==='all'||(filter.value==='problems'?['critical','warning','unreachable','stale'].includes(state):filter.value==='unknown'?state==='unknown':state===filter.value));
 }));
+const orderedServers = computed(() => sortFleet(filtered.value, fleetSort.value, now.value, settings.value.pollSeconds));
 let reloadTimer: ReturnType<typeof setTimeout> | undefined;
 let reloading: Promise<void> | undefined, followUp: Promise<void> | undefined;
 let unlisten:UnlistenFn|undefined;let stopSettingsListener:(()=>void)|undefined;let stopped=false,settingsRevision=0;
@@ -250,10 +259,19 @@ async function closeDetails(){if(standalone&&!preview){try{await getCurrentWindo
       <div class="fleet-filters" aria-label="Server status"><button :aria-pressed="filter==='all'" :class="{chosen:filter==='all'}" @click="filter='all'">All <span>{{servers.length}}</span></button><button :aria-pressed="filter==='problems'" :class="{chosen:filter==='problems'}" @click="filter='problems'"><i v-if="problems>0" class="dot attention-dot" :class="{critical:hasRedProblems}" aria-hidden="true"></i>Needs attention <span>{{problems}}</span></button><button :aria-pressed="filter==='healthy'" :class="{chosen:filter==='healthy'}" @click="filter='healthy'">Healthy <span>{{healthy}}</span></button><button :aria-pressed="filter==='unknown'" :class="{chosen:filter==='unknown'}" @click="filter='unknown'">Insufficient data <span>{{unknown}}</span></button><span v-if="search||filter!=='all'" class="result-count">Found {{filtered.length}}</span></div>
       <div class="fleet-toolbar"><button ref="managementButton" type="button" class="manage-servers quiet" aria-label="Manage servers" title="Manage servers" aria-haspopup="dialog" :aria-controls="managementOpen?'server-management':undefined" @click="managementOpen=true"><UiIcon name="gear" :size="16"/>Manage</button><div class="view-switch" aria-label="Server view"><button :aria-pressed="!compact" :class="{active:!compact}" aria-label="Grid view" title="Grid view" @click="compact=false"><UiIcon name="grid" :size="16"/></button><button :aria-pressed="compact" :class="{active:compact}" aria-label="List view" title="List view" @click="compact=true"><UiIcon name="list" :size="16"/></button></div></div>
       </div>
+      <div v-if="servers.length" class="fleet-sort" role="group" aria-label="Sort servers">
+        <span class="sort-label" aria-hidden="true">Sort by</span>
+        <button v-for="column in fleetSortColumns" :key="column.key" type="button" :title="column.hint"
+          :aria-pressed="fleetSort.key === column.key"
+          :aria-label="fleetSort.key === column.key ? `${column.label}, ${fleetSort.direction}` : undefined"
+          @click="changeFleetSort(column.key)">
+          {{ column.label }} <span v-if="fleetSort.key === column.key" aria-hidden="true">{{ fleetSort.direction === 'ascending' ? '↑' : '↓' }}</span>
+        </button>
+      </div>
       <div v-if="!data" class="loading" role="status">Loading infrastructure…</div>
       <div v-else-if="servers.length===0" class="empty"><UiIcon name="servers" :size="36"/><h2>Connect your servers</h2><p>Add an Ansible inventory or a list of hosts.<br>Metrics appear after the first SSH poll.</p><button class="primary" @click="sourceForm=true">Add server</button></div>
       <div v-else-if="!filtered.length" class="empty"><h2>No servers found</h2><p>Try a different search or reset the filters.</p><button @click="search='';filter='all'">Reset filters</button></div>
-      <div v-else class="fleet"><FleetGrid :servers="filtered" :now="now" :interval="settings.pollSeconds" :compact="compact" @select="openServer($event.id)"/></div>
+      <div v-else class="fleet"><FleetGrid :servers="orderedServers" :now="now" :interval="settings.pollSeconds" :compact="compact" :scroll-reset-key="fleetScrollResetKey" @select="openServer($event.id)"/></div>
     </template>
     <section v-else-if="page==='incidents'" class="scroll-content">
       <p v-if="notificationIds" class="notification-selection">Incidents from notification <button @click="notificationIds=null">All incidents</button></p>
@@ -372,6 +390,10 @@ button,input,select,textarea{font:inherit;color:inherit}button{cursor:pointer;di
 .management-dialog{width:min(860px,calc(100vw - 32px));max-height:calc(100dvh - 48px);padding:24px;border-radius:12px;box-shadow:var(--shadow);overflow:auto}.management-head{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px}.management-head h2{font-size:20px;font-weight:600;letter-spacing:-.3px;margin:0}.management-head .row-actions{flex-shrink:0}.management-dialog .page-intro{margin:0;color:var(--muted)}.management-dialog .source-row{padding:20px 0}
 dialog{color:var(--text);background:var(--canvas);border:0;padding:0;box-sizing:border-box}dialog::backdrop{background:var(--overlay)}.detail-dialog{margin:0 0 0 auto;width:min(900px,100vw);max-width:100vw;max-height:100dvh;height:100dvh;box-shadow:var(--shadow)}.detail-panel,.standalone-detail{height:100%;width:100%}.standalone{display:block}.source-dialog{width:min(540px,calc(100vw - 32px));max-height:calc(100dvh - 48px);border-radius:14px;box-shadow:var(--shadow)}.source-form{padding:28px}.source-form header{display:flex;align-items:center;justify-content:space-between;gap:12px}.source-form h2{font-size:21px;font-weight:600;margin:0}.source-form label>input,.source-form textarea{width:100%}.source-form textarea{font:13px/1.7 ui-monospace,monospace;resize:vertical}.source-form p{font-size:12px;color:var(--muted);line-height:1.6}.source-form p.text-error{color:var(--danger)}.inventory-picker{display:flex;flex-direction:column;align-items:center;gap:12px;padding:20px 0}.source-form .inventory-name{margin:0;font-size:13px;color:var(--text);overflow-wrap:anywhere;max-width:100%}.source-form footer{display:flex;justify-content:flex-end;gap:10px;margin-top:24px}.tabs{display:flex;border-bottom:1px solid var(--line);gap:20px;margin:22px 0}.tabs button{border:0;border-bottom:2px solid transparent;border-radius:0;background:none;padding:10px 0;color:var(--muted)}.tabs button.active{color:var(--text);border-bottom-color:var(--accent)}
 .fleet-controls{display:flex;align-items:center;flex-wrap:wrap;gap:8px 12px;margin-bottom:8px}.fleet-controls .fleet-filters{flex:1 1 340px;padding:0}.fleet-controls .fleet-toolbar{padding:0;margin-left:auto}
+.fleet-sort{display:flex;align-items:center;flex-wrap:wrap;flex-shrink:0;gap:4px;margin-bottom:8px}
+.sort-label{padding-inline:4px;font-size:12px;color:var(--muted)}
+.fleet-sort button{min-height:28px;padding:3px 8px;gap:4px;font-size:12px;color:var(--muted)}
+.fleet-sort button[aria-pressed=true]{background:var(--accent-bg);border-color:var(--accent);color:var(--accent)}
 .monitor-control{display:flex;align-items:center;justify-content:space-between;gap:4px;padding:0 8px;min-width:0}.monitor-caption{font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}.monitor-short{display:none}.monitor-toggle{flex-shrink:0;width:28px;min-height:28px;padding:0;border:0;background:none;color:var(--muted);border-radius:5px}.monitor-control.paused .monitor-caption{color:var(--warning)}.monitor-control.paused .monitor-toggle{color:var(--accent)}
 .title-search{display:flex;align-items:center;gap:6px;min-width:0}.search-toggle{width:28px;min-height:28px;padding:0;border:0;background:none;color:var(--muted);border-radius:5px}.search-toggle:hover,.search-toggle[aria-expanded=true]{background:var(--hover);color:var(--text)}.title-search input{width:180px;height:28px;min-height:28px;padding:4px 8px;font-size:12px}
 @media(max-width:1100px){.main.fleet-page .page-head.searching{height:96px;padding-bottom:36px;box-sizing:border-box}.title-search input{position:absolute;top:calc(100% + 8px);left:0;width:min(220px,calc(100vw - 112px));z-index:2;box-shadow:var(--shadow)}}

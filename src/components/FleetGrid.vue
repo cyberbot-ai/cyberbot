@@ -4,34 +4,60 @@ import ServerCard from './ServerCard.vue';
 import ServerRibbon from './ServerRibbon.vue';
 import type { Server } from '../types';
 
-const props = defineProps<{ servers: Server[]; now: number; interval: number; compact: boolean }>();
+const props = defineProps<{ servers: Server[]; now: number; interval: number; compact: boolean; scrollResetKey?: string }>();
 defineEmits<{ select: [server: Server] }>();
 const root = ref<HTMLElement>();
 const width = ref(1000), height = ref(600), top = ref(0), measuredVersion = ref(0);
 const measured = new Map<string, number>(), elements = new Map<string, Element>();
+const cardRowHeight = 178;
 const columns = computed(() => props.compact ? 1 : Math.max(1, Math.floor((width.value + 12) / 270)));
+const rowIds = computed(() => props.servers.map(server => server.id));
 // Only visible rows are measured. Prefix offsets also cover wrapped service lists.
+function rowOffsets(ids: string[]) {
+  const positions = [0];
+  for (const id of ids) positions.push(positions[positions.length - 1] + (measured.get(id) ?? 32));
+  return positions;
+}
 const offsets = computed(() => {
   void measuredVersion.value;
-  const positions = [0];
-  for (const server of props.servers) positions.push(positions[positions.length - 1] + (measured.get(server.id) ?? 32));
-  return positions;
+  return rowOffsets(rowIds.value);
 });
-function rowAt(position: number) {
-  let low = 0, high = props.servers.length;
+function rowAt(position: number, positions = offsets.value) {
+  let low = 0, high = positions.length - 1;
   while (low < high) {
     const mid = (low + high) >>> 1;
-    if (offsets.value[mid + 1] <= position) low = mid + 1;
+    if (positions[mid + 1] <= position) low = mid + 1;
     else high = mid;
   }
   return low;
 }
-const first = computed(() => props.compact ? Math.max(0, rowAt(top.value) - 2) : Math.max(0, Math.floor(top.value / 178) - 2) * columns.value);
-const end = computed(() => Math.min(props.servers.length, props.compact ? rowAt(top.value + height.value) + 3 : first.value + (Math.ceil(height.value / 178) + 4) * columns.value));
+function rowOffset(index: number, positions?: number[]) {
+  return positions ? positions[index] : Math.floor(index / columns.value) * cardRowHeight;
+}
+const first = computed(() => props.compact ? Math.max(0, rowAt(top.value) - 2) : Math.max(0, Math.floor(top.value / cardRowHeight) - 2) * columns.value);
+const end = computed(() => Math.min(props.servers.length, props.compact ? rowAt(top.value + height.value) + 3 : first.value + (Math.ceil(height.value / cardRowHeight) + 4) * columns.value));
 const visible = computed(() => props.servers.slice(first.value, end.value));
-const before = computed(() => props.compact ? offsets.value[first.value] : Math.floor(first.value / columns.value) * 178);
-const after = computed(() => props.compact ? offsets.value[props.servers.length] - offsets.value[end.value] : Math.max(0, Math.ceil(props.servers.length / columns.value) - Math.ceil(end.value / columns.value)) * 178);
+const before = computed(() => rowOffset(first.value, props.compact ? offsets.value : undefined));
+const after = computed(() => props.compact ? offsets.value[props.servers.length] - offsets.value[end.value] : Math.max(0, Math.ceil(props.servers.length / columns.value) - Math.ceil(end.value / columns.value)) * cardRowHeight);
 let viewportObserver: ResizeObserver | undefined, rowObserver: ResizeObserver | undefined;
+
+function scrollTo(position: number, focused?: HTMLElement) {
+  top.value = Math.max(0, position);
+  if (top.value === 0 && !focused) {
+    if (root.value) root.value.scrollTop = 0;
+    return;
+  }
+  // The new virtual spacers must be in place before the browser clamps scrollTop.
+  void nextTick(() => {
+    const viewport = root.value;
+    if (!viewport) return;
+    viewport.scrollTop = top.value;
+    top.value = viewport.scrollTop;
+    if (focused && viewport.contains(focused) && viewport.ownerDocument.activeElement === viewport.ownerDocument.body) {
+      focused.focus({ preventScroll: true });
+    }
+  });
+}
 
 function preserveAnchor(change: () => void) {
   const anchor = Math.min(rowAt(top.value), props.servers.length - 1);
@@ -39,10 +65,7 @@ function preserveAnchor(change: () => void) {
   change();
   measuredVersion.value++;
   if (anchor >= 0) {
-    top.value = offsets.value[anchor] + Math.min(within, offsets.value[anchor + 1] - offsets.value[anchor] - 1);
-    // Apply after spacer heights update, otherwise the old scroll extent can
-    // clamp the anchor near the end of the list.
-    void nextTick(() => { if (root.value) root.value.scrollTop = top.value; });
+    scrollTo(offsets.value[anchor] + Math.min(within, offsets.value[anchor + 1] - offsets.value[anchor] - 1));
   }
 }
 function observeRow(element: Element | ComponentPublicInstance | null, id: string) {
@@ -76,12 +99,29 @@ onMounted(() => {
   for (const element of elements.values()) rowObserver.observe(element);
 });
 onBeforeUnmount(() => { viewportObserver?.disconnect(); rowObserver?.disconnect(); });
-watch([() => props.servers.map(s => s.id).join(','), () => props.compact], () => {
-  const ids = new Set(props.servers.map(s => s.id));
-  for (const id of measured.keys()) if (!ids.has(id)) measured.delete(id);
-  measuredVersion.value++;
-  top.value = 0;
-  if (root.value) root.value.scrollTop = 0;
+watch([rowIds, () => props.compact, () => props.scrollResetKey], ([ids, compact, resetKey], [previousIds, previousCompact, previousResetKey]) => {
+  const reset = compact !== previousCompact || resetKey !== previousResetKey;
+  if (!reset && ids.length === previousIds.length && ids.every((id, index) => id === previousIds[index])) return;
+
+  const remaining = new Set(ids);
+  let position = 0;
+  let focused: HTMLElement | undefined;
+  if (!reset) {
+    // Prefer the focused server when it moves away from the first visible row.
+    const active = root.value?.ownerDocument.activeElement;
+    if (active instanceof HTMLElement && root.value?.contains(active)) focused = active;
+    const focusedId = focused?.closest<HTMLElement>('[data-id]')?.dataset.id;
+    const previousOffsets = compact ? rowOffsets(previousIds) : undefined;
+    const firstVisible = previousOffsets ? rowAt(top.value, previousOffsets) : Math.floor(top.value / cardRowHeight) * columns.value;
+    const anchorId = focusedId && remaining.has(focusedId) ? focusedId : previousIds[firstVisible];
+    const nextIndex = ids.indexOf(anchorId);
+    if (nextIndex >= 0) {
+      const previousIndex = previousIds.indexOf(anchorId);
+      position = top.value - rowOffset(previousIndex, previousOffsets) + rowOffset(nextIndex, compact ? offsets.value : undefined);
+    }
+  }
+  for (const id of measured.keys()) if (!remaining.has(id)) measured.delete(id);
+  scrollTo(position, focused);
 });
 </script>
 
@@ -95,7 +135,7 @@ watch([() => props.servers.map(s => s.id).join(','), () => props.compact], () =>
             <ServerRibbon :server="server" :now="now" :interval="interval" :alternate="(first + index) % 2 === 1" @select="$emit('select', $event)" />
           </div>
         </template>
-        <template v-else><ServerCard v-for="server in visible" :key="server.id" :server="server" :now="now" :interval="interval" @select="$emit('select', $event)" /></template>
+        <template v-else><ServerCard v-for="server in visible" :key="server.id" :data-id="server.id" :server="server" :now="now" :interval="interval" @select="$emit('select', $event)" /></template>
       </div>
       <div aria-hidden="true" :style="{ height: `${after}px` }"></div>
     </div>
@@ -103,5 +143,5 @@ watch([() => props.servers.map(s => s.id).join(','), () => props.compact], () =>
 </template>
 
 <style scoped>
-.fleet-grid{height:100%;display:flex;flex-direction:column;min-height:0}.viewport{flex:1;min-height:0;overflow:auto;padding:2px 3px 8px;box-sizing:border-box;scrollbar-color:var(--line-strong) transparent;scrollbar-width:thin}.grid{display:grid;gap:12px}.grid.ribbon{gap:0}.viewport.ribbon{padding:0;overflow-anchor:none}.ribbon-slot{min-width:0}
+.fleet-grid{height:100%;display:flex;flex-direction:column;min-height:0}.viewport{flex:1;min-height:0;overflow:auto;overflow-anchor:none;padding:2px 3px 8px;box-sizing:border-box;scrollbar-color:var(--line-strong) transparent;scrollbar-width:thin}.grid{display:grid;gap:12px}.grid.ribbon{gap:0}.viewport.ribbon{padding:0}.ribbon-slot{min-width:0}
 </style>

@@ -22,6 +22,34 @@ describe('500-server fleet',()=>{
     expect(wrapper.findAll('button')).toHaveLength(1);
     wrapper.unmount();
   });
+  it.each([false, true])('anchors the focused server after reordering and resets on manual sorting (ribbon=%s)', async compact => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+    const wrapper = mount(FleetGrid, { attachTo: document.body, props: { servers, now: 1000, interval: 180, compact, scrollResetKey: 'host' } });
+    try {
+      const viewport = wrapper.get<HTMLElement>('.viewport');
+      const [oldIndex, newIndex, columns, rowHeight] = compact ? [12, 320, 1, 32] : [39, 321, 3, 178];
+      const rowButton = () => wrapper.get<HTMLButtonElement>(compact ? `[data-id="${oldIndex}"] button` : `button[data-id="${oldIndex}"]`);
+      const offset = (index: number) => Math.floor(index / columns) * rowHeight;
+      viewport.element.scrollTop = offset(oldIndex - columns) + 3;
+      await viewport.trigger('scroll');
+      rowButton().element.focus();
+      expect(document.activeElement).toBe(rowButton().element);
+
+      const reordered = servers.filter((_, index) => index !== oldIndex);
+      reordered.splice(newIndex, 0, servers[oldIndex]);
+      await wrapper.setProps({ servers: reordered });
+      await nextTick();
+      expect(viewport.element.scrollTop).toBe(offset(newIndex - columns) + 3);
+      expect(document.activeElement).toBe(rowButton().element);
+      expect(wrapper.findAll('button').length).toBeLessThan(40);
+
+      await wrapper.setProps({ scrollResetKey: 'disk' });
+      await nextTick();
+      expect(viewport.element.scrollTop).toBe(0);
+    } finally {
+      wrapper.unmount();
+    }
+  });
   it('measures wrapped rows, preserves the visible anchor and remeasures on resize',async()=>{
     const observers:MockObserver[]=[];
     class MockObserver {
@@ -50,6 +78,12 @@ describe('500-server fleet',()=>{
     expect((viewport.element as HTMLElement).scrollTop).toBe(352);
     await wrapper.setProps({servers:servers.map(s=>({...s,lastAttempt:1200}))});
     expect((viewport.element as HTMLElement).scrollTop).toBe(352);
+    const reordered = servers.filter(server => server.id !== '10');
+    reordered.splice(20, 0, servers[10]);
+    await wrapper.setProps({ servers: reordered });
+    await nextTick();
+    expect((viewport.element as HTMLElement).scrollTop).toBe(672);
+    expect(wrapper.get('[data-id="10"]').attributes('aria-posinset')).toBe('21');
     expect(rowObserver.observed.size).toBeLessThan(30);
     wrapper.unmount();
     expect(observers.every(o=>o.disconnected)).toBe(true);

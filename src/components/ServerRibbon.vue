@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { serverHint } from '../serverDirectory';
 import { computed } from 'vue';
-import { health, healthLabel, serverHealthLabel, partialHealthReason } from '../health';
+import { health, healthLabel, serverHealthLabel, partialHealthReason, ribbonMetricsUnavailable } from '../health';
 import { exactMetric, formatMetric } from '../metrics';
 import { dashboardConnectors, hideServiceUnit, serviceAvailabilityLabels, servicePriority } from '../services';
 import type { Health, Server } from '../types';
@@ -10,7 +10,7 @@ const props = defineProps<{ server: Server; now: number; interval: number; alter
 defineEmits<{ select: [server: Server] }>();
 const status = computed(() => health(props.server, props.now, props.interval));
 const pending = computed(() => Boolean(props.server.networkOffline || props.server.awaitingFirstCheck));
-const unavailable = computed(() => pending.value || ['stale', 'unreachable'].includes(status.value));
+const unavailable = computed(() => ribbonMetricsUnavailable(props.server, status.value));
 const resourceState = (value: number | null | undefined) => value == null || !Number.isFinite(value) ? 'unknown' : value >= 97 ? 'critical' : value >= 90 ? 'warning' : 'healthy';
 const metrics = computed(() => {
   const o = props.server.observation;

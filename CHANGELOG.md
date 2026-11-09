@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.0
+
+- Sort the server dashboard by hostname suffix, CPU, load, memory, swap, disk space, or inode usage. Disk sorting uses the fullest mount point.
+
 ## 0.2.4
 
 - Collect PgBouncer pool statistics over a verified local socket when automatic diagnostics run as root without a configured role, and report missing credentials and denied access separately.

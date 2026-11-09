@@ -212,6 +212,64 @@ describe('fleet ribbon integration', () => {
     expect(app.get('button.card.healthy .health').text()).toBe('Healthy');
     app.unmount();
   });
+  it('sorts the fleet by hostname suffix or metric in either view, including after polling', async () => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+    const now = Date.now() / 1000;
+    const server = (id: string, host: string, rootUsage: number, dataUsage: number): Server => ({
+      id, name: id, sourceId: 'fixture', endpoint: { host, user: 'ops', port: 22, identityFile: null, jumpHost: null },
+      observation: {
+        at: now, cpuPercent: 10, memoryPercent: 20, swapPercent: 0, load: 0.4, uptime: 100,
+        disks: [{ mount: '/', usedPercent: rootUsage, inodePercent: 1 }, { mount: '/data', usedPercent: dataUsage, inodePercent: 2 }],
+        services: [], missing: [], bytesReceived: 100, durationMs: 10,
+      },
+      lastError: null, lastAttempt: now, nextCheck: 0, failures: 0,
+    });
+    const db = server('db', 's1.db.example.com', 98, 20);
+    const app2 = server('app2', 's2.app.example.com', 30, 99);
+    const app10 = server('app10', 's10.app.example.com', 70, 10);
+    const other = server('other', 'a.app.example.net', 80, 50);
+    let nodes = [other, db, app10, app2];
+    vi.mocked(call).mockImplementation(async command => command === 'snapshot' ? {
+      servers: nodes, sources: [], incidents: [], logStatus: {}, collectedAt: now,
+      settings: { mode: 'manual', dailyRunLimit: null, dailyTokenLimit: null, runTokenLimit: 50000, autoAgent: 'codex', pollSeconds: 180, logPollSeconds: 600, paused: false, concurrency: 4 },
+    } : {});
+    const app = mount(App, { attachTo: document.body });
+    try {
+      await flushPromises();
+      const rowIds = () => app.getComponent(FleetGrid).findAll('[data-id]').map(row => row.attributes('data-id'));
+      const sort = app.get('[aria-label="Sort servers"]');
+      const button = (label: string) => sort.findAll('button').find(item => item.text().split(/\s+/)[0] === label)!;
+      expect(rowIds()).toEqual(['app2', 'app10', 'db', 'other']);
+      expect(button('Host').text()).toContain('↑');
+      expect(sort.get('[aria-pressed="true"]').attributes('aria-label')).toBe('Host, ascending');
+
+      await button('Disk').trigger('click');
+      expect(rowIds()).toEqual(['app2', 'db', 'other', 'app10']);
+      expect(button('Disk').text()).toContain('↓');
+      expect(sort.get('[aria-pressed="true"]').attributes('aria-label')).toBe('Disk, descending');
+      await button('Disk').trigger('click');
+      expect(rowIds()).toEqual(['app10', 'other', 'db', 'app2']);
+
+      await app.get('button[aria-label="Search servers"]').trigger('click');
+      await app.get('input[aria-label="Search servers"]').setValue('example.com');
+      expect(rowIds()).toEqual(['app10', 'db', 'app2']);
+      await app.findAll('.fleet-filters button').find(item => item.text().startsWith('Needs attention'))!.trigger('click');
+      expect(rowIds()).toEqual(['db', 'app2']);
+      await app.get('[aria-label="Grid view"]').trigger('click');
+      expect(rowIds()).toEqual(['db', 'app2']);
+
+      nodes = [other, db, app10, server('app2', app2.endpoint.host, 30, 97)];
+      window.dispatchEvent(new Event('focus'));
+      await flushPromises();
+      expect(rowIds()).toEqual(['app2', 'db']);
+      await button('Host').trigger('click');
+      expect(sort.get('[aria-pressed="true"]').attributes('aria-label')).toBe('Host, ascending');
+      await button('Host').trigger('click');
+      expect(rowIds()).toEqual(['db', 'app2']);
+    } finally {
+      app.unmount();
+    }
+  });
   it('updates the attention indicator with the worst fleet state and hides it after recovery',async()=>{
     vi.stubGlobal('ResizeObserver',class{observe(){}unobserve(){}disconnect(){}});
     const now=Date.now()/1000;

@@ -1,6 +1,10 @@
 import type { Health, Server } from './types';
 export const healthLabel: Record<Health,string> = { healthy: 'Healthy', warning: 'Needs attention', critical: 'Critical', unknown: 'No data', stale: 'Stale', unreachable: 'Poll failed' };
 
+export function ribbonMetricsUnavailable(server: Server, state: Health): boolean {
+  return Boolean(server.networkOffline || server.awaitingFirstCheck || state === 'stale' || state === 'unreachable');
+}
+
 function hasPartialData(server: Server, state: Health): boolean {
   if (state !== 'unknown' || server.networkOffline || server.awaitingFirstCheck || server.monitoring?.enabled === false) return false;
   const o = server.observation;
