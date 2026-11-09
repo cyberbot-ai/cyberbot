@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.1
+
+- Close the AI action approval window automatically after approval succeeds.
+
 ## 0.2.0
 
 - Reply in the language of the latest user message in server and fleet AI chats.

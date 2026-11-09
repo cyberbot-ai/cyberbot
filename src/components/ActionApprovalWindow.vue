@@ -24,7 +24,24 @@ const serviceAction = computed(() => presentServiceAction(action.value));
 const statusLabels:Record<string,string>={approved:'Permission sent',queued:'Action queued',running:'Action in progress',succeeded:'Action completed',denied:'Action denied',cancelled:'Request cancelled',expired:'The request expired',unknown:'Results require verification',failed:'Action failed',rolledBack:'Original configuration restored',rollbackUnknown:'The result of the rollback requires verification'};
 let timer:ReturnType<typeof setInterval>|undefined,off:UnlistenFn|undefined,disposed=false,sequence=0;
 async function load(){const version=++sequence;try{const result=await call<ActionRequest>('action_request',{id:props.requestId});if(!disposed&&version===sequence)request.value=result;}catch(e){if(!disposed&&version===sequence)error.value=String(e).replace(/^Error: /,'');}finally{if(!disposed)loading.value=false;}}
-async function decide(decision:'deny'|'once'|'session'){if(busy.value||preview||!request.value||!allowed.value)return;busy.value=true;error.value='';sequence++;const saved=request.value;try{const result=await call<ActionRequest>('decide_action',{id:saved.id,artifactHash:saved.artifactHash,decision});if(!disposed)request.value=result;}catch(e){if(!disposed)error.value=String(e).replace(/^Error: /,'');}finally{if(!disposed)busy.value=false;}}
+async function decide(decision: 'deny' | 'once' | 'session') {
+  if (busy.value || preview || !request.value || !allowed.value) return;
+  busy.value = true;
+  error.value = '';
+  sequence++;
+  const { id, artifactHash } = request.value;
+  try {
+    const result = await call<ActionRequest>('decide_action', { id, artifactHash, decision });
+    if (disposed) return;
+    request.value = result;
+  } catch (e) {
+    if (!disposed) error.value = String(e).replace(/^Error: /, '');
+    return;
+  } finally {
+    if (!disposed) busy.value = false;
+  }
+  if (request.value.state === 'approved') await close();
+}
 function visible(){if(!document.hidden&&!busy.value)void load();}
 async function close(){if(preview||busy.value)return;busy.value=true;error.value='';try{await getCurrentWindow().close();}catch(e){error.value=`Failed to close the window. ${String(e).replace(/^Error: /,'')}`;}finally{busy.value=false;}}
 onMounted(async()=>{await load();if(disposed)return;await nextTick();denyButton.value?.focus();timer=setInterval(visible,15000);document.addEventListener('visibilitychange',visible);if(!preview)void listen('action-changed',visible).then(fn=>{if(disposed)fn();else off=fn;}).catch(()=>{});});

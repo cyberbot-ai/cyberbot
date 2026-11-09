@@ -12,8 +12,33 @@ let request:ActionRequest;
 beforeEach(()=>{vi.useFakeTimers();mock.call.mockReset();mock.close.mockReset();request=actionFixture();mock.call.mockImplementation(async(command,args)=>{if(command==='action_request')return structuredClone(request);if(command==='decide_action'){request.state=args.decision==='deny'?'denied':'approved';return structuredClone(request);}});});
 afterEach(()=>{vi.useRealTimers();document.body.innerHTML='';});
 it('shows only consent, keeps details collapsed and decisions outside the scrolling body',async()=>{const w=mount(ActionApprovalWindow,{props:{requestId:request.id},attachTo:document.body});await flushPromises();expect(w.get('h1').text()).toBe('Allow action?');expect(w.get('.server').text()).toBe('node');expect(w.text()).not.toContain('Automatic launches');expect(w.find('script').exists()).toBe(false);expect(w.get('pre').text()).toContain('<script>');expect(w.get('details').attributes('open')).toBeUndefined();expect(w.get('.content').element.contains(w.get('footer').element)).toBe(false);expect(document.activeElement?.textContent).toBe('Decline');expect(mock.call.mock.calls.map(c=>c[0])).toEqual(['action_request']);w.unmount();});
-it('binds one-time approval to exact ID/hash and prevents a double click',async()=>{const w=mount(ActionApprovalWindow,{props:{requestId:request.id}});await flushPromises();let done!:(value:ActionRequest)=>void;mock.call.mockImplementationOnce(()=>new Promise(resolve=>{done=resolve;}));const button=w.get('button.primary');await button.trigger('click');await button.trigger('click');expect(mock.call.mock.calls.filter(c=>c[0]==='decide_action')).toEqual([['decide_action',{id:request.id,artifactHash:request.artifactHash,decision:'once'}]]);done({...request,state:'approved'});await flushPromises();expect(w.get('h1').text()).toBe('Permission sent');expect(w.find('button.primary').exists()).toBe(false);w.unmount();});
-it('requires an explicit choice for session approval',async()=>{const w=mount(ActionApprovalWindow,{props:{requestId:request.id}});await flushPromises();expect((w.get('input').element as HTMLInputElement).checked).toBe(false);await w.get('input').setValue(true);expect(w.get('button.primary').text()).toBe('Allow for this run');await w.get('button.primary').trigger('click');await flushPromises();expect(mock.call).toHaveBeenCalledWith('decide_action',{id:request.id,artifactHash:request.artifactHash,decision:'session'});w.unmount();});
+it('binds one-time approval to exact ID/hash and closes only after it succeeds',async()=>{
+  const w=mount(ActionApprovalWindow,{props:{requestId:request.id}});await flushPromises();
+  let done!:(value:ActionRequest)=>void;
+  mock.call.mockImplementationOnce(()=>new Promise(resolve=>{done=resolve;}));
+  const button=w.get('button.primary');
+  await button.trigger('click');
+  await button.trigger('click');
+  expect(mock.call.mock.calls.filter(c=>c[0]==='decide_action')).toEqual([['decide_action',{id:request.id,artifactHash:request.artifactHash,decision:'once'}]]);
+  expect(mock.close).not.toHaveBeenCalled();
+  done({...request,state:'approved'});
+  await flushPromises();
+  expect(mock.close).toHaveBeenCalledOnce();
+  expect(w.get('h1').text()).toBe('Permission sent');
+  expect(w.find('button.primary').exists()).toBe(false);
+  w.unmount();
+});
+it('requires an explicit choice for session approval and closes on success',async()=>{
+  const w=mount(ActionApprovalWindow,{props:{requestId:request.id}});await flushPromises();
+  expect((w.get('input').element as HTMLInputElement).checked).toBe(false);
+  await w.get('input').setValue(true);
+  expect(w.get('button.primary').text()).toBe('Allow for this run');
+  await w.get('button.primary').trigger('click');
+  await flushPromises();
+  expect(mock.call).toHaveBeenCalledWith('decide_action',{id:request.id,artifactHash:request.artifactHash,decision:'session'});
+  expect(mock.close).toHaveBeenCalledOnce();
+  w.unmount();
+});
 it('denies without granting or invoking a model',async()=>{const w=mount(ActionApprovalWindow,{props:{requestId:request.id}});await flushPromises();await w.findAll('button').find(b=>b.text()==='Decline')!.trigger('click');await flushPromises();expect(mock.call).toHaveBeenCalledWith('decide_action',{id:request.id,artifactHash:request.artifactHash,decision:'deny'});expect(mock.call.mock.calls.some(c=>String(c[0]).includes('investigation'))).toBe(false);w.unmount();});
 it('keeps an IPC refusal visible without retrying or silently closing',async()=>{const w=mount(ActionApprovalWindow,{props:{requestId:request.id}});await flushPromises();mock.call.mockRejectedValueOnce(new Error('Connection has changed'));await w.get('button.primary').trigger('click');await flushPromises();expect(w.get('[role=alert]').text()).toContain('Connection has changed');expect(mock.call.mock.calls.filter(c=>c[0]==='decide_action')).toHaveLength(1);expect(mock.close).not.toHaveBeenCalled();w.unmount();});
 it('does not offer consent for an expired request',async()=>{request.expiresAt=1;const w=mount(ActionApprovalWindow,{props:{requestId:request.id}});await flushPromises();expect(w.text()).toContain('The waiting time has expired');expect(w.find('button.primary').exists()).toBe(false);await w.get('footer button').trigger('click');expect(mock.close).toHaveBeenCalledOnce();expect(mock.call.mock.calls.some(c=>c[0]==='decide_action')).toBe(false);w.unmount();});
@@ -43,11 +68,11 @@ it('offers only one-time approval for a package upgrade with operational risk',a
   expect(mock.call).toHaveBeenCalledWith('decide_action',{id:request.id,artifactHash:request.artifactHash,decision:'once'});
   w.unmount();
 });
-it('closes after approval and reports a native close failure',async()=>{
+it('reports a failed automatic close and allows a manual retry without resubmitting approval',async()=>{
   const w=mount(ActionApprovalWindow,{props:{requestId:request.id}});await flushPromises();
-  await w.get('button.primary').trigger('click');await flushPromises();
   mock.close.mockRejectedValueOnce(new Error('window.close denied'));
-  await w.get('footer button').trigger('click');await flushPromises();
+  await w.get('button.primary').trigger('click');await flushPromises();
+  expect(mock.close).toHaveBeenCalledOnce();
   expect(w.get('[role=alert]').text()).toContain('Failed to close the window');
   expect(w.get('footer button').attributes('disabled')).toBeUndefined();
   await w.get('footer button').trigger('click');await flushPromises();
