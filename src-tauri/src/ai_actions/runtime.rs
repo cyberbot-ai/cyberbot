@@ -7,6 +7,9 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio_util::sync::CancellationToken;
+
+const SSH_CONTEXT_TIMEOUT: Duration = Duration::from_secs(45);
+
 #[derive(Default)]
 pub struct Runtime {
     pub reviewer: tokio::sync::Mutex<()>,
@@ -152,10 +155,7 @@ async fn remote(
         .transport
         .as_ref()
         .ok_or("SSH context is not saved")?;
-    let current = crate::ssh_authorization::capture(&endpoint).await?;
-    if current.digest() != stamp.digest() {
-        return Err("SSH settings or jump hosts changed after preparation".into());
-    }
+    let current = crate::ssh_authorization::revalidate(&endpoint, stamp).await?;
     let deadline = Instant::now();
     let guard = loop {
         if cancel.is_cancelled() {
@@ -181,8 +181,6 @@ async fn remote(
         }
         tokio::select! {_=cancel.cancelled()=>return Err("Request cancelled".into()),_=tokio::time::sleep(Duration::from_millis(150))=>{}}
     };
-    let endpoint: crate::model::Endpoint =
-        serde_json::from_str(&request.artifact.endpoint).map_err(err)?;
     let payload = if operation == "prepare" {
         json!({"operation":"prepare","action":request.artifact.spec.action})
     } else if matches!(operation, "result" | "rollback") {
@@ -223,7 +221,7 @@ async fn remote(
             .fetch_add(raw.len() as u64, std::sync::atomic::Ordering::Relaxed);
         serde_json::from_slice(&raw).map_err(|_| "Invalid response from the action runner".into())
     };
-    let guarded = crate::ssh_authorization::guarded(stamp.clone(), future);
+    let guarded = crate::ssh_authorization::guarded(current, future);
     let result = if shell_execute {
         guarded.await
     } else {
@@ -303,6 +301,28 @@ async fn wait(state: &AppState, id: &str, cancel: &CancellationToken) -> Result<
         tokio::select! {_=cancel.cancelled()=>return state.store.action_result(id,"cancelled",None,Some("AI launch cancelled".into()),now()),_=tokio::time::sleep(Duration::from_millis(250))=>{}}
     }
 }
+
+pub(super) async fn queue_approved(
+    store: &Store,
+    request: &Request,
+    cancel: &CancellationToken,
+) -> Result<()> {
+    // Re-resolve Includes for the whole scope before entering the SSH queue.
+    let current = tokio::select! {
+        biased;
+        _ = cancel.cancelled() => return Err("Request cancelled".into()),
+        result = tokio::time::timeout(
+            SSH_CONTEXT_TIMEOUT,
+            crate::ssh_authorization::frame(&request.artifact.scope_endpoints),
+        ) => result.map_err(|_| "Timed out while verifying approved SSH settings")??,
+    };
+    if current.hash != request.artifact.scope_transport_hash || !current.unchanged() {
+        return Err("SSH settings changed after approval".into());
+    }
+    store.action_transition(&request.id, "approved", "queued", now())?;
+    Ok(())
+}
+
 pub(crate) async fn submit(scope: &Scope, spec: Spec) -> Result<Value> {
     if scope.cancel.is_cancelled() {
         return Err("AI launch cancelled".into());
@@ -327,7 +347,7 @@ pub(crate) async fn submit(scope: &Scope, spec: Spec) -> Result<Value> {
     let run = scope.app.investigator.get(run_id)?;
     let prepared_inputs = inputs(&scope.app, &spec)?;
     let frame = tokio::time::timeout(
-        Duration::from_secs(45),
+        SSH_CONTEXT_TIMEOUT,
         scope
             .ssh_frame
             .get_or_try_init(|| crate::ssh_authorization::frame(&run.scope_endpoints)),
@@ -401,8 +421,7 @@ pub(crate) async fn submit(scope: &Scope, spec: Spec) -> Result<Value> {
     let _pause=scope.wait_clock.pause();request=wait(&scope.app,&request.id,&cancel).await?;
   }
   if request.state!="approved"{return Ok(output(&request));}
-  if !frame.unchanged(){return Err("SSH settings changed after approval".into());}
-  scope.app.store.action_transition(&request.id,"approved","queued",now())?;
+  queue_approved(&scope.app.store,&request,&cancel).await?;
   request=scope.app.store.action_transition(&request.id,"queued","running",now())?;changed(&request.id);crate::activity::action(&request,"script_execution_started");
   let response=remote(scope.app.clone(),&request,"execute",&cancel).await?;
   let (status,result)=receipt(&request,response)?;

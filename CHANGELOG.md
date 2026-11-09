@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.2
+
+- Keep AI action approvals valid when unrelated files appear in local SSH directories, and recheck the full SSH scope before running approved commands.
+
 ## 0.7.1
 
 - Align the fleet Console with the page header, separate the command field and results from the scrollbar, and keep the server picker and AI tab usable in narrow windows.

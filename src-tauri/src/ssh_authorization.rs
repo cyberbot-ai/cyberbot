@@ -92,23 +92,51 @@ pub(crate) fn parents(files: &BTreeSet<PathBuf>) -> BTreeSet<PathBuf> {
         .collect()
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Stamp {
     pub paths: Vec<PathBuf>,
     pub files_hash: String,
     pub primary_hash: String,
     pub config_hashes: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    format_version: Option<u8>,
 }
 fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 impl Stamp {
+    pub(crate) fn new(
+        paths: Vec<PathBuf>,
+        primary_hash: String,
+        config_hashes: BTreeMap<String, String>,
+    ) -> Self {
+        Self {
+            files_hash: hash(&crate::ssh_pool::fingerprint(&paths)),
+            paths,
+            primary_hash,
+            config_hashes,
+            format_version: Some(2),
+        }
+    }
+
     pub fn unchanged(&self) -> bool {
         self.files_hash == hash(&crate::ssh_pool::fingerprint(&self.paths))
     }
     pub fn digest(&self) -> String {
         hash(&serde_json::to_vec(self).expect("stamp JSON"))
+    }
+
+    fn matches_saved(&self, saved: &Self) -> bool {
+        if saved.format_version.is_some() {
+            return self == saved;
+        }
+        // Older receipts and rollback records pin parent directories as well.
+        let files: BTreeSet<_> = self.paths.iter().cloned().collect();
+        saved.primary_hash == self.primary_hash
+            && saved.config_hashes == self.config_hashes
+            && saved.paths.iter().eq(files.union(&parents(&files)))
+            && saved.unchanged()
     }
 }
 #[derive(Clone)]
@@ -149,6 +177,14 @@ pub async fn capture(endpoint: &Endpoint) -> Result<Stamp, String> {
     args.extend(["-G".into(), "-v".into(), "--".into(), endpoint.host.clone()]);
     let output = process::bounded("/usr/bin/ssh", &args, None, 10, 65536).await?;
     capture_from_output(&output).await.map(|(stamp, _)| stamp)
+}
+
+pub(crate) async fn revalidate(endpoint: &Endpoint, saved: &Stamp) -> Result<Stamp, String> {
+    let stamp = capture(endpoint).await?;
+    if !stamp.matches_saved(saved) || !stamp.unchanged() {
+        return Err("SSH settings or jump hosts changed after preparation".into());
+    }
+    Ok(stamp)
 }
 
 pub(crate) async fn capture_from_output(
@@ -194,18 +230,15 @@ pub(crate) async fn capture_from_output(
             pending.extend(jumps.split(',').map(str::to_owned));
         }
     }
-    // Keep the same file and parent set for the serialized approval stamp.
     let dirs = parents(&config_paths.files);
-    let paths = config_paths.files.union(&dirs).cloned().collect::<Vec<_>>();
-    if paths.len() > 1024 {
+    if config_paths.files.union(&dirs).count() > 1024 {
         return Err("Too much SSH context".into());
     }
-    let stamp = Stamp {
-        files_hash: hash(&crate::ssh_pool::fingerprint(&paths)),
-        paths,
+    let stamp = Stamp::new(
+        config_paths.files.iter().cloned().collect(),
         primary_hash,
-        config_hashes: hashes,
-    };
+        hashes,
+    );
     Ok((stamp, config_paths))
 }
 pub async fn frame(endpoints: &BTreeMap<String, String>) -> Result<Frame, String> {
@@ -235,36 +268,96 @@ pub fn check(lease: &crate::ssh_pool::Lease) -> Result<(), String> {
 }
 #[cfg(test)]
 pub fn fixture() -> Stamp {
-    Stamp {
-        paths: vec![],
-        files_hash: hash(&crate::ssh_pool::fingerprint(&[])),
-        primary_hash: "fixture".into(),
-        config_hashes: BTreeMap::new(),
-    }
+    Stamp::new(vec![], "fixture".into(), BTreeMap::new())
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
-    fn metadata_changes_revoke_a_snapshot() {
+    fn stamp_tracks_ssh_files_but_ignores_unrelated_directory_changes() {
         let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("config");
-        std::fs::write(&file, "first").unwrap();
-        let paths = vec![file.clone(), dir.path().to_owned()];
-        let stamp = Stamp {
-            files_hash: hash(&crate::ssh_pool::fingerprint(&paths)),
-            paths,
-            primary_hash: "known".into(),
-            config_hashes: BTreeMap::new(),
-        };
+        let known_hosts = dir.path().join("known_hosts");
+        let identity = dir.path().join("id_ed25519");
+        let paths = vec![identity.clone(), known_hosts.clone()];
+        std::fs::write(&known_hosts, "original").unwrap();
+        let stamp = Stamp::new(paths.clone(), "target".into(), BTreeMap::new());
         assert!(stamp.unchanged());
         std::fs::write(dir.path().join("unrelated"), "temporary").unwrap();
-        assert!(!stamp.unchanged(), "approval stamps still pin directories");
-        let stamp = Stamp {
-            files_hash: hash(&crate::ssh_pool::fingerprint(&stamp.paths)),
-            ..stamp
-        };
-        std::fs::write(file, "changed").unwrap();
+        assert_eq!(
+            stamp,
+            Stamp::new(paths.clone(), "target".into(), BTreeMap::new())
+        );
+        assert!(stamp.unchanged());
+        std::fs::write(&identity, "new identity").unwrap();
         assert!(!stamp.unchanged());
+        let stamp = Stamp::new(paths, "target".into(), BTreeMap::new());
+        std::fs::write(&known_hosts, "updated host keys").unwrap();
+        assert!(!stamp.unchanged());
+    }
+
+    #[test]
+    fn legacy_stamp_keeps_its_serialized_hash_and_checks() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("config");
+        std::fs::write(&config, "Host *\n").unwrap();
+        let paths = vec![dir.path().to_owned(), config.clone()];
+        let json = format!(
+            r#"{{"paths":{},"filesHash":"{}","primaryHash":"target","configHashes":{{}}}}"#,
+            serde_json::to_string(&paths).unwrap(),
+            hash(&crate::ssh_pool::fingerprint(&paths))
+        );
+        let saved: Stamp = serde_json::from_str(&json).unwrap();
+        assert_eq!(saved.digest(), hash(json.as_bytes()));
+        let stamp = Stamp::new(vec![config], "target".into(), BTreeMap::new());
+        assert!(stamp.matches_saved(&saved));
+        std::fs::write(dir.path().join("unrelated"), "temporary").unwrap();
+        assert!(!stamp.matches_saved(&saved));
+    }
+
+    #[test]
+    fn changed_jump_host_settings_invalidate_the_stamp() {
+        let mut saved = fixture();
+        saved
+            .config_hashes
+            .insert("jump:bastion".into(), "before".into());
+        let mut current = saved.clone();
+        current
+            .config_hashes
+            .insert("jump:bastion".into(), "after".into());
+        assert!(saved.unchanged());
+        assert!(!current.matches_saved(&saved));
+    }
+
+    #[tokio::test]
+    async fn openssh_probe_detects_new_include_even_with_identical_effective_options() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("config");
+        let include = dir.path().join("new.conf");
+        std::fs::write(
+            &config,
+            format!("Include \"{}/*.conf\"\n", dir.path().display()),
+        )
+        .unwrap();
+        let args = [
+            "-G".into(),
+            "-v".into(),
+            "-F".into(),
+            config.to_string_lossy().into_owned(),
+            "localhost".into(),
+        ];
+        let output = process::bounded("/usr/bin/ssh", &args, None, 10, 65536)
+            .await
+            .unwrap();
+        let (saved, _) = capture_from_output(&output).await.unwrap();
+        assert!(!saved.paths.contains(&include));
+        std::fs::write(&include, "# Included file with no settings\n").unwrap();
+        let output = process::bounded("/usr/bin/ssh", &args, None, 10, 65536)
+            .await
+            .unwrap();
+        let (current, _) = capture_from_output(&output).await.unwrap();
+        assert!(current.paths.contains(&include));
+        assert_eq!(current.primary_hash, saved.primary_hash);
+        assert!(!current.matches_saved(&saved));
     }
 }

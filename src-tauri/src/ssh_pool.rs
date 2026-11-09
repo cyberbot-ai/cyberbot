@@ -119,18 +119,11 @@ struct Files {
 
 impl Files {
     fn same_settings(&self, current: &Self) -> bool {
-        let same_authorization = match (&self.authorization, &current.authorization) {
-            (Some(old), Some(new)) => {
-                old.paths == new.paths && old.config_hashes == new.config_hashes
-            }
-            (None, None) => true,
-            _ => false,
-        };
         self.configuration_hash == current.configuration_hash
             && self.paths == current.paths
             && self.fingerprint == current.fingerprint
             && self.directories == current.directories
-            && same_authorization
+            && self.authorization == current.authorization
             && !current.dynamic_match
     }
 }

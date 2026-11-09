@@ -181,16 +181,11 @@ pub(crate) async fn run(root: PathBuf, agent: Option<String>) -> Result<Value> {
                 rollback_plan: "Restore exact backup and reload default Nginx".into(),
             }
         };
+        let frame = crate::ssh_authorization::frame(&run.scope_endpoints).await?;
+        let transport = frame.targets.get(&server.id).ok_or("No fixture context")?;
         let mut request = state
             .store
-            .action_propose(
-                &run,
-                spec,
-                json!([]),
-                crate::ssh_authorization::capture(&server.endpoint).await?,
-                "fixture".into(),
-                now(),
-            )?
+            .action_propose(&run, spec, json!([]), transport.clone(), frame.hash, now())?
             .0;
         let prepared = runtime::fixture_remote(state.clone(), &request, "prepare").await?;
         if !state.package_refresh.due().is_empty() {
@@ -222,6 +217,12 @@ pub(crate) async fn run(root: PathBuf, agent: Option<String>) -> Result<Value> {
             },
             now(),
         )?;
+        // Exercise approval after the key directory gains an unrelated file.
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(dir.join(format!("unrelated-{}", request.id)))
+            .map_err(err)?;
         // Optional measurement window for the fixed model-free fixture only.
         let wait_seconds = std::env::var("CYBERBOT_TEST_APPROVAL_WAIT_SECONDS")
             .ok()
@@ -235,9 +236,7 @@ pub(crate) async fn run(root: PathBuf, agent: Option<String>) -> Result<Value> {
         request = state
             .store
             .action_decide(&request.id, &request.artifact_hash, "once", now())?;
-        state
-            .store
-            .action_transition(&request.id, "approved", "queued", now())?;
+        runtime::queue_approved(&state.store, &request, &Default::default()).await?;
         request = state
             .store
             .action_transition(&request.id, "queued", "running", now())?;
@@ -359,15 +358,11 @@ pub(crate) fn approval_fixture(state: &AppState) -> Result<Request> {
                 rollback_plan: "Interface test without execution".into(),
             },
             json!([]),
-            crate::ssh_authorization::Stamp {
-                paths: vec![],
-                files_hash: format!(
-                    "{:x}",
-                    sha2::Sha256::digest(crate::ssh_pool::fingerprint(&[]))
-                ),
-                primary_hash: "notification-fixture".into(),
-                config_hashes: Default::default(),
-            },
+            crate::ssh_authorization::Stamp::new(
+                vec![],
+                "notification-fixture".into(),
+                Default::default(),
+            ),
             "notification-fixture".into(),
             now(),
         )?
