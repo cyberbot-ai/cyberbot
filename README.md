@@ -25,13 +25,13 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0--only-blue" alt="GPL-3.0-only license"></a>
 </p>
 
-![Cyberbot fleet overview with all 24 example.com servers and red CVE counts on three rows](docs/screenshots/fleet-overview.jpg)
-
-*Fleet overview with critical CVE counts highlighted in red. All screenshots use fictional demo data.*
-
 ![Cyberbot demo showing two critical CVEs resolved through the server console and a one-time AI approval](docs/screenshots/vulnerability-remediation.gif)
 
 *This demo uses fictional data and simulates the console output and AI responses.*
+
+![Cyberbot fleet overview with all 24 example.com servers and red CVE counts on three rows](docs/screenshots/fleet-overview.jpg)
+
+*Fleet overview with critical CVE counts highlighted in red. All screenshots use fictional demo data.*
 
 ## Why Cyberbot
 
