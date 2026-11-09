@@ -49,18 +49,18 @@ Expand a feature to see the details and screenshots.
 
 - Watch CPU, memory, swap, load, disk space, inodes, detected services, and open incidents for every server on one screen.
 - Filter by **Needs attention**, **Healthy**, or **Insufficient data**, search by name or address, and sort by any resource metric to compare servers.
-- Add servers by address or import a [static Ansible inventory](docs/INVENTORY.md). When sorted by host, inventories are grouped by domain.
-- Pause and resume polling from the sidebar. Cyberbot keeps polling from the menu bar after you close the window and stops while your Mac is asleep.
+- Add a list of SSH addresses or import a static Ansible inventory in INI, YAML, or JSON. Cyberbot rereads inventories every five minutes and keeps the last valid list if an update fails. Host sorting groups inventory servers by domain. See [inventory formats](docs/INVENTORY.md).
+- Set separate intervals for server polling and log analysis, and allow up to 24 concurrent background SSH checks. Pause or resume polling from the sidebar. Cyberbot keeps polling from the menu bar after you close the window and stops while your Mac is asleep.
 
 </details>
 
 <details>
 <summary><strong>Server details and SSH console.</strong> One panel per server, with an interactive SSH session.</summary>
 
-Open a server to see its overview, incidents, services, logs, vulnerabilities, checks, AI conversations, and console in one panel.
+Open a server to see its overview, incidents, services, logs, vulnerabilities, checks, AI conversations, and console in one panel. You can open that panel in a separate window.
 
-- The overview shows current metrics, recent CPU history, every mount point with space and inode usage, and the operating system and services that were detected.
-- The **Console** tab opens an interactive SSH session and keeps it open while you switch tabs.
+- The overview shows current metrics, recent CPU history, space and inode usage by mount point, OS details, and systemd service status. You can refresh the metrics on demand.
+- The **Console** tab connects over SSH when you open it and keeps the interactive session open while you switch tabs.
 - Polling, file sync, and the console share pooled OpenSSH connections. Host aliases, keys, and jump hosts from your SSH configuration keep working.
 
 </details>
@@ -78,7 +78,7 @@ Cyberbot detects application services and monitors each one separately from the 
 | Runtimes | Docker, PHP-FPM |
 | Network, security, and voice | Nebula, Fail2ban, Asterisk |
 
-Diagnostics use local endpoints and credentials that already exist on the server. See [connectors](docs/CONNECTORS.md) for the requirements of each service.
+Diagnostics use local endpoints and credentials that already exist on the server. Configure the endpoint and diagnostic role per instance where supported. Nginx can show response codes and latency estimates, and PostgreSQL can show blocked sessions, replication lag, and maintenance statistics. See [connectors](docs/CONNECTORS.md) for the requirements of each service.
 
 </details>
 
@@ -86,31 +86,39 @@ Diagnostics use local endpoints and credentials that already exist on the server
 <summary><strong>Incidents and correlation.</strong> Incidents that keep their evidence and are grouped across related servers.</summary>
 
 - Deterministic rules turn metrics, logs, service results, and package advisories into incidents. Every incident keeps its own evidence and history.
-- Related incidents on different servers are grouped using the dependencies you declare, a shared jump host, or the same failing check. See [incident groups](docs/INCIDENT_GROUPS.md).
-- Search incidents and groups by server, check, evidence, severity, or status. Mark an incident resolved to clear it from the dashboard and keep its history.
+- Declare server dependencies in the server overview. Cyberbot uses those dependencies, shared jump hosts for connection failures, and matching check failures to group related incidents across servers. Each group shows why the incidents were linked and when they occurred. See [incident groups](docs/INCIDENT_GROUPS.md).
+- Search incidents and groups by server, check, evidence, severity, or status. Resolve incidents individually or in bulk and include resolved incidents when reviewing history.
 - Automatic recovery has to be confirmed by observations. Missing coverage cannot confirm it.
-- Optional macOS notifications announce new incidents, including while the window is hidden.
+- Optional macOS notifications announce new incidents even while the window is hidden. Cyberbot combines incidents that arrive within five seconds, and clicking the notification opens the relevant incidents.
 
 </details>
 
 <details>
-<summary><strong>Vulnerabilities and logs.</strong> Critical package advisories for Debian and Ubuntu, and log summaries.</summary>
+<summary><strong>OS vulnerabilities.</strong> Critical Debian and Ubuntu package checks, a fleet-wide CVE catalog, and APT upgrade commands.</summary>
 
 ![Cyberbot OS vulnerability panel listing three sample CVEs for s1.app.example.com](docs/screenshots/fleet-vulnerabilities.jpg)
 
 *OS vulnerability details for one server.*
 
 - Cyberbot matches installed packages against critical advisories for supported Debian and Ubuntu releases. Matching runs locally and does not use AI.
-- Each finding shows the installed and required versions, whether an update is available, and the command that installs it. Hide a package you have accepted until its installed version changes.
-- Checks run on a schedule, and a new finding opens an incident. With macOS notifications enabled, you hear about it without opening the app.
-- System and SSH logs are summarized on the server. Cyberbot reads them incrementally and receives a summary with redacted examples.
+- Open **Library → Vulnerabilities** to browse local advisories and findings across the fleet. Search by CVE, title, package, or server, and filter by server or finding status.
+- On a server, compare installed and fixed versions and check availability in the server's APT cache. Copy an upgrade command for one finding or a combined command for multiple eligible findings across all pages. Hide a package until its installed version changes, or restore it from the hidden list.
+- Checks run on a schedule, and a new finding opens an incident. You can also rescan packages, refresh advisory data, or use **Ask AI** to investigate whether a finding is exploitable on that server.
+
+</details>
+
+<details>
+<summary><strong>System and SSH log analysis.</strong> Detect system errors, suspicious logins, and protection failures.</summary>
+
+- Cyberbot reads logs incrementally on each server and returns event counts, findings, and redacted examples. The **Logs** tab shows which sources were read and where coverage was incomplete.
+- Rules detect out-of-memory events, disk and filesystem errors, service crashes, Fail2ban errors, suspicious SSH logins after failed attempts, and recurring error patterns. Checks run without a model and can be refreshed on demand.
 
 </details>
 
 <details>
 <summary><strong>Fleet console.</strong> One command on selected servers or the whole fleet.</summary>
 
-Run one command on a selection of servers, or on the whole fleet, and read the output for each server in one place. The same page has an AI chat scoped to the selected servers.
+Run one SSH command on up to 500 selected servers, with a confirmation step when you target the whole fleet. Review exit codes, output, and errors per server, filter to failures, or stop an active batch. The same page has an AI chat scoped to the selected servers.
 
 </details>
 
@@ -123,21 +131,21 @@ Run one command on a selection of servers, or on the whole fleet, and read the o
 
 *Approval request for a proposed Nginx configuration change.*
 
-- Use an installed Codex or Claude CLI to investigate a server, an incident, or an incident group. The agent replies in the language of your latest message.
+- Use an installed Codex or Claude CLI to investigate a server, an incident, or an incident group. Server and fleet chats keep conversation history and follow the language of your latest message.
 - The agent's server requests go through Cyberbot's Model Context Protocol (MCP) gateway. Each run gets a fixed server scope that cannot grow while it is active.
-- Read-only diagnostics can run without approval. Shell commands and other supported actions that can change a server require your approval, after a separate risk review. Requests that violate the [action policy](docs/architecture.md#proposed-actions) are blocked.
-- An approval is bound to the exact script, inputs, and SSH context. If any of them change, the approval is no longer valid.
-- The managed Nginx change backs up and validates the configuration, records a receipt, and offers rollback.
-- Automatic investigations are off by default. When you turn them on, they run from a queue with the daily token and run limits you set, one run per incident, and cooldowns. Choose a model for each of the low, medium, and high profiles.
+- Read-only diagnostics can run without approval. Manual investigations can also read limited server file evidence and selected public HTTPS resources. Shell commands and other supported actions that can change a server require a separate risk review and your approval. See the [action policy](docs/architecture.md#proposed-actions).
+- Review pending requests and past results under **AI → Actions**. Approval applies to the exact script, inputs, and SSH context. Eligible low-risk actions can use approval for the current run. Recoverable risks such as targeted security configuration repairs require one-time approval with a warning about the effects and recovery limits.
+- The managed Nginx action changes `worker_processes`, backs up and validates the configuration, records a receipt, and offers rollback.
+- Automatic investigations are off by default. When enabled, they use a persistent queue with incident deduplication and cooldowns. Review usage and history, skip queued jobs, or stop a running investigation. Set daily run and token limits, a per-run token limit, and models for the low, medium, and high profiles.
 
 </details>
 
 <details>
 <summary><strong>Custom checks and the monitoring library.</strong> Your own declarative checks next to the built-in ones.</summary>
 
-- The **Library** lists every built-in check with its source, operations, and settings. Settings inherit from the factory defaults through the fleet, the server, and the service instance, and you can override them at each level.
+- The **Library** lists built-in checks with their sources, operations, and schedules. Settings inherit from factory defaults through the fleet, server, and service instance. Where supported, override the schedule or turn the check off at each level.
 - Write your own checks as declarative rules over metrics that Cyberbot has already collected. Test a draft with fixtures, preview it on a real server, and enable the version you reviewed. You can roll back to an earlier version.
-- An agent can draft a check for you. Enabled checks run on a schedule in an isolated runner without a model.
+- An agent can draft a check for you. Enabled checks run in an isolated runner without a model, on a schedule or on demand against stored data.
 
 </details>
 
@@ -148,30 +156,29 @@ Run one command on a selection of servers, or on the whole fleet, and read the o
 
 *The same fleet in the light theme.*
 
-- Use the light or dark theme, or switch between them on a schedule.
-- The **Activity log** records operations with their timing and results.
-- Cyberbot checks its own internet connection, so a network outage on your side is not recorded as a failure of every server.
-- Storage settings show how much space the database, advisory cache, and activity log use. Old records are pruned automatically.
+- Use the light or dark theme, or switch between them on a schedule. Cyberbot restores the main window's size and position when reopened.
+- The **Activity log** records operations, timing, and results. Search it or filter by category or result. The page also shows Cyberbot's CPU, memory, and network usage.
+- Configure a primary and optional backup host for internet connectivity checks. Cyberbot distinguishes a local network outage from a server failure.
+- Storage settings show how much space the database, advisory cache, activity log, and AI action records use. Old records are pruned automatically.
 
 </details>
 
 ## How it works
 
 ```mermaid
-flowchart LR
-    subgraph mac["Your Mac"]
-        app["Cyberbot<br/>scheduler, rules, SQLite"]
-        gateway["MCP gateway<br/>scope and action policy"]
-        agent["Codex or Claude CLI<br/>(optional)"]
-    end
-    subgraph server["Linux server"]
-        collector["Python collector<br/>~/.cache/cyberbot"]
-    end
-    app -- "OpenSSH and rsync" --> collector
-    collector -- "bounded structured results" --> app
-    agent -- "tool requests" --> gateway
-    gateway --> app
-    app -. "approval request" .-> operator(["You"])
+flowchart TD
+    poll["Cyberbot schedules a check"]
+    collect["Python collector reads data on the Linux server"]
+    evaluate["Cyberbot saves results on your Mac<br/>and evaluates monitoring rules"]
+    dashboard["Dashboard and incidents"]
+
+    poll -->|"Starts the collector over SSH"| collect
+    collect -->|"Returns metrics and summaries"| evaluate
+    evaluate --> dashboard
+
+    evaluate -.->|"Optional investigation"| ai["Codex or Claude investigates selected servers"]
+    ai -->|"Proposes a change"| review["Cyberbot reviews the risk<br/>and asks for approval if the action is allowed"]
+    review -->|"You approve"| execute["Cyberbot runs the approved action over SSH"]
 ```
 
 1. Cyberbot schedules checks through bounded queues and a pool of OpenSSH connections. Host keys are verified.
