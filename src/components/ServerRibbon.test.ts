@@ -14,8 +14,8 @@ describe('server ribbon', () => {
     const row=render({...base,observation:{...base.observation!,load:value},services:[{kind:'nginx',name:'Nginx',detected:true,status:'healthy',metric:{value,unit:'rps'},at:1000}]});
     const load=row.get('[data-metric="load"]');
     expect(load.text()).toBe('LA12.9B');
-    expect(load.attributes('title')).toBe('Load average per minute: 12884901888.5');
-    expect(load.attributes('aria-label')).toBe('Load average per minute: 12884901888.5');
+    expect(load.attributes('title')).toBe('1-minute load average: 12884901888.5');
+    expect(load.attributes('aria-label')).toBe('1-minute load average: 12884901888.5');
     expect(row.get('[data-service="nginx:default"]').text()).toBe('Nginx12.9B rps');
     expect(row.get('[data-service="nginx:default"]').attributes('title')).toContain('12884901888.5 rps');
     expect(row.get('[data-service="nginx:default"]').classes()).toContain('with-value');
@@ -181,7 +181,7 @@ it('keeps critical diagnostics above the systemd warning for the same service', 
 it('shows confirmed service problems while hiding cached resource measurements before the first check',async()=>{
  const row=render({...base,awaitingFirstCheck:true,lastError:'old SSH failure',services:[{kind:'redis',name:'Redis',status:'critical',at:1000},{kind:'nginx',name:'Nginx',detected:true,status:'healthy',metric:{value:123,unit:'rps'},at:1000}]},10000);
  expect(row.classes()).toContain('critical');
- expect(row.attributes('aria-label')).toContain('Critical · awaits a metric survey');
+ expect(row.attributes('aria-label')).toContain('Critical · waiting for metrics');
  expect(row.attributes('title')).not.toContain('old SSH failure');
  expect(row.get('[data-service="redis:default"]').classes()).toContain('critical');
  expect(row.get('[data-service="nginx:default"]').classes()).toContain('unknown');

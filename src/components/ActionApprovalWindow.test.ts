@@ -24,7 +24,7 @@ it('binds one-time approval to exact ID/hash and closes only after it succeeds',
   done({...request,state:'approved'});
   await flushPromises();
   expect(mock.close).toHaveBeenCalledOnce();
-  expect(w.get('h1').text()).toBe('Permission sent');
+  expect(w.get('h1').text()).toBe('Approval sent');
   expect(w.find('button.primary').exists()).toBe(false);
   w.unmount();
 });
@@ -41,7 +41,7 @@ it('requires an explicit choice for session approval and closes on success',asyn
 });
 it('denies without granting or invoking a model',async()=>{const w=mount(ActionApprovalWindow,{props:{requestId:request.id}});await flushPromises();await w.findAll('button').find(b=>b.text()==='Decline')!.trigger('click');await flushPromises();expect(mock.call).toHaveBeenCalledWith('decide_action',{id:request.id,artifactHash:request.artifactHash,decision:'deny'});expect(mock.call.mock.calls.some(c=>String(c[0]).includes('investigation'))).toBe(false);w.unmount();});
 it('keeps an IPC refusal visible without retrying or silently closing',async()=>{const w=mount(ActionApprovalWindow,{props:{requestId:request.id}});await flushPromises();mock.call.mockRejectedValueOnce(new Error('Connection has changed'));await w.get('button.primary').trigger('click');await flushPromises();expect(w.get('[role=alert]').text()).toContain('Connection has changed');expect(mock.call.mock.calls.filter(c=>c[0]==='decide_action')).toHaveLength(1);expect(mock.close).not.toHaveBeenCalled();w.unmount();});
-it('does not offer consent for an expired request',async()=>{request.expiresAt=1;const w=mount(ActionApprovalWindow,{props:{requestId:request.id}});await flushPromises();expect(w.text()).toContain('The waiting time has expired');expect(w.find('button.primary').exists()).toBe(false);await w.get('footer button').trigger('click');expect(mock.close).toHaveBeenCalledOnce();expect(mock.call.mock.calls.some(c=>c[0]==='decide_action')).toBe(false);w.unmount();});
+it('does not offer consent for an expired request',async()=>{request.expiresAt=1;const w=mount(ActionApprovalWindow,{props:{requestId:request.id}});await flushPromises();expect(w.text()).toContain('This request expired before it was approved');expect(w.find('button.primary').exists()).toBe(false);await w.get('footer button').trigger('click');expect(mock.close).toHaveBeenCalledOnce();expect(mock.call.mock.calls.some(c=>c[0]==='decide_action')).toBe(false);w.unmount();});
 it('shows precise Nginx effect and connection-loss risk before technical detail',async()=>{request.artifact.spec.action={kind:'nginx_workers',workerProcesses:'2',activation:'restart'};request.artifact.prepared={before:'worker_processes 1;',after:'worker_processes 2;'};const w=mount(ActionApprovalWindow,{props:{requestId:request.id}});await flushPromises();expect(w.get('.effect').text()).toContain('worker_processes → 2');expect(w.get('.effect').text()).toContain('restart nginx.service');expect(w.get('.risk').text()).toContain('Connections may drop');expect(w.get('.diff').text()).toContain('worker_processes 1;');w.unmount();});
 it('does not poll when hidden and releases listeners on close',async()=>{const w=mount(ActionApprovalWindow,{props:{requestId:request.id}});await flushPromises();mock.call.mockClear();Object.defineProperty(document,'hidden',{value:true,configurable:true});await vi.advanceTimersByTimeAsync(60000);expect(mock.call).not.toHaveBeenCalled();delete (document as unknown as Record<string,unknown>).hidden;w.unmount();expect(mock.off).toHaveBeenCalled();});
 it('shows the exact shell script, account and low verdict before consent',async()=>{
@@ -50,7 +50,7 @@ it('shows the exact shell script, account and low verdict before consent',async(
   request.artifact.prepared={user:'root',uid:0};
   request.artifact.isolation={wallSeconds:15};
   const w=mount(ActionApprovalWindow,{props:{requestId:request.id}});await flushPromises();
-  expect(w.get('.effect').text()).toContain('Shell on behalf of root');
+  expect(w.get('.effect').text()).toContain('Shell runs as root');
   expect(w.get('pre[aria-label="Exact script"]').text()).toBe(request.artifact.spec.code);
   expect(w.get('.content').text()).toContain(request.review!.verdict.explanation);
   expect(w.get('label.session').text()).toContain('shell scripts');

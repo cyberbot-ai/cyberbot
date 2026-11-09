@@ -14,7 +14,7 @@ pub fn validate(id: &str) -> Result<()> {
     if id == DEFAULT || uuid::Uuid::parse_str(id).is_ok_and(|u| u.to_string() == id) {
         Ok(())
     } else {
-        Err("Incorrect connection identifier".into())
+        Err("Invalid connection ID".into())
     }
 }
 pub fn scope(kind: &str, id: &str) -> String {
@@ -49,7 +49,7 @@ pub fn ensure(db: &Connection, server: &str, kind: &str, id: &str) -> Result<()>
     if id == DEFAULT {
         db.execute("INSERT OR IGNORE INTO service_instances(server_id,kind,id,name) SELECT ?1,?2,'default','' WHERE EXISTS(SELECT 1 FROM servers WHERE id=?1)",params![server,kind]).map_err(err)?;
     }
-    if !db.query_row("SELECT EXISTS(SELECT 1 FROM service_instances WHERE server_id=?1 AND kind=?2 AND id=?3)",params![server,kind,id],|r|r.get::<_,bool>(0)).map_err(err)?{return Err("The connection or server is deleted".into());}
+    if !db.query_row("SELECT EXISTS(SELECT 1 FROM service_instances WHERE server_id=?1 AND kind=?2 AND id=?3)",params![server,kind,id],|r|r.get::<_,bool>(0)).map_err(err)?{return Err("The connection or server was removed".into());}
     Ok(())
 }
 pub fn name(db: &Connection, server: &str, kind: &str, id: &str) -> Result<String> {
@@ -252,7 +252,7 @@ impl Store {
         port: Option<u16>,
     ) -> Result<Instance> {
         if !supports(kind) {
-            return Err("For this purpose, only one diagnostic profile is maintained".into());
+            return Err("This service supports one diagnostic connection".into());
         }
         if port == Some(0) {
             return Err("The port must be between 1 and 65535".into());
@@ -298,7 +298,7 @@ impl Store {
     pub(crate) fn remove_service_instance(&self, server: &str, kind: &str, id: &str) -> Result<()> {
         validate(id)?;
         if id == DEFAULT {
-            return Err("Diagnosis can be turned off in the connection settings".into());
+            return Err("You can disable diagnostics in the connection settings".into());
         }
         let mut db = self.0.lock().map_err(err)?;
         let tx = db.transaction().map_err(err)?;
@@ -421,7 +421,7 @@ mod tests {
                 &format!("service:redis@{}:blocked", extra.id),
                 "Redis · Sessions: old",
             );
-        assert_eq!(title, "Redis:6380: Blocked customers");
+        assert_eq!(title, "Redis:6380: Blocked clients");
         db.remove_service_instance(&id, "redis", &extra.id).unwrap();
         assert_eq!(
             name(&db.0.lock().unwrap(), &id, "redis", DEFAULT).unwrap(),

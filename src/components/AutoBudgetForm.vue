@@ -29,13 +29,13 @@ const { draft, saving, error, edited, flush } = useSettingsAutosave(
   <details :open="open" @toggle="open = ($event.currentTarget as HTMLDetailsElement).open">
     <summary>Limits</summary>
     <form novalidate :aria-busy="saving" @submit.prevent="flush">
-      <p>Limits are valid for manual and automatic launches. value 0 disables the corresponding limit.</p>
+      <p>Limits apply to manual and automatic runs. Set a limit to 0 to disable it.</p>
       <div class="fields">
         <label>Tokens per day<UiInput v-model.number="draft.dailyTokenLimit" data-test="daily-tokens" type="number" min="0" max="1000000000" style="--field-width:140px" @input="edited('dailyTokenLimit')" @blur="flush"/></label>
-        <label>Launches per day<UiInput v-model.number="draft.dailyRunLimit" data-test="daily-runs" type="number" min="0" max="1000" @input="edited('dailyRunLimit')" @blur="flush"/></label>
+        <label>Runs per day<UiInput v-model.number="draft.dailyRunLimit" data-test="daily-runs" type="number" min="0" max="1000" @input="edited('dailyRunLimit')" @blur="flush"/></label>
       </div>
-      <label>One-start budget<UiInput v-model.number="draft.runTokenLimit" data-test="run-tokens" type="number" style="--field-width:140px" @input="edited('runTokenLimit')" @blur="flush"/></label>
-      <p v-if="saving" role="status">Save it…</p>
+      <label>Tokens per run<UiInput v-model.number="draft.runTokenLimit" data-test="run-tokens" type="number" style="--field-width:140px" @input="edited('runTokenLimit')" @blur="flush"/></label>
+      <p v-if="saving" role="status">Saving…</p>
       <p v-if="error" class="error" role="alert">{{ error }}</p>
     </form>
   </details>

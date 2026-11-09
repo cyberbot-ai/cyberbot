@@ -53,7 +53,7 @@ mod macos {
     );
     fn center() -> Result<Retained<UNUserNotificationCenter>, String> {
         if NSBundle::mainBundle().bundleIdentifier().is_none() {
-            return Err("Notifications are available in the collected app .app".into());
+            return Err("Notifications are available in the installed macOS app".into());
         }
         Ok(UNUserNotificationCenter::currentNotificationCenter())
     }
@@ -100,8 +100,8 @@ mod macos {
         };
         tokio::time::timeout(Duration::from_secs(10), rx)
             .await
-            .map_err(|_| "macOS did not respond to permission checks")?
-            .map_err(|_| "Permit check interrupted".into())
+            .map_err(|_| "macOS did not respond to the notification permission check")?
+            .map_err(|_| "Notification permission check interrupted".into())
     }
     pub async fn request() -> Result<(), String> {
         let rx = {
@@ -125,8 +125,8 @@ mod macos {
         };
         tokio::time::timeout(Duration::from_secs(120), rx)
             .await
-            .map_err(|_| "Waiting for macOS permission has expired")?
-            .map_err(|_| "Request for permission terminated".to_string())?
+            .map_err(|_| "The macOS notification permission request timed out")?
+            .map_err(|_| "Notification permission request interrupted".to_string())?
     }
     pub async fn show(id: &str, title: &str, body: &str) -> Result<(), String> {
         let rx = {
@@ -145,7 +145,7 @@ mod macos {
                 let result = if error.is_null() {
                     Ok(())
                 } else {
-                    Err("macOS rejects notification".to_string())
+                    Err("macOS rejected the notification".to_string())
                 };
                 if let Some(tx) = tx.lock().ok().and_then(|mut tx| tx.take()) {
                     let _ = tx.send(result);
@@ -156,8 +156,8 @@ mod macos {
         };
         tokio::time::timeout(Duration::from_secs(10), rx)
             .await
-            .map_err(|_| "The result of the transmission of the notification macOS unknown")?
-            .map_err(|_| "Transmission of notification interrupted".to_string())?
+            .map_err(|_| "macOS did not confirm that it received the notification")?
+            .map_err(|_| "Notification delivery interrupted".to_string())?
     }
 }
 #[cfg(target_os = "macos")]
@@ -176,9 +176,9 @@ pub async fn permission() -> Result<String, String> {
 }
 #[cfg(not(target_os = "macos"))]
 pub async fn request() -> Result<(), String> {
-    Err("Notifications of this OS have not yet been supported".into())
+    Err("Notifications are unavailable on this OS".into())
 }
 #[cfg(not(target_os = "macos"))]
 pub async fn show(_: &str, _: &str, _: &str) -> Result<(), String> {
-    Err("Notifications of this OS have not yet been supported".into())
+    Err("Notifications are unavailable on this OS".into())
 }

@@ -43,7 +43,7 @@ struct Target {
 fn target_set(store: &Store, ids: &[String]) -> Result<(Vec<Target>, bool), String> {
     let selected: HashSet<_> = ids.iter().collect();
     if selected.is_empty() || selected.len() != ids.len() || selected.len() > MAX_TARGETS {
-        return Err(format!("Choose from 1 to {MAX_TARGETS} different servers"));
+        return Err(format!("Select 1 to {MAX_TARGETS} distinct servers."));
     }
     let db = store.0.lock().map_err(err)?;
     let servers = Store::list::<Server>(&db, "servers")?;
@@ -173,7 +173,7 @@ impl Console {
                 .chars()
                 .any(|ch| ch.is_control() && ch != '\n' && ch != '\t')
         {
-            return Err("Enter the command to 16 KiB without control symbols".into());
+            return Err("Enter a command of up to 16 KiB without control characters.".into());
         }
         let (targets, full_fleet) = target_set(store, &ids)?;
         if all && !full_fleet {
@@ -183,7 +183,7 @@ impl Console {
         }
         let mut runtime = self.0.lock().map_err(err)?;
         if runtime.latest.as_ref().is_some_and(|batch| batch.active) {
-            return Err("Wait for the completion of the current team".into());
+            return Err("Wait for the current command to finish.".into());
         }
         let ticket = Uuid::new_v4();
         let review = Review {
@@ -213,12 +213,12 @@ impl Console {
             .prepared
             .as_ref()
             .filter(|p| p.ticket == ticket && p.at.elapsed() < PREPARE_TIMEOUT)
-            .ok_or("Preparation’s out of date. Send the command again.")?;
+            .ok_or("The command preview expired. Submit the command again.")?;
         if prepared.confirm_all && !confirmed {
-            return Err("Confirm launch on all servers".into());
+            return Err("Confirm the command for all servers.".into());
         }
         if runtime.latest.as_ref().is_some_and(|batch| batch.active) {
-            return Err("Wait for the completion of the current team".into());
+            return Err("Wait for the current command to finish.".into());
         }
         let ids: Vec<_> = prepared
             .targets
@@ -414,9 +414,9 @@ async fn run_batch(state: Arc<AppState>, prepared: Prepared, cancel: Cancellatio
             if matches!(row.row.status, Status::Queued | Status::Running) {
                 row.row.reason = Some(
                     if row.row.status == Status::Queued && cancel.is_cancelled() {
-                        "Taken off the line"
+                        "Removed from the queue"
                     } else {
-                        "Execution interrupted. Outcome unknown"
+                        "Command interrupted. The result is unknown."
                     }
                     .into(),
                 );
@@ -445,14 +445,14 @@ async fn run_target(
     let result = async {
         let _guard = tokio::select! {
             biased;
-            _ = cancel.cancelled() => return Err("Stopped before launch".into()),
+            _ = cancel.cancelled() => return Err("Stopped before execution".into()),
             guard = state.collectors.manual(&target.label.id) => guard?,
         };
         let pool = ssh_pool::global()?;
         current_target(&state.store, &target)?;
         let lease = tokio::select! {
             biased;
-            _ = cancel.cancelled() => return Err("Stopped before launch".into()),
+            _ = cancel.cancelled() => return Err("Stopped before execution".into()),
             lease = pool.acquire(&target.endpoint) => lease?,
         };
         current_target(&state.store, &target)?;
@@ -463,7 +463,7 @@ async fn run_target(
             command.to_string(),
         ]);
         if cancel.is_cancelled() {
-            return Err("Stopped before launch".into());
+            return Err("Stopped before execution".into());
         }
         started = Some(Instant::now());
         state.fleet_console.change(batch_id, |batch| {
@@ -494,7 +494,7 @@ async fn run_target(
 
 fn current_target(store: &Store, target: &Target) -> Result<(), String> {
     if store.server_endpoint(&target.label.id)? != target.endpoint {
-        return Err("The connection changed. The team didn’t start.".into());
+        return Err("The connection changed before the command could start.".into());
     }
     Ok(())
 }
@@ -542,7 +542,7 @@ async fn capture(
     #[cfg(unix)]
     command.process_group(0);
     let Ok(mut child) = command.spawn() else {
-        return Outcome::failed("Failed to launch SSH");
+        return Outcome::failed("Could not start SSH");
     };
     *launched = true;
     let Some(_guard) = child.id().and_then(|id| GroupGuard::register(id).ok()) else {
@@ -569,15 +569,19 @@ async fn capture(
     let code = result.as_ref().ok().copied().flatten();
     let reason = match result {
         Ok(Some(0)) => None,
-        Ok(Some(255)) => Some("SSH did not confirm the result (255)".into()),
-        Ok(Some(_)) => Some("The team ended with a mistake".into()),
+        Ok(Some(255)) => Some("SSH exited with code 255. The command result is unknown.".into()),
+        Ok(Some(_)) => Some("The command exited with an error.".into()),
         Ok(None) | Err(Interrupted::Io | Interrupted::Revoked) => {
-            Some("SSH aborted. Team result unknown".into())
+            Some("SSH disconnected. The command result is unknown.".into())
         }
-        Err(Interrupted::Overflow) => Some("Output limit reached. Team result unknown".into()),
-        Err(Interrupted::Timeout) => Some("It’s been 10 minutes. Team result is unknown".into()),
+        Err(Interrupted::Overflow) => {
+            Some("The output limit was reached. The command result is unknown.".into())
+        }
+        Err(Interrupted::Timeout) => {
+            Some("The command timed out after 10 minutes. Its result is unknown.".into())
+        }
         Err(Interrupted::Cancelled) => {
-            Some("The SSH channel is closed. Team result is unknown".into())
+            Some("The SSH channel closed. The command result is unknown.".into())
         }
     };
     Outcome {

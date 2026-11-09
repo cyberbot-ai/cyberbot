@@ -16,14 +16,17 @@ fn push(stack: &mut [Frame], root: &mut Option<Value>, value: Value) -> Result<(
         Some(Frame::Map(map, pending)) => {
             if let Some(key) = pending.take() {
                 if map.insert(key, value).is_some() {
-                    return Err("Repetitive key in inventory".into());
+                    return Err("Duplicate inventory key".into());
                 }
             } else {
                 let key = value
                     .as_str()
                     .ok_or("The inventory key should be a string")?;
                 if key == "<<" {
-                    return Err("YAML merge is not supported: state the meanings clearly".into());
+                    return Err(
+                        "Write inventory values explicitly. YAML merge keys are unsupported."
+                            .into(),
+                    );
                 }
                 *pending = Some(key.into());
             }
@@ -62,18 +65,20 @@ pub(super) fn parse(input: &str) -> Result<Value, String> {
                 }
             }
             Event::Alias(_) => {
-                return Err("YAML links are not supported: state the meanings clearly".into())
+                return Err(
+                    "Write inventory values explicitly. YAML aliases are unsupported.".into(),
+                )
             }
             Event::Scalar(_, _, anchor, ref tag)
             | Event::MappingStart(anchor, ref tag)
             | Event::SequenceStart(anchor, ref tag)
                 if anchor != 0 || tag.is_some() =>
             {
-                return Err("YAML tags and anchors are not supported: use the usual values".into());
+                return Err("Use plain inventory values without YAML tags or anchors.".into());
             }
             Event::MappingStart(_, _) | Event::SequenceStart(_, _) => {
                 if stack.len() >= 32 {
-                    return Err("Too deep nesting inventory (limit)".into());
+                    return Err("Inventory nesting limit exceeded".into());
                 }
                 stack.push(if matches!(event, Event::MappingStart(_, _)) {
                     Frame::Map(Map::new(), None)

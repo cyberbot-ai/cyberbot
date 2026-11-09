@@ -8,13 +8,13 @@ import {call,preview} from '../api';
 import type {LogView} from '../types';
 const props=defineProps<{serverId:string;now:number}>();const emit=defineEmits<{updated:[]}>();
 const view=ref<LogView>();const error=ref('');const busy=ref(false);
-const labels:Record<string,string>={ssh_failed:'Failed logins',ssh_accepted:'Successful entrances',ssh_noise:'Another SSH noise',ssh_banned:'Ban Events',ssh_blocked:'Firewall lockdown',ssh_failures_mitigated:'Attempts from addresses for which blocking is observed',system_error:'Systemic errors',oom:'Lack of memory',disk_io:'Disk errors',service_crash:'Service failures',protection_failure:'Fail2ban Errors',ssh_suspicious_success:'Suspicious successful entrances'};
+const labels:Record<string,string>={ssh_failed:'Failed logins',ssh_accepted:'Successful logins',ssh_noise:'Other SSH activity',ssh_banned:'Fail2ban bans',ssh_blocked:'Firewall blocks',ssh_failures_mitigated:'Attempts from blocked addresses',system_error:'System errors',oom:'Out-of-memory events',disk_io:'Disk errors',service_crash:'Service failures',protection_failure:'Fail2ban errors',ssh_suspicious_success:'Suspicious successful logins'};
 const fail2banReasons = new Map([
   ['Fail2ban log source missing', 'Fail2ban could not find its log during a check.'],
-  ['Fail2ban startup failed', 'Fail2ban or one of its checks has not started.'],
-  ['Fail2ban blocking action failed', 'Fail2ban failed to apply or remove the lock.'],
+  ['Fail2ban startup failed', 'Fail2ban or one of its jails failed to start.'],
+  ['Fail2ban blocking action failed', 'Fail2ban could not apply or remove a ban.'],
 ]);
-const gaps:Record<string,string>={backlog_skipped:'Accumulated missing; fresh plot selected',clock_changed:'The clock has changed or diverged',unknown_timestamp:'Unrecognized time of event',dedupe_limit:'Limit of comparison of copies',pattern_limit:'Template limit',rotation_tail_lost:'Tail unavailable prior to rotation',source_unavailable:'Journal unavailable',file_rewritten:'File rewritten',file_truncated:'File abbreviated',long_line:'It’s too long',incomplete_line:'Incomplete recording',invalid_encoding:'Unknown encoding',read_limit:'Reaching a reading or time limit',journal_error:'Journal error',journal_reboot:'Changing the system boot',journal_message_unavailable:'The contents of the journal record are not available',journal_format:'Unknown journal format',journal_cursor_lost:'Journal position unavailable',source_changed:'Changing the log',output_limit:'Briefing shortened'};
+const gaps:Record<string,string>={backlog_skipped:'Older entries skipped. Recent entries were read.',clock_changed:'Clock changed or drifted',unknown_timestamp:'Unrecognized timestamp',dedupe_limit:'Deduplication limit reached',pattern_limit:'Log pattern limit reached',rotation_tail_lost:'End of rotated log unavailable',source_unavailable:'Log source unavailable',file_rewritten:'File rewritten',file_truncated:'File truncated',long_line:'Line too long',incomplete_line:'Incomplete line',invalid_encoding:'Unknown encoding',read_limit:'Read or time limit reached',journal_error:'Journal error',journal_reboot:'System rebooted',journal_message_unavailable:'Journal entry has no readable message',journal_format:'Unknown journal format',journal_cursor_lost:'Journal cursor unavailable',source_changed:'Log source changed',output_limit:'Summary truncated'};
 const counts=computed(()=>Object.entries(view.value?.summary?.counts??{}));
 const ssh=computed(()=>counts.value.filter(([k])=>k.startsWith('ssh_')));
 const events=computed(()=>counts.value.filter(([k])=>!k.startsWith('ssh_')));
@@ -31,11 +31,11 @@ const outcome = computed(() => {
     const critical = current.severity === 'critical' || findings.some(f => f.severity === 'critical');
     return { label: 'Findings detected', tone: critical ? 'crit' : 'warn' };
   }
-  if (current.error) return { label: 'Verification error', tone: '' };
+  if (current.error) return { label: 'Log check failed', tone: '' };
   if (current.monitoring?.enabled === false) return null;
-  if (!current.fresh) return { label: 'The data is outdated', tone: '' };
-  if (!current.summary.coverage.sources.length) return { label: 'Journals are not available', tone: '' };
-  return { label: 'No problem found', tone: 'ok' };
+  if (!current.fresh) return { label: 'Data is stale', tone: '' };
+  if (!current.summary.coverage.sources.length) return { label: 'No log sources available', tone: '' };
+  return { label: 'No issues found', tone: 'ok' };
 });
 let version=0;
 async function load(){const id=props.serverId;const v=++version;try{const result=await call<LogView>('log_summary',{id});if(v===version)view.value=result;}catch(e){if(v===version)error.value=String(e);}}
@@ -47,37 +47,37 @@ async function refresh(){busy.value=true;error.value='';try{await call('diagnose
 <section class="logs">
 <ServerTabBar title="System and SSH logs" :busy="busy" :disabled="preview || view?.monitoring?.enabled===false" @refresh="refresh">
   <span v-if="outcome" class="tag" :class="outcome.tone">{{ outcome.label }}</span>
-  <RelativeDate :at="view?.lastSuccess" empty="haven’t been checked yet"/>
+  <RelativeDate :at="view?.lastSuccess" empty="Not checked yet"/>
 </ServerTabBar>
-<p v-if="view?.monitoring?.enabled===false" class="notice">Monitoring is off. Change the profile in the section “Monitoring”.</p><p v-if="error||view?.error" class="problem" role="alert">{{error||view?.error}}</p>
-<p v-if="!view?.summary" class="note">Background check will be available on schedule.</p>
+<p v-if="view?.monitoring?.enabled===false" class="notice">Monitoring is off. You can enable it in the Monitoring library.</p><p v-if="error||view?.error" class="problem" role="alert">{{error||view?.error}}</p>
+<p v-if="!view?.summary" class="note">Results will appear after the next scheduled check.</p>
 <template v-if="view?.summary">
 <section v-if="view.summary.findings.length || view.severity" class="block">
   <h4>Findings</h4>
   <template v-for="f in view.summary.findings" :key="f.check">
-    <div class="finding"><span class="tag" :class="f.severity==='critical'?'crit':'warn'">{{f.severity==='critical'?'Critical':'Needs attention'}}</span><strong>{{f.check==='logs:protection_failure'?'Fail2ban Error':f.title}}</strong><span class="count">{{f.count}} {{events1(f.count)}}</span></div>
+    <div class="finding"><span class="tag" :class="f.severity==='critical'?'crit':'warn'">{{f.severity==='critical'?'Critical':'Needs attention'}}</span><strong>{{f.check==='logs:protection_failure'?'Fail2ban error':f.title}}</strong><span class="count">{{f.count}} {{events1(f.count)}}</span></div>
     <template v-if="f.check==='logs:protection_failure'">
       <p v-for="reason in protectionReasons" :key="reason" class="hint">{{reason}}</p>
       <p v-if="!protectionReasons.length" class="hint">Fail2ban recorded an error. The summary doesn’t contain the exact cause.</p>
-      <p class="hint">Check status with <code>fail2ban-client status</code> and find the record for the specified time in <code>/var/log/fail2ban.log</code> through <code>journalctl -u fail2ban</code>.</p>
+      <p class="hint">Check status with <code>fail2ban-client status</code>. Look up the event in <code>/var/log/fail2ban.log</code> or run <code>journalctl -u fail2ban</code>.</p>
     </template>
   </template>
-  <p v-if="!view.summary.findings.length" class="note">Recovery confirmation expected.Details in tab “Incidents”.</p>
+  <p v-if="!view.summary.findings.length" class="note">Awaiting confirmation of recovery. See the Incidents tab for details.</p>
 </section>
 <div class="columns">
-<section v-if="events.length" class="block"><h4>Systemic developments</h4><dl><template v-for="[k,n] in events" :key="k"><dt>{{labels[k]??k}}</dt><dd><MetricValue :value="n" :precision="0"/></dd></template></dl></section>
-<section class="block"><h4>SSH noise and protection</h4><dl v-if="ssh.length"><template v-for="[k,n] in ssh" :key="k"><dt>{{labels[k]??k}}</dt><dd><MetricValue :value="n" :precision="0"/></dd></template></dl><p class="hint">Failed attempts and lockdowns alone do not create incidents or trigger AI. {{(view.summary.counts.ssh_banned||view.summary.counts.ssh_blocked)?'Blockages have been observed.':'There are no records of blockages in the available logs during this period.'}}</p></section>
+<section v-if="events.length" class="block"><h4>System events</h4><dl><template v-for="[k,n] in events" :key="k"><dt>{{labels[k]??k}}</dt><dd><MetricValue :value="n" :precision="0"/></dd></template></dl></section>
+<section class="block"><h4>SSH activity and protection</h4><dl v-if="ssh.length"><template v-for="[k,n] in ssh" :key="k"><dt>{{labels[k]??k}}</dt><dd><MetricValue :value="n" :precision="0"/></dd></template></dl><p class="hint">Failed logins and bans alone do not trigger incidents or AI investigations. {{(view.summary.counts.ssh_banned||view.summary.counts.ssh_blocked)?'Blocks were recorded.':'The available logs show no blocks in this period.'}}</p></section>
 </div>
-<details v-if="view.summary.examples.length"><summary>Cleared examples: {{view.summary.examples.length}}</summary><article v-for="(e,i) in view.summary.examples" :key="i"><strong>{{labels[e.category]}}</strong> · <RelativeDate :at="e.at"/><p v-if="e.category==='protection_failure' && fail2banReasons.has(e.template)">{{fail2banReasons.get(e.template)}}</p><p v-if="e.peer">Address {{e.peer}} · record-keeping {{e.account}}</p></article></details>
-<details class="quality"><summary>What’s tested</summary><ul>
+<details v-if="view.summary.examples.length"><summary>Redacted examples: {{view.summary.examples.length}}</summary><article v-for="(e,i) in view.summary.examples" :key="i"><strong>{{labels[e.category]}}</strong> · <RelativeDate :at="e.at"/><p v-if="e.category==='protection_failure' && fail2banReasons.has(e.template)">{{fail2banReasons.get(e.template)}}</p><p v-if="e.peer">Address {{e.peer}} · account {{e.account}}</p></article></details>
+<details class="quality"><summary>Log coverage</summary><ul>
 <li>Period · {{ formatTimeRange(view.summary.remoteAt - view.summary.windowSeconds, view.summary.remoteAt) }}</li>
-<li>Magazines: {{view.summary.coverage.sources.join(', ')||'there are no available'}}. {{view.summary.learning?'Learning routine behavior continues, obvious errors are checked right away.':'Comparison with normal behavior actively.'}}</li>
+<li>Log sources: {{view.summary.coverage.sources.join(', ')||'none available'}}. {{view.summary.learning?'Cyberbot is learning normal activity and checks for known errors immediately.':'Cyberbot compares activity with its baseline.'}}</li>
 <li v-if="view.summary.coverage.initial">At the first check, only recent records are read.</li>
-<li v-if="view.summary.windowSeconds === 0">Repeat the same second.</li>
-<li v-if="view.summary.sshCorrelationLimited">Because of the large number of sources, part of the history of attempts is not involved in the comparison with the successful inputs.</li>
+<li v-if="view.summary.windowSeconds === 0">Both checks ran in the same second.</li>
+<li v-if="view.summary.sshCorrelationLimited">Some failed attempts could not be correlated with successful logins because there were too many source addresses.</li>
 <li v-for="(g,i) in view.summary.coverage.gaps" :key="i">{{g.source}}: {{gaps[g.reason]??g.reason}}<small v-if="g.fromOffset!=null"> · bytes {{g.fromOffset}}–{{g.toOffset}}</small><small v-if="g.fromTime!=null"> · <RelativeDate :at="g.fromTime"/> – <RelativeDate :at="g.toTime??g.fromTime"/></small></li>
-<li>Analysis on a server without AI. Over the network, only summary and cleared examples.</li>
-<li><small>Got it {{view.summary.bytesReceived}} byte · server-read {{view.summary.bytesRead}} bytes · {{view.summary.durationMs}} MS. SSH overhead is not included here.</small></li></ul></details>
+<li>Logs are analyzed on the server without AI. Cyberbot receives the summary and redacted examples.</li>
+<li><small>Received {{view.summary.bytesReceived}} bytes · read {{view.summary.bytesRead}} bytes on the server · {{view.summary.durationMs}} ms. Figures exclude SSH overhead.</small></li></ul></details>
 <details v-if="view.lastIncomplete" class="quality">
   <summary>Previous gaps · {{ formatTimeRange(view.lastIncomplete.remoteAt - view.lastIncomplete.windowSeconds, view.lastIncomplete.remoteAt) }}</summary>
   <ul>

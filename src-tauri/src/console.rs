@@ -35,7 +35,7 @@ impl Size {
         if (1..=512).contains(&self.rows) && (2..=1024).contains(&self.cols) {
             Ok(self)
         } else {
-            Err("Incorrect terminal size".into())
+            Err("Invalid terminal size".into())
         }
     }
 }
@@ -105,7 +105,7 @@ impl Sessions {
             return Err("There’s already an SSH session in this window".into());
         }
         if sessions.len() >= SESSION_LIMIT {
-            return Err("Reaching the limit of open SSH-consoles".into());
+            return Err("SSH console limit reached".into());
         }
         let (input, input_rx) = mpsc::channel(INPUT_QUEUE);
         let (size, size_rx) = watch::channel(size);
@@ -148,10 +148,10 @@ impl Sessions {
         match message {
             Message::Input { bytes } => {
                 if bytes.len() > CHUNK_SIZE {
-                    return Err("Too large terminal input block".into());
+                    return Err("Terminal input block is too large".into());
                 }
                 entry.input.try_send(bytes).map_err(|e| match e {
-                    mpsc::error::TrySendError::Full(_) => "Terminal entry queue is full",
+                    mpsc::error::TrySendError::Full(_) => "Terminal input queue is full",
                     mpsc::error::TrySendError::Closed(_) => "SSH session not available",
                 })?;
             }
@@ -334,7 +334,7 @@ impl Terminal {
     ) -> Result<Option<i32>, String> {
         let revoked = async {
             revoke.cancelled().await;
-            Err("The server is remote or the SSH settings have changed".into())
+            Err("The server was removed or its SSH settings changed".into())
         };
         tokio::pin!(revoked);
         let lease = tokio::select! {
@@ -355,7 +355,7 @@ impl Terminal {
                     let status = status.map_err(|e| e.to_string())?;
                     // The final prompt/output may still be in the PTY.
                     tokio::time::timeout(OUTPUT_TIMEOUT, &mut output).await
-                        .map_err(|_| "Timeout of receiving SSH output".to_string())??;
+                        .map_err(|_| "Timed out while reading SSH output".to_string())??;
                     status
                 }
                 result = &mut output => {
@@ -372,13 +372,13 @@ impl Terminal {
             };
             exit.code()
                 .map(Some)
-                .ok_or_else(|| "The SSH process is completed by the signal".into())
+                .ok_or_else(|| "The SSH process was terminated by a signal".into())
         };
         let result = tokio::select! {
             biased;
             _ = cancel.cancelled() => Ok(None),
             result = &mut revoked => result,
-            _ = lease.revoked() => Err("SSH connection withdrawn".into()),
+            _ = lease.revoked() => Err("SSH session cancelled".into()),
             result = result => result,
         };
         if child.id().is_some() {
@@ -410,7 +410,7 @@ async fn relay_output(
         // Keep at most one unread chunk in IPC, even when the remote floods the PTY.
         tokio::time::timeout(OUTPUT_TIMEOUT, ack.wait_for(|value| *value == sequence))
             .await
-            .map_err(|_| "Terminal did not confirm receipt of withdrawal".to_string())?
+            .map_err(|_| "Terminal did not acknowledge output".to_string())?
             .map_err(|_| "Terminal window closed".to_string())?;
     }
 }

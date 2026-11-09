@@ -44,7 +44,7 @@ export default defineComponent({
     const state = ref<'idle' | 'copying' | 'copied' | 'failed'>('idle');
     const label = computed(() => ({
       idle: 'Copy',
-      copying: 'Copy it…',
+      copying: 'Copying…',
       copied: 'Copied',
       failed: 'Failed to copy',
     })[state.value]);

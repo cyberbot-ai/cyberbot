@@ -17,7 +17,7 @@ impl Store {
         }
         let active:i64=tx.query_row("SELECT count(*) FROM ai_children c JOIN ai_ledger l ON l.id=c.id WHERE l.state='running'",[],|r|r.get(0)).map_err(err)?;
         if active > 0 {
-            return Err("One low-reviewer is already in operation".into());
+            return Err("A risk review is already in progress".into());
         }
         let (reserved, day, state): (u64, i64, String) = tx
             .query_row(
@@ -27,7 +27,7 @@ impl Store {
             )
             .map_err(err)?;
         if state != "running" {
-            return Err("AI Launch Completed".into());
+            return Err("The AI run has ended".into());
         }
         let settings = Self::read_settings(&tx)?;
         let (runs, charged): (u64, u64) = tx
@@ -47,16 +47,14 @@ impl Store {
                 .daily_tokens_cap()
                 .is_some_and(|n| charged.saturating_add(additional) > n)
         {
-            return Err("Not enough daily budget for low-review".into());
+            return Err("The daily budget does not cover another risk review".into());
         }
         let used = review_charged(&tx, &run.id)?;
         if reserved != 0 {
             let main = crate::automation::tokens(&run.agent, &run.usage).unwrap_or(0);
             let available = reserved.saturating_sub(used).saturating_sub(main);
             if available < wanted {
-                return Err(
-                    "There are not enough tokens in the launch budget to verify risk".into(),
-                );
+                return Err("This run has too few tokens left for risk review".into());
             }
             tx.execute(
                 "UPDATE ai_ledger SET charged=?2 WHERE id=?1",
@@ -118,7 +116,7 @@ impl Store {
             )
             .map_err(err)?;
             if !exact || charged >= reserved {
-                tx.execute("UPDATE ai_control SET reason='Low-review consumption requires verification; repetition is automatically prohibited' WHERE id=1",[]).map_err(err)?;
+                tx.execute("UPDATE ai_control SET reason='Risk review token usage needs confirmation. Automatic retries are paused.' WHERE id=1",[]).map_err(err)?;
             }
         }
         tx.commit().map_err(err)?;

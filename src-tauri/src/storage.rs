@@ -43,7 +43,8 @@ pub fn configure(db: &Connection) -> Result<(), String> {
 pub fn admit(db: &Connection) -> Result<(), String> {
     if bytes(path(db)) > LIMIT {
         return Err(
-            "SQLite is more than the limit of 1 GiB: collection paused until cleanup and compaction".into(),
+            "The database exceeded 1 GiB. Collection is paused until cleanup and compaction."
+                .into(),
         );
     }
     let wal = path(db).map(|p| PathBuf::from(format!("{}-wal", p.display())));
@@ -53,7 +54,7 @@ pub fn admit(db: &Connection) -> Result<(), String> {
                 Ok((r.get(0)?, r.get(1)?, r.get(2)?))
             });
         if bytes(wal) >= WAL_LIMIT {
-            return Err("Limit WAL: the fee is suspended until the base reader is released".into());
+            return Err("The SQLite write-ahead log reached its limit. Collection pauses until the database reader finishes.".into());
         }
     }
     let pages: u64 = db
@@ -66,7 +67,9 @@ pub fn admit(db: &Connection) -> Result<(), String> {
         .pragma_query_value(None, "page_size", |r| r.get(0))
         .map_err(err)?;
     if pages.saturating_sub(free) * size >= LIMIT - 8 * 1024 * 1024 {
-        return Err("SQLite reaches 1GB limit; collection suspended, cleanup required".into());
+        return Err(
+            "The SQLite database reached its 1 GiB limit. Collection pauses until cleanup.".into(),
+        );
     }
     Ok(())
 }

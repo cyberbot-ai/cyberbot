@@ -170,11 +170,11 @@ impl Spec {
                 c.is_control() && !matches!(c, '\n' | '\t') || matches!(c, '\u{061c}' | '\u{200e}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
             }))
         {
-            return Err("Shell-query contains unacceptable parameters".into());
+            return Err("The shell request contains invalid parameters".into());
         }
         for (service, instance) in self.inputs.iter().filter_map(Input::service_target) {
             if crate::services::descriptor(service).is_none() || instance.len() > 64 {
-                return Err("Unknown service/copy".into());
+                return Err("Unknown service or instance".into());
             }
         }
         if let Action::NginxWorkers {
@@ -312,13 +312,13 @@ pub fn migrate(db: &Connection) -> Result<()> {
 }
 fn read(db: &Connection, id: &str) -> Result<Request> {
     if uuid::Uuid::parse_str(id).is_err() {
-        return Err("Incorrect query ID".into());
+        return Err("Invalid request ID".into());
     }
     let payload: String = db
         .query_row("SELECT payload FROM ai_requests WHERE id=?1", [id], |r| {
             r.get(0)
         })
-        .map_err(|_| "The request is deleted or does not exist")?;
+        .map_err(|_| "The request no longer exists")?;
     serde_json::from_str(&payload).map_err(err)
 }
 fn active_rows(db: &Connection) -> Result<Vec<Request>> {
@@ -333,7 +333,7 @@ fn active_rows(db: &Connection) -> Result<Vec<Request>> {
 fn persist(db: &Connection, r: &Request) -> Result<()> {
     let payload = serde_json::to_string(r).map_err(err)?;
     if payload.len() > ROW_LIMIT {
-        return Err("Artifact of action exceeded 96 KiB".into());
+        return Err("Action data exceeds 96 KiB".into());
     }
     db.execute("INSERT INTO ai_requests VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9) ON CONFLICT(id) DO UPDATE SET state=excluded.state,updated_at=excluded.updated_at,payload=excluded.payload",params![r.id,r.run_id,r.server_id,r.intent_hash,r.state,r.created_at,r.expires_at,r.updated_at,payload]).map_err(err)?;
     Ok(())
@@ -348,7 +348,7 @@ fn context_with_ttl(
     check_ttl: bool,
 ) -> Result<Investigation> {
     if check_ttl && r.expires_at <= at || r.artifact.rules != RULES {
-        return Err("The term or version of the request rules has changed".into());
+        return Err("The request expired or the action policy changed".into());
     }
     let payload: String = db
         .query_row(
@@ -356,7 +356,7 @@ fn context_with_ttl(
             [&r.run_id],
             |row| row.get(0),
         )
-        .map_err(|_| "Launch record deleted")?;
+        .map_err(|_| "The AI run was removed")?;
     let run: Investigation = serde_json::from_str(&payload).map_err(err)?;
     if run.started_at.saturating_add(900) <= at
         || run.status != "running"
@@ -367,7 +367,7 @@ fn context_with_ttl(
         || run.id != r.artifact.run_id
         || run.scope_endpoints != r.artifact.scope_endpoints
     {
-        return Err("Launch server list is invalid".into());
+        return Err("The AI run has an invalid server list".into());
     }
     if !r.artifact_hash.is_empty() && digest(&r.artifact)? != r.artifact_hash {
         return Err("Artifact hash doesn’t match".into());
@@ -377,10 +377,10 @@ fn context_with_ttl(
             .query_row("SELECT payload FROM servers WHERE id=?1", [id], |r| {
                 r.get(0)
             })
-            .map_err(|_| "Area server remote")?;
+            .map_err(|_| "A server in scope was removed")?;
         let server: Server = serde_json::from_str(&payload).map_err(err)?;
         if serde_json::to_string(&server.endpoint).map_err(err)? != *expected {
-            return Err("Area connectivity has changed".into());
+            return Err("Connection settings changed for a server in scope".into());
         }
     }
     let server: Option<String> = db
@@ -398,17 +398,19 @@ fn context_with_ttl(
     }
     let unknown:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM ai_requests WHERE run_id=?1 AND id!=?2 AND state IN('unknown','rollbackUnknown'))",params![r.run_id,r.id],|row|row.get(0)).map_err(err)?;
     if unknown {
-        return Err("There is an unconfirmed action in this launch; check the result".into());
+        return Err(
+            "This run has an action with an unconfirmed result. Check its saved result.".into(),
+        );
     }
     if r.artifact.transport.as_ref().is_none_or(|s| !s.unchanged()) {
-        return Err("The SSH context has changed or not saved".into());
+        return Err("The SSH context changed or was not saved".into());
     }
     let profile = crate::ai_models::read(db)?;
     if profile.revision != r.artifact.profile.revision
         || profile.providers.get(&run.agent).and_then(|p| p.get("low"))
             != Some(&r.artifact.profile.low)
     {
-        return Err("Check profile changed. Re-start.".into());
+        return Err("The review profile changed. Start a new run.".into());
     }
     Ok(run)
 }
@@ -447,7 +449,7 @@ pub(crate) fn trim(db: &Connection, at: i64) -> Result<()> {
         }
         .into();
         r.updated_at = at;
-        r.error = Some("Request expires; re-execution is prohibited".into());
+        r.error = Some("The request expired and cannot be run again".into());
         persist(db, &r)?;
     }
     db.execute("DELETE FROM ai_requests WHERE id IN(SELECT id FROM ai_requests WHERE state NOT IN('proposed','validating','reviewing','awaitingApproval','approved','queued','running','rollbackRunning') AND (updated_at<?1 OR id NOT IN(SELECT id FROM ai_requests ORDER BY updated_at DESC,rowid DESC LIMIT 1000)) LIMIT 100)",[at-7*86400]).map_err(err)?;
@@ -459,7 +461,7 @@ pub(crate) fn trim(db: &Connection, at: i64) -> Result<()> {
         }
         let deleted=db.execute("DELETE FROM ai_requests WHERE id IN(SELECT id FROM ai_requests WHERE state NOT IN('proposed','validating','reviewing','awaitingApproval','approved','queued','running','rollbackRunning') ORDER BY updated_at,rowid LIMIT 1)",[]).map_err(err)?;
         if deleted == 0 {
-            return Err("Limit of action artifacts 32 MiB".into());
+            return Err("AI action storage limit of 32 MiB reached".into());
         }
     }
     Ok(())
@@ -525,11 +527,11 @@ impl Store {
         let profile = run
             .model_profile
             .clone()
-            .ok_or("No model profile for this launch")?;
+            .ok_or("This run has no model profile")?;
         let endpoint = run
             .scope_endpoints
             .get(&spec.server_id)
-            .ok_or("The server is off-list for this launch")?
+            .ok_or("The server is outside this run’s scope")?
             .clone();
         let intent = if matches!(spec.action, Action::Shell) {
             digest(&json!({"shell":spec.code,"endpoint":endpoint,"profile":profile,"rules":RULES}))?
@@ -614,10 +616,10 @@ impl Store {
         let mut r = read(&tx, id)?;
         context(&tx, &r, at)?;
         if r.state != "proposed" {
-            return Err("The request is already being checked".into());
+            return Err("The request is already under review".into());
         }
         if prepared["kind"] != serde_json::to_value(&r.artifact.spec.action).map_err(err)?["kind"] {
-            return Err("Changed plan of action".into());
+            return Err("The action plan changed".into());
         }
         let valid = if matches!(r.artifact.spec.action, Action::Shell) {
             isolation
@@ -656,13 +658,13 @@ impl Store {
         let mut r = read(&tx, id)?;
         context(&tx, &r, at)?;
         if r.state != "reviewing" {
-            return Err("Request verification cancelled".into());
+            return Err("Request validation cancelled".into());
         }
         if review.verdict.explanation.len() > 2000
             || review.verdict.effects.len() > 16
             || review.verdict.effects.iter().any(|x| x.len() > 384)
         {
-            return Err("Too much response low".into());
+            return Err("Risk review response is too large".into());
         }
         r.state = match review.verdict.decision {
             Decision::Allow if granted(&tx, &r, at)? => "approved",
@@ -695,17 +697,17 @@ impl Store {
         let verdict = &r
             .review
             .as_ref()
-            .ok_or("No result of the low check")?
+            .ok_or("Risk review result is missing")?
             .verdict
             .decision;
         if !verdict.allows_approval() {
-            return Err("The low test does not allow confirmation".into());
+            return Err("The risk review did not clear this action for approval".into());
         }
         if !matches!(decision, "deny" | "once" | "session") {
-            return Err("Unknown solution".into());
+            return Err("Unknown approval decision".into());
         }
         if decision == "session" && *verdict == Decision::Confirm {
-            return Err("This action requires separate confirmation".into());
+            return Err("This action requires one-time approval".into());
         }
         if decision == "session" {
             let capabilities = if matches!(r.artifact.spec.action, Action::Shell) {
@@ -783,7 +785,7 @@ impl Store {
                 Decision::Deny | Decision::Uncertain => false,
             })
         {
-            return Err("No low-resolution".into());
+            return Err("This action lacks a passing risk review".into());
         }
         r.state = to.into();
         r.updated_at = at;
@@ -878,7 +880,10 @@ impl Store {
                 "cancelled"
             }
             .into();
-            r.error = Some("Admission revoked; started effects require verification".into());
+            r.error = Some(
+                "Approval was revoked. Verify the effects of any action that already started."
+                    .into(),
+            );
             r.updated_at = at;
             persist(&tx, &r)?;
             ids.push(r.id);
@@ -898,7 +903,8 @@ impl Store {
                 "cancelled"
             }
             .into();
-            r.error = Some("Application Restarted; Automatic Repetition Prohibited".into());
+            r.error =
+                Some("Cyberbot restarted. The action will not run again automatically.".into());
             r.updated_at = now();
             persist(&tx, &r)?;
         }
@@ -955,7 +961,7 @@ impl Store {
         r.result = Some(result);
         r.updated_at = at;
         r.error = matches!(state, "unknown" | "rollbackUnknown").then(|| {
-            "The mediator has not yet confirmed the result; repetition is prohibited".into()
+            "The action broker has not confirmed the result. Check the saved result before taking further action.".into()
         });
         persist(&tx, &r)?;
         trim(&tx, at)?;
@@ -978,7 +984,7 @@ impl Store {
                 .is_none_or(|v| v["effect"]["rollbackAvailable"] != true)
             || r.updated_at < at - 7 * 86400
         {
-            return Err("Recoil is unavailable, outdated, or the result has changed".into());
+            return Err("Rollback is unavailable or expired, or the saved result changed".into());
         }
         let payload: String = tx
             .query_row(
@@ -989,7 +995,7 @@ impl Store {
             .map_err(|_| "The server is remote")?;
         let server: Server = serde_json::from_str(&payload).map_err(err)?;
         if serde_json::to_string(&server.endpoint).map_err(err)? != r.artifact.endpoint {
-            return Err("Connection changed; rollback prohibited".into());
+            return Err("The connection changed, so rollback was blocked".into());
         }
         r.state = "rollbackRunning".into();
         r.expires_at = at + 60;

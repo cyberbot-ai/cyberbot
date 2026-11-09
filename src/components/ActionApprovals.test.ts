@@ -18,7 +18,7 @@ it('opens a separate consent window without approving from the AI page', async (
   const w = mount(ActionApprovals);
   await openAction(w);
   expect(w.findAll('details[open]')).toHaveLength(0);
-  expect(w.findAll('button').some(b => b.text().startsWith('Permission'))).toBe(false);
+  expect(w.findAll('button').some(b => ['Allow once', 'Allow for this run', 'Decline'].includes(b.text()))).toBe(false);
   await w.get('.approval .primary').trigger('click');
   await flushPromises();
   expect(mock.call).toHaveBeenCalledWith('open_action_approval', { id: request.id });
@@ -49,7 +49,7 @@ it('offers only an explicit saved receipt read for unknown effects', async () =>
   request = actionFixture('unknown');
   const w = mount(ActionApprovals);
   await openAction(w);
-  await w.findAll('button').find(b => b.text() === 'Check the saved result')!.trigger('click');
+  await w.findAll('button').find(b => b.text() === 'Check saved result')!.trigger('click');
   await flushPromises();
   expect(mock.call).toHaveBeenCalledWith('refresh_action_result', { id: request.id });
   expect(mock.call.mock.calls.some(c => c[0] === 'decide_action' || c[0] === 'rollback_action')).toBe(false);
@@ -61,7 +61,7 @@ it('shows rollback only for a verified Nginx backup', async () => {
   request.result = { effect: { rollbackAvailable: true } };
   const w = mount(ActionApprovals);
   await openAction(w);
-  await w.findAll('button').find(b => b.text() === 'Restoring the original configuration')!.trigger('click');
+  await w.findAll('button').find(b => b.text() === 'Restore original configuration')!.trigger('click');
   expect(mock.call).toHaveBeenCalledWith('rollback_action', { id: request.id, artifactHash: request.artifactHash });
   await flushPromises();
   w.unmount();
@@ -142,16 +142,16 @@ it('replaces proposed effects with the recorded result when a shell action compl
   await openAction(w);
   expect(w.get('.facts').text()).toContain('Claude Code');
   expect(w.get('.impact').text()).toContain('No host writers');
-  expect(w.get('.code summary').text()).toBe('Commands to launch');
+  expect(w.get('.code summary').text()).toBe('Commands to run');
   request.state = 'succeeded';
   request.result = { result: { exitCode: 0, stdout: 'Packages updated', stderr: '', truncated: true } };
   await vi.advanceTimersByTimeAsync(15000);
   await flushPromises();
-  expect(w.get('.impact').text()).toContain('Teams completed successfully (code).');
+  expect(w.get('.impact').text()).toContain('Commands completed successfully (exit code 0).');
   expect(w.get('.impact').text()).not.toContain('No host writers');
   expect(w.get('.output').text()).toContain('Packages updated');
-  expect(w.get('.output').text()).toContain('Output truncated');
-  expect(w.get('.code summary').text()).toBe('Executed teams');
+  expect(w.get('.output').text()).toContain('Output was truncated');
+  expect(w.get('.code summary').text()).toBe('Executed commands');
   expect(w.find('.approval').exists()).toBe(false);
   await w.get('.back').trigger('click');
   expect(w.get('.action-group h3').text()).toBe('History 1');
@@ -164,7 +164,7 @@ it('ignores a detail response after returning to the list', async () => {
   let resolve!: (value: ActionRequest) => void;
   mock.call.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
   await w.get('.request').trigger('click');
-  expect(w.get('[role=status]').text()).toBe('Download the action…');
+  expect(w.get('[role=status]').text()).toBe('Loading action…');
   await w.get('.back').trigger('click');
   resolve(request);
   await flushPromises();

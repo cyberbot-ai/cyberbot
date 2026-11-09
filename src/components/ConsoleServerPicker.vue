@@ -93,10 +93,10 @@ async function searchKey(event: KeyboardEvent) {
 
 <template>
   <div ref="root" class="picker" @keydown.esc.stop.prevent="close(true)">
-    <button ref="trigger" class="trigger" type="button" aria-label="Selection of servers"
+    <button ref="trigger" class="trigger" type="button" aria-label="Server selection"
       :aria-expanded="opened" aria-controls="console-server-picker" @click="togglePicker">
       <UiIcon name="servers" :size="15"/>
-      {{ selection === null ? 'All servers' : chosen.length ? `Servers · ${chosen.length}` : 'Select the servers' }}
+      {{ selection === null ? 'All servers' : chosen.length ? `Servers · ${chosen.length}` : 'Select servers' }}
       <UiIcon class="chevron" name="chevron" :size="13"/>
     </button>
     <span v-if="chosen.length" class="selection">
@@ -106,13 +106,13 @@ async function searchKey(event: KeyboardEvent) {
     <div v-if="opened" id="console-server-picker" class="popover">
       <label class="search">
         <UiIcon name="search" :size="15"/>
-        <input ref="input" v-model="query" type="search" role="combobox" aria-label="Find the server"
+        <input ref="input" v-model="query" type="search" role="combobox" aria-label="Find a server"
           placeholder="Name or address" aria-expanded="true" aria-autocomplete="list"
           aria-controls="console-server-options" autocomplete="off"
           :aria-activedescendant="matches[active] ? `console-target-${active}` : undefined" @keydown="searchKey">
       </label>
       <div class="actions">
-        <button type="button" :disabled="!matches.length" @click="addMatches">Select found · {{ matches.length }}</button>
+        <button type="button" :disabled="!matches.length" @click="addMatches">Select matching servers · {{ matches.length }}</button>
         <button type="button" @click="useAll">All servers</button>
       </div>
       <div id="console-server-options" class="options" role="listbox" aria-label="Servers" aria-multiselectable="true">

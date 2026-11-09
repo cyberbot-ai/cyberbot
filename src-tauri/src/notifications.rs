@@ -482,7 +482,7 @@ pub(crate) async fn test(store: &Store) -> Result<()> {
     let result = native::show(
         &uuid::Uuid::new_v4().to_string(),
         "Cyberbot",
-        "New Incident Notifications Work.",
+        "Cyberbot notifications are working.",
     )
     .await;
     span.result(&result);
@@ -518,14 +518,14 @@ pub(crate) async fn action_approval(
         Some(request.run_id.clone()),
     );
     let body = format!(
-        "{} · open Cyberbot to check the action and make a decision.",
+        "{} · open Cyberbot to review the action request.",
         text(&request.server_label, 140)
     );
     let mut result = Ok(());
     for attempt in 0..3 {
         result = native::show(
             &format!("action:{}", request.id),
-            "AI asks for permission",
+            "AI action needs approval",
             &body,
         )
         .await;
@@ -592,7 +592,7 @@ pub(crate) fn start(app: tauri::AppHandle, state: Arc<AppState>) {
                             .is_ok_and(|s| !matches!(s.as_str(), "authorized" | "provisional"));
                     let result = match permission {
                         Ok(_) if suppressed => {
-                            Err("Notifications turned off or not allowed by macOS".into())
+                            Err("Notifications are disabled in Cyberbot or blocked by macOS".into())
                         }
                         Ok(_) => native::show(&batch.id, &batch.title, &batch.body).await,
                         Err(e) => Err(e),

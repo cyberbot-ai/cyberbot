@@ -40,7 +40,7 @@ watch(() => props.servers, () => {
       <button id="console-commands-tab" type="button" role="tab" aria-controls="console-commands-panel"
         :aria-selected="tab === 'console'" :tabindex="tab === 'console' ? 0 : -1" @click="selectTab('console')">Console</button>
       <button id="console-ai-tab" type="button" role="tab" aria-controls="console-ai-panel"
-        :aria-selected="tab === 'ai'" :tabindex="tab === 'ai' ? 0 : -1" @click="selectTab('ai')">Conversations</button>
+        :aria-selected="tab === 'ai'" :tabindex="tab === 'ai' ? 0 : -1" @click="selectTab('ai')">AI</button>
     </div>
     <div v-show="tab === 'console'" id="console-commands-panel" role="tabpanel" aria-labelledby="console-commands-tab">
       <ConsoleCommands :ids="ids" :all="selection === null" :active="tab === 'console'"/>

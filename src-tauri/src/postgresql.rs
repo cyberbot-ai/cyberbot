@@ -211,7 +211,7 @@ fn validate(w: &Wire) -> Result<()> {
                 || m.replication_unknown > 0
                 || m.recovery && m.replay_backlog_bytes.is_none())
         {
-            return Err("False completeness of statistics".into());
+            return Err("Inconsistent statistics coverage".into());
         }
     }
     Ok(())
@@ -281,16 +281,16 @@ pub struct View {
 pub(crate) const RULES: &[(&str, &str, &str)] = &[
     (
         "freeze_age",
-        "PostgreSQL: age of frozen XID",
+        "PostgreSQL: high frozen transaction ID age",
         "warning",
     ),
     (
         "connections",
-        "PostgreSQL: high-level",
+        "PostgreSQL: high connection usage",
         "warning",
     ),
-    ("locks", "PostgreSQL: persistence", "warning"),
-    ("long_queries", "PostgreSQL: lengthy", "warning"),
+    ("locks", "PostgreSQL: sustained lock waits", "warning"),
+    ("long_queries", "PostgreSQL: long-running queries", "warning"),
     (
         "idle_transactions",
         "PostgreSQL: idle transactions",
@@ -303,7 +303,7 @@ pub(crate) const RULES: &[(&str, &str, &str)] = &[
     ),
     (
         "streaming",
-        "PostgreSQL: under-expected streaming connections",
+        "PostgreSQL: fewer streaming connections than expected",
         "critical",
     ),
     (
@@ -313,10 +313,10 @@ pub(crate) const RULES: &[(&str, &str, &str)] = &[
     ),
     (
         "replay_paused",
-        "PostgreSQL: WAL playback suspended",
+        "PostgreSQL: WAL replay paused",
         "warning",
     ),
-    ("slots", "PostgreSQL: slotting", "warning"),
+    ("slots", "PostgreSQL: replication slot backlog", "warning"),
 ];
 // None is incomplete coverage, never a healthy sample. Unknown/idle lag is not zero.
 fn signals(w: &Wire, c: &Config) -> BTreeMap<&'static str, Option<f64>> {
@@ -891,7 +891,7 @@ impl Store {
             if s.revision == expected.revision && s.epoch == expected.epoch {
                 s.revision += 1;
                 s.failures = s.failures.saturating_add(1);
-                s.error = Some("PostgreSQL summary not received; previous data is outdated".into());
+                s.error = Some("No new PostgreSQL summary received. Previous data is stale.".into());
                 s.streaks.clear();
                 s.next_check = now()
                     + (s.config

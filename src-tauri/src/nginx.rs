@@ -18,16 +18,16 @@ fn err(e: impl std::fmt::Display) -> String {
 const RULES: &[(&str, &str, &str)] = &[
     (
         "service_failed",
-        "Nginx: the service ended in error",
+        "Nginx service failed",
         "critical",
     ),
-    ("capacity", "Nginx: limit of connections has been exhausted", "critical"),
-    ("critical_error", "Nginx: fallacy", "critical"),
-    ("http_5xx", "Nginx: resistant 5xx response rate", "warning"),
-    ("latency", "Nginx: persistent delays in requests", "warning"),
+    ("capacity", "Nginx reached its connection limit", "critical"),
+    ("critical_error", "Nginx reported critical errors", "critical"),
+    ("http_5xx", "Nginx is returning sustained 5xx errors", "warning"),
+    ("latency", "Nginx requests have sustained high latency", "warning"),
     (
         "upstream",
-        "Nginx: recurring upstream errors",
+        "Nginx reported recurring upstream errors",
         "warning",
     ),
 ];
@@ -296,7 +296,7 @@ fn validate(w: &Wire) -> Result<()> {
         || !w.next_state.is_object()
         || serde_json::to_vec(&w.next_state).map_err(err)?.len() > 12000
     {
-        return Err("Incompatible or Excessive Nginx Summary".into());
+        return Err("Incompatible or oversized Nginx summary".into());
     }
     if let Some(s) = &w.status {
         if [
@@ -336,7 +336,7 @@ fn validate(w: &Wire) -> Result<()> {
             && w.rps.is_some()
             && (!w.access_complete || w.coverage.initial)
     {
-        return Err("Uncoordinated Nginx aggregates".into());
+        return Err("Inconsistent Nginx metrics".into());
     }
     Ok(())
 }
@@ -526,7 +526,7 @@ impl Store {
             .map_err(err)?;
         let mut state: Checkpoint = serde_json::from_str(&stored).map_err(err)?;
         if state.revision != expected.revision || state.salt != expected.salt {
-            return Err("Nginx’s position has already changed".into());
+            return Err("Nginx log position has already changed".into());
         }
         let interval = crate::monitoring::effective(&tx, "nginx", &server.id, "")?
             .values
@@ -665,7 +665,7 @@ impl Store {
             let mut s: Checkpoint = serde_json::from_str(&raw).map_err(err)?;
             if s.revision == expected.revision && s.salt == expected.salt {
                 s.failures = s.failures.saturating_add(1);
-                s.error = Some("Nginx collection incomplete; position retained".into());
+                s.error = Some("Nginx log collection is incomplete. The saved position is unchanged.".into());
                 s.streaks.clear();
                 s.next_check = now()
                     + (crate::monitoring::effective(&tx, "nginx", id, "")?
@@ -775,7 +775,7 @@ pub(crate) fn validate_workers(value: &str) -> Result<()> {
             .is_none_or(|number| !(1..=128).contains(&number))
             || value.starts_with('0'))
     {
-        return Err("Nginx worker_processes: auto or 1.128".into());
+        return Err("Set Nginx worker_processes to auto or a whole number from 1 to 128.".into());
     }
     Ok(())
 }
@@ -838,7 +838,7 @@ pub(crate) const BACKEND: crate::services::ServiceBackend = crate::services::Ser
         },
         prepare_issue: |issue| match issue {
             "nginx_root_required" => {
-                Some("Changing Nginx requires an SSH root user; no sudo is requested")
+                Some("Changing Nginx requires connecting over SSH as root.")
             }
             "systemd_restart_unavailable" => {
                 Some("Restarting nginx.service requires an accessible systemd")

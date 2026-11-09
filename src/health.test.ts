@@ -63,7 +63,7 @@ it('keeps persisted transport errors and resource measurements unknown until the
 it('keeps independently confirmed problems visible while resource metrics are pending or missing', () => {
   const pending = { ...base, awaitingFirstCheck: true, lastError: 'previous timeout', logStatus: 'warning' as const };
   expect(health(pending, 10000)).toBe('warning');
-  expect(serverHealthLabel(pending, 'warning')).toBe('Needs attention · awaits a metric survey');
+  expect(serverHealthLabel(pending, 'warning')).toBe('Needs attention · waiting for metrics');
   const affected = { ...pending, vulnerabilities: { status: 'critical' as const, affected: 1, critical: 1, at: 1000 } };
   expect(health(affected, 10000)).toBe('critical');
   expect(health({ ...affected, awaitingFirstCheck: false, observation: null, lastError: null }, 10000)).toBe('critical');

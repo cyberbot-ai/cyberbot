@@ -110,7 +110,7 @@ impl Source {
                     "usn"
                 }
             ),
-            _ => return Err("The address of the advisory is prohibited".into()),
+            _ => return Err("The advisory URL is blocked".into()),
         })
     }
     pub fn fresh(&self) -> bool {
@@ -582,15 +582,18 @@ fn cache_bytes(root: &Path) -> Result<u64> {
     Ok(bytes)
 }
 pub fn file(root: &Path, s: &Source) -> Result<PathBuf> {
-    let name = s.file.as_ref().ok_or("Advisories still unloaded")?;
+    let name = s
+        .file
+        .as_ref()
+        .ok_or("Advisories have not been downloaded yet")?;
     if name.contains('/') || name.contains('\\') || name.starts_with('.') || name.len() > 160 {
-        return Err("Inadmissible advisory file".into());
+        return Err("Invalid advisory file".into());
     }
     Ok(root.join(name))
 }
 fn cache_admit(root: &Path, extra: u64) -> Result<()> {
     if cache_bytes(root)? + extra > 128 * 1024 * 1024 {
-        Err("Critical advisory cache hits 128MB limit".into())
+        Err("The advisory cache reached its 128 MiB limit".into())
     } else {
         Ok(())
     }
@@ -663,7 +666,7 @@ fn installed_filter(store: &Store, source: &Source) -> Result<Filter> {
                 .insert(p.source_version);
         }
         if serde_json::to_vec(&filter).map_err(err)?.len() > 8 * 1024 * 1024 {
-            return Err("Infrastructure limits for advisories".into());
+            return Err("Advisory processing limits exceeded".into());
         }
     }
     if source.kind == "debian" {
@@ -911,13 +914,10 @@ async fn update_source(app: &Arc<AppState>, source: &mut Source) -> Result<()> {
         if source.kind == "debian" {
             request = request.header(reqwest::header::ACCEPT_ENCODING, "gzip");
         }
-        let mut response = request
-            .send()
-            .await
-            .map_err(|_| "Advisories inaccessible")?;
+        let mut response = request.send().await.map_err(|_| "Advisories unavailable")?;
         if response.status() == reqwest::StatusCode::NOT_MODIFIED {
             if !file(&root, source).is_ok_and(|p| p.exists()) {
-                return Err("304 no cache".into());
+                return Err("The advisory server returned 304, but no cached copy exists".into());
             }
             source.checked_at = Some(now());
             source.error = None;
@@ -927,7 +927,7 @@ async fn update_source(app: &Arc<AppState>, source: &mut Source) -> Result<()> {
         }
         if !response.status().is_success() {
             return Err(format!(
-                "Advisory Service Returns HTTP {}",
+                "The advisory service returned HTTP {}",
                 response.status().as_u16()
             ));
         }
@@ -955,7 +955,7 @@ async fn update_source(app: &Arc<AppState>, source: &mut Source) -> Result<()> {
             while let Some(chunk) = response
                 .chunk()
                 .await
-                .map_err(|_| "Feed transmission interrupted")?
+                .map_err(|_| "Advisory download interrupted")?
             {
                 if app.stop.load(std::sync::atomic::Ordering::Relaxed) {
                     return Err("Update cancelled".into());
@@ -1006,7 +1006,7 @@ async fn update_source(app: &Arc<AppState>, source: &mut Source) -> Result<()> {
                 } else if kind.ends_with("releases") {
                     let text = std::fs::read_to_string(&tmp).map_err(err)?;
                     if !text.starts_with("version,codename,series,") {
-                        return Err("Unknown catalog of issues".into());
+                        return Err("Unknown advisory source".into());
                     }
                     std::fs::copy(&tmp, &idx).map_err(err)?;
                 } else {
@@ -1092,7 +1092,7 @@ async fn download_cve(
 ) -> std::result::Result<CveDownload, (String, i64)> {
     let mut received = 0u64;
     let result = async {
-        let url = cve_record_url(cve).ok_or_else(|| ("Impermissible CVE".into(), 21600))?;
+        let url = cve_record_url(cve).ok_or_else(|| ("Invalid CVE ID".into(), 21600))?;
         let mut request = client().map_err(|error| (error, 3600))?.get(url);
         if metadata_only {
             request = request.timeout(std::time::Duration::from_secs(15));
@@ -1116,11 +1116,11 @@ async fn download_cve(
             return Ok(CveDownload::Pause(retry_after(&response, 300)));
         }
         if status == reqwest::StatusCode::NOT_FOUND {
-            return Err(("CVE recording not yet released".into(), 21600));
+            return Err(("The CVE record has not been published yet".into(), 21600));
         }
         if !status.is_success() {
             return Err((
-                format!("CVE has brought back HTTP {}", status.as_u16()),
+                format!("The CVE service returned HTTP {}", status.as_u16()),
                 21600,
             ));
         }
@@ -1137,12 +1137,12 @@ async fn download_cve(
             let Some(chunk) = chunk else { break };
             received += chunk.len() as u64;
             if bytes.len() + chunk.len() > 1048576 {
-                return Err(("Limit to CVE recordings".into(), 86400));
+                return Err(("CVE record size limit reached".into(), 86400));
             }
             bytes.extend_from_slice(&chunk);
         }
-        let value: Value = serde_json::from_slice(&bytes)
-            .map_err(|_| ("Incorrect CVE recording".to_string(), 3600))?;
+        let value: Value =
+            serde_json::from_slice(&bytes).map_err(|_| ("Invalid CVE record".to_string(), 3600))?;
         if value["cveMetadata"]["cveId"] != cve {
             return Err(("CVE ID doesn’t match".into(), 3600));
         }
@@ -1831,7 +1831,7 @@ pub fn assess(
         }
     }
     if assessment.findings.len() > 20000 {
-        return Err("Limit of server finds".into());
+        return Err("Server finding limit reached".into());
     }
     if meta.distro == "debian" {
         let overflow: Option<i64> = {
@@ -2181,7 +2181,7 @@ mod tests {
             .save_cvss(&scored("CVE-2025-0001", Some(9.1), Some(now()), 1), 0)
             .unwrap());
         let mut failed = scored("CVE-2025-0001", Some(9.1), Some(now()), 1);
-        failed.error = Some("CVE recording not yet released".into());
+        failed.error = Some("The CVE record has not been published yet".into());
         assert!(store.save_cvss(&failed, 0).unwrap());
         let revision = |store: &Store| -> i64 {
             let db = store.0.lock().unwrap();

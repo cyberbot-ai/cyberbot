@@ -139,32 +139,32 @@ onBeforeUnmount(() => { generation++; });
       <button v-for="(label, id) in tabs" :key="id" type="button" :aria-pressed="tab === id" :disabled="busy" @click="selectTab(id)">{{ label }}</button>
     </div>
     <VulnerabilityCatalog v-if="tab === 'vulnerabilities'" :servers="servers"/>
-    <p v-else-if="catalogError" class="problem" role="alert">{{ catalogError }} <RefreshButton @click="loadCatalog">Download catalog</RefreshButton></p>
+    <p v-else-if="catalogError" class="problem" role="alert">{{ catalogError }} <RefreshButton @click="loadCatalog">Load catalog</RefreshButton></p>
     <template v-else-if="catalog.length">
       <div v-if="tab !== 'jobs'" class="toolbar">
         <UiSelect v-model="server" aria-label="Servers" :disabled="busy" @change="changeServer">
           <option value="">All servers</option>
           <option v-for="item in servers" :key="item.id" :value="item.id" :title="serverHint(item)">{{ item.endpoint.host }}</option>
         </UiSelect>
-        <label v-if="tab === 'builtin' && server" class="filter"><input ref="filter" v-model="onlyExceptions" type="checkbox" :disabled="busy"> Exceptions only</label>
-        <UiInput v-if="tab === 'builtin'" v-model="query" type="search" placeholder="Find a check" aria-label="Search for inspections" :disabled="busy"/>
+        <label v-if="tab === 'builtin' && server" class="filter"><input ref="filter" v-model="onlyExceptions" type="checkbox" :disabled="busy"> Overrides only</label>
+        <UiInput v-if="tab === 'builtin'" v-model="query" type="search" placeholder="Find a check" aria-label="Search checks" :disabled="busy"/>
       </div>
       <template v-if="tab === 'custom'">
-        <p class="hint">Your rules for the data you’ve already collected, each check has its own schedule.</p>
+        <p class="hint">Custom checks evaluate data Cyberbot has already collected. Each check has its own schedule.</p>
         <CheckPanel v-if="server" :key="server" :server-id="server" :now="now" @updated="emit('updated')"/>
         <p v-else class="hint">Select a server to open its checks and version editor.</p>
       </template>
       <template v-else>
-        <p v-if="tab === 'builtin' && entriesError" class="problem" role="alert">{{ entriesError }} <RefreshButton @click="loadEntries()">Update values</RefreshButton></p>
+        <p v-if="tab === 'builtin' && entriesError" class="problem" role="alert">{{ entriesError }} <RefreshButton @click="loadEntries()">Refresh settings</RefreshButton></p>
         <template v-else-if="tab === 'jobs' || !loading || Object.keys(entries).length">
-          <p v-if="tab === 'jobs'" class="hint">The tasks that Cyberbot performs on this computer.</p>
+          <p v-if="tab === 'jobs'" class="hint">Tasks that Cyberbot runs on this computer.</p>
           <template v-else-if="noExceptions">
-            <p class="hint">This server has no exceptions. It uses the general settings.</p>
+            <p class="hint">This server uses global settings for all checks.</p>
             <button ref="showAll" class="link" type="button" @click="onlyExceptions = false; nextTick(() => filter?.focus())">Show all server checks</button>
           </template>
-          <p v-else class="hint"><template v-if="server">{{ filtering ? 'Your settings for' : 'Settings that apply to' }} <ServerLink :id="server"/>.</template><template v-else>General settings apply where the server has not set its values.</template></p>
+          <p v-else class="hint"><template v-if="server">{{ filtering ? 'Overrides for' : 'Settings for' }} <ServerLink :id="server"/>.</template><template v-else>Checks inherit global settings unless this server overrides them.</template></p>
           <table v-if="visible.length" class="checks" :aria-label="tabs[tab]" :aria-busy="tab === 'builtin' && loading">
-            <thead><tr><th scope="col">Verification</th><th scope="col">Schedule</th></tr></thead>
+            <thead><tr><th scope="col">Check</th><th scope="col">Schedule</th></tr></thead>
             <tbody>
               <template v-for="definition in visible" :key="definition.id">
                 <tr class="row" :class="{ open: selected === definition.id }" @click="toggleRow(definition.id)">
@@ -175,8 +175,8 @@ onBeforeUnmount(() => { generation++; });
                   </th>
                   <td>
                     {{ schedule(definition) }}
-                    <small v-if="server && hasException(entries[definition.id]) && !filtering">Your settings</small>
-                    <small v-else-if="filtering && !entries[definition.id]?.serverOverride">Elimination of connection</small>
+                    <small v-if="server && hasException(entries[definition.id]) && !filtering">Server override</small>
+                    <small v-else-if="filtering && !entries[definition.id]?.serverOverride">Connection override</small>
                   </td>
                 </tr>
                 <tr v-if="selected === definition.id" class="expanded" :id="`library-detail-${definition.id}`">
@@ -195,10 +195,10 @@ onBeforeUnmount(() => { generation++; });
           </table>
           <p v-else-if="!noExceptions" class="hint">No checks found.</p>
         </template>
-        <p v-else class="hint" role="status">Download the settings…</p>
+        <p v-else class="hint" role="status">Loading settings…</p>
       </template>
     </template>
-    <p v-else class="hint" role="status">Download the catalog…</p>
+    <p v-else class="hint" role="status">Loading the catalog…</p>
   </div>
 </template>
 

@@ -14,7 +14,7 @@ pub fn read_source(kind: &str, location: &str) -> Result<Vec<Imported>, String> 
     match kind {
         "manual" => parse_manual(location),
         "ansible" => read_ansible(Path::new(location)),
-        _ => Err("Unsupported method of adding servers".into()),
+        _ => Err("Unsupported server source type".into()),
     }
 }
 
@@ -34,13 +34,13 @@ pub fn read_ansible(path: &Path) -> Result<Vec<Imported>, String> {
         .metadata()
         .map_err(|_| "Failed to check inventory file")?;
     if !metadata.is_file() || metadata.len() > MAX_FILE as u64 {
-        return Err("Inventory must be a normal file of no more than 8 MiB".into());
+        return Err("Inventory must be a regular file no larger than 8 MiB".into());
     }
     let mut bytes = Vec::new();
     file.take(MAX_FILE as u64 + 1)
         .read_to_end(&mut bytes)
         .map_err(|_| "Could not read the inventory file")?;
-    let input = std::str::from_utf8(&bytes).map_err(|_| "Inventory should be in UTF-8")?;
+    let input = std::str::from_utf8(&bytes).map_err(|_| "Inventory must use UTF-8")?;
     parse_ansible(input)
 }
 
@@ -49,7 +49,7 @@ pub fn parse_ansible(input: &str) -> Result<Vec<Imported>, String> {
         return Err("Inventory file more than 8 MiB".into());
     }
     if input.lines().any(|line| line.len() > 64 * 1024) {
-        return Err("String inventory more than 64 KiB".into());
+        return Err("Inventory text exceeds 64 KiB".into());
     }
     ansible::parse(input.trim_start_matches('\u{feff}'))
 }
@@ -137,7 +137,7 @@ pub struct Imported {
 
 pub fn parse_manual(input: &str) -> Result<Vec<Imported>, String> {
     if input.len() > 1024 * 1024 {
-        return Err("List more than 1 MB".into());
+        return Err("Server list exceeds 1 MB".into());
     }
     let mut result = Vec::new();
     let mut seen = BTreeSet::new();
@@ -147,7 +147,7 @@ pub fn parse_manual(input: &str) -> Result<Vec<Imported>, String> {
             continue;
         }
         let (user, host_port) = match value.split_once('@') {
-            Some(("", _)) => return Err("Indicate the user before @".into()),
+            Some(("", _)) => return Err("Enter an SSH user before @".into()),
             Some(parts) => parts,
             None => ("", value),
         };

@@ -22,14 +22,14 @@ async function select(mode: Settings['mode']) {
   <div class="mode-control" :class="{ compact }">
     <div class="mode-row">
       <h1 v-if="!compact">AI</h1>
-      <button type="button" class="ai-switch" role="switch" :aria-label="compact ? 'AI' : 'Automatic launches'" :aria-checked="enabled" :aria-busy="busy" :disabled="busy" :title="enabled ? 'Turn off the AI. Current automatic start-up will stop.' : 'Enable automatic AI investigations.'" @click="select(enabled ? 'manual' : 'auto')">
+      <button type="button" class="ai-switch" role="switch" :aria-label="compact ? 'AI' : 'Automatic investigations'" :aria-checked="enabled" :aria-busy="busy" :disabled="busy" :title="enabled ? 'Turn off automatic investigations and stop the current automatic run.' : 'Enable automatic AI investigations.'" @click="select(enabled ? 'manual' : 'auto')">
         <span v-if="compact" class="caption">AI</span><span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
       </button>
-      <span v-if="compact && enabled && settings.paused" class="pause-indicator" role="status" aria-label="Automatic investigations paused" title="Monitoring on pause: automatic tasks do not start"><UiIcon name="pause" :size="14"/></span>
+      <span v-if="compact && enabled && settings.paused" class="pause-indicator" role="status" aria-label="Automatic investigations paused" title="Monitoring is paused, so automatic investigations are paused."><UiIcon name="pause" :size="14"/></span>
       <slot name="badge"/>
     </div>
-    <p v-if="!compact" class="mode-help">{{ enabled ? `AI is parsing new significant incidents within limits — ${settings.autoAgent === 'codex' ? 'Codex' : 'Claude Code'}.` : 'Automatic launches are off. Start a manual investigation from a server’s AI tab or an incident group card.' }}</p>
-    <p v-if="!compact && settings.paused" class="pause-notice" role="status"><UiIcon name="pause" :size="14"/>Monitoring is paused. Automatic tasks are not started.</p>
+    <p v-if="!compact" class="mode-help">{{ enabled ? `AI investigates new significant incidents within the configured limits — ${settings.autoAgent === 'codex' ? 'Codex' : 'Claude Code'}.` : 'Automatic investigations are off. Start a manual investigation from a server’s AI tab or an incident group card.' }}</p>
+    <p v-if="!compact && settings.paused" class="pause-notice" role="status"><UiIcon name="pause" :size="14"/>Monitoring is paused, so new automatic investigations are on hold.</p>
     <p v-if="error" class="error" role="alert">{{ error }}</p>
   </div>
 </template>

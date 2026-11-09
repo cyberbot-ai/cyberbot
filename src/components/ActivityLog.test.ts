@@ -43,7 +43,7 @@ describe('action journal',()=>{
   const w=mount(ActivityLog);await flushPromises();
   expect(mocks.call.mock.calls).toEqual([['activity_log',{query:{before:null,category:null,phase:null,search:null}}]]);
   expect(w.text()).toContain('SSH connection');expect(w.get('.target').text()).toBe('host');
-  vi.useFakeTimers();await w.get('[aria-label="Type of action"]').setValue('ai');await w.get('[aria-label="Outcome of action"]').setValue('failed');await w.get('[aria-label="Searching in the action log"]').setValue('host');await vi.advanceTimersByTimeAsync(251);await flushPromises();
+  vi.useFakeTimers();await w.get('[aria-label="Action category"]').setValue('ai');await w.get('[aria-label="Action result"]').setValue('failed');await w.get('[aria-label="Search the activity log"]').setValue('host');await vi.advanceTimersByTimeAsync(251);await flushPromises();
   expect(mocks.call).toHaveBeenLastCalledWith('activity_log',{query:{before:null,category:'ai',phase:'failed',search:'host'}});
   expect(mocks.call.mock.calls.every(c=>c[0]==='activity_log')).toBe(true);w.unmount();
  });
@@ -53,17 +53,17 @@ describe('action journal',()=>{
   expect(mocks.call).toHaveBeenLastCalledWith('activity_log',{query:{before:'10:500',category:null,phase:null,search:null}});
   expect(w.text()).toContain('rotated');
   await w.findAll('button').find(b=>b.text()==='Refresh')!.trigger('click');await flushPromises();expect(w.text()).toContain('fresh');
-  expect(w.findAll('button').find(b=>b.text()==='Novea')!.attributes('disabled')).toBeDefined();w.unmount();
+  expect(w.findAll('button').find(b=>b.text()==='Newer')!.attributes('disabled')).toBeDefined();w.unmount();
  });
  it('shows journal gaps and errors while escaping event text',async()=>{
   mocks.call.mockRejectedValueOnce(new Error('No access to the journal')).mockResolvedValue({...page('<script>secret()</script>'),skipped:2,storage:{bytes:100,limitBytes:31457280,dropped:3,error:'Recording error'}});
   const w=mount(ActivityLog);await flushPromises();expect(w.get('[role="alert"]').text()).toContain('No access');
   await w.findAll('button').find(b=>b.text()==='Refresh')!.trigger('click');await flushPromises();
-  expect(w.find('script').exists()).toBe(false);expect(w.text()).toContain('<script>');expect(w.text()).toContain('No recorded events: 3');expect(w.text()).toContain('Damaged recordings missed: 2');w.unmount();
+  expect(w.find('script').exists()).toBe(false);expect(w.text()).toContain('<script>');expect(w.text()).toContain('Events not recorded: 3');expect(w.text()).toContain('Corrupted entries skipped: 2');w.unmount();
  });
  it('ignores late replies and stops polling after unmount',async()=>{
   let finish!:(value:ActivityPage)=>void;mocks.call.mockImplementationOnce(()=>new Promise(resolve=>{finish=resolve;}));
-  const w=mount(ActivityLog);vi.useFakeTimers();await w.get('[aria-label="Type of action"]').setValue('ai');await vi.advanceTimersByTimeAsync(251);await flushPromises();
+  const w=mount(ActivityLog);vi.useFakeTimers();await w.get('[aria-label="Action category"]').setValue('ai');await vi.advanceTimersByTimeAsync(251);await flushPromises();
   expect(w.text()).toContain('SSH connection');finish(page('outdated'));await flushPromises();expect(w.text()).not.toContain('outdated');
   w.unmount();const count=mocks.call.mock.calls.length;await vi.advanceTimersByTimeAsync(30000);expect(mocks.call).toHaveBeenCalledTimes(count);
  });

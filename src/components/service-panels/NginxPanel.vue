@@ -14,8 +14,8 @@ interface NginxView {monitoring?:MonitoringValues;evidence?:{summaryId:string;at
 
 const props=defineProps<{serverId:string;now:number;kind?:string;refreshKey?:string;displayName?:string;instanceId?:string}>();const emit=defineEmits<{updated:[]}>();
 const view=ref<NginxView>();const error=ref('');const busy=ref(false);let version=0;
-const labels:Record<string,string>={requests:'Requests',unparsed:'Unrecognized records',upstream_timeout:'Timestream',upstream_connect:'Connection error with upstream',upstream_unavailable:'There are no available upstream',capacity:'Connection limit',critical_error:'Critical errors',client_noise:'Client Errors and Scanning',other_errors:'Other mistakes'};
-const gaps:Record<string,string>={config_limit:'Limit or unsupported configuration structure',config_unavailable:'Configuration unavailable',unsupported_log_path:'The path of logs outside the authorized directory',multiple_logs:'Several dens: one main file of each type is analyzed',access_filtered:'Conditional or compressed logging',source_unavailable:'Log inaccessible',source_changed:'The log or format has changed',backlog_skipped:'Missed old part; selected fresh tail',file_rewritten:'File rewritten',file_truncated:'File abbreviated',rotation_tail_lost:'Tail before rotation unavailable',long_line:'Too long a line',incomplete_line:'The unfinished line',invalid_encoding:'Unknown encoding',read_limit:'Read/time limit',unknown_format:'Record format unrecognized',unknown_timestamp:'Time not recognized',clock_changed:'Divergence of clocks',late_records:'Late recordings outside the audited period',timing_unavailable:'Part of the time is unavailable',counter_reset:'Resetting the status counter'};
+const labels:Record<string,string>={requests:'Requests',unparsed:'Unrecognized records',upstream_timeout:'Upstream timeouts',upstream_connect:'Upstream connection errors',upstream_unavailable:'No available upstreams',capacity:'Connection limit',critical_error:'Critical errors',client_noise:'Client errors and scans',other_errors:'Other errors'};
+const gaps:Record<string,string>={config_limit:'Configuration limit or unsupported structure',config_unavailable:'Configuration unavailable',unsupported_log_path:'Log path outside the allowed directories',multiple_logs:'Multiple logs found. Cyberbot reads one primary log of each type.',access_filtered:'Conditional or compressed logging',source_unavailable:'Log unavailable',source_changed:'The log or format has changed',backlog_skipped:'Older entries skipped. Recent entries were read.',file_rewritten:'File rewritten',file_truncated:'File truncated',rotation_tail_lost:'End of rotated log unavailable',long_line:'Line too long',incomplete_line:'Incomplete line',invalid_encoding:'Unknown encoding',read_limit:'Read or time limit reached',unknown_format:'Unrecognized log format',unknown_timestamp:'Unrecognized timestamp',clock_changed:'Clock drift',late_records:'Late entries outside the check window',timing_unavailable:'Some request timings are unavailable',counter_reset:'Status counter reset'};
 const scope = () => ({id:props.serverId,kind:props.kind??'nginx',...(props.instanceId?{instanceId:props.instanceId}:{})});
 async function load(){const v=++version;try{const result=await call<NginxView>('service_summary',scope());if(v===version){view.value=result;error.value='';}}catch(e){if(v===version)error.value=String(e);}}
 watch(()=>props.serverId,()=>{view.value=undefined;void load();},{immediate:true});watch(()=>[props.now,props.refreshKey],()=>{if(!document.hidden&&!busy.value)void load();});onUnmounted(()=>{version++;});
@@ -25,7 +25,7 @@ const codes=computed(()=>{const c=view.value?.summary?.counts??{};const items=co
 const other=computed(()=>Object.entries(view.value?.summary?.counts??{}).filter(([k,n])=>k!=='requests'&&!codeKeys.includes(k)&&n>0));
 const qualityCount=computed(()=>{const s=view.value?.summary;return s?s.coverage.gaps.length+(s.missing.length?1:0):0;});
 const health=computed(()=>{const st=view.value?.card?.status;return st==='critical'?'crit':st==='warning'?'warn':st==='healthy'?'ok':'';});
-const healthText=computed(()=>({critical:'Critical deviation',warning:'There’s a deviation',healthy:'No problem found'} as Record<string,string>)[view.value?.card?.status??'']??'No relevant results');
+const healthText=computed(()=>({critical:'Critical',warning:'Needs attention',healthy:'No issues found'} as Record<string,string>)[view.value?.card?.status??'']??'No current results');
 function share(part?:number,total?:number){if(!total)return '—';const p=(part??0)/total*100;return p===0?'0%':p<0.1?'< 0.1%':`${p.toFixed(p<10?1:0)}%`;}
 function avg(t:NginxTiming){return t.samples?`${Math.round(t.sumMs/t.samples)} ms`:'no data';}
 function p95(t:NginxTiming){if(!t.samples)return 'no data';let n=0;const bounds=[5,10,25,50,100,250,500,1000,2500,5000,10000,30000,60000];for(let i=0;i<t.histogram.length;i++){n+=t.histogram[i];if(n>=Math.ceil(t.samples*.95))return i<bounds.length?`≤ ${bounds[i]} ms`:'> 60';}return 'no data';}
@@ -34,35 +34,35 @@ function p95(t:NginxTiming){if(!t.samples)return 'no data';let n=0;const bounds=
 <section class="nginx">
 <ServerTabBar :title="displayName ?? 'Nginx'" :busy="busy" :disabled="preview || view?.monitoring?.enabled===false" @refresh="refresh">
   <span v-if="view?.summary?.detected" class="tag" :class="health">{{ healthText }}</span>
-  <RelativeDate :at="view?.summary?.receivedAt" empty="untested"/>
+  <RelativeDate :at="view?.summary?.receivedAt" empty="Not checked yet"/>
   <template #actions><slot name="actions"/></template>
 </ServerTabBar>
 <slot name="before-content"/>
-<p v-if="view?.monitoring?.enabled===false" class="notice">Monitoring is off. Change the profile in the section “Monitoring”.</p><p v-if="error||view?.error" class="problem" role="alert">{{error||view?.error}}</p>
-<p v-if="!view?.summary" class="note">Detection and analysis will appear on schedule.</p>
-<template v-if="view?.summary"><p v-if="!view.summary.detected" class="note">Nginx undetected by available checks. Re-detection every 6 hours.</p><template v-else>
+<p v-if="view?.monitoring?.enabled===false" class="notice">Monitoring is off. You can enable it in the Monitoring library.</p><p v-if="error||view?.error" class="problem" role="alert">{{error||view?.error}}</p>
+<p v-if="!view?.summary" class="note">Results will appear after the next scheduled check.</p>
+<template v-if="view?.summary"><p v-if="!view.summary.detected" class="note">Nginx was not detected. Cyberbot checks again every 6 hours.</p><template v-else>
 <div v-for="f in view.summary.findings" :key="f.check" class="problem">{{f.title}} · {{f.count}}</div>
-<p v-if="['warning','critical'].includes(view.card.status)&&!view.summary.findings.length" class="problem">The incident remains open: recovery not yet confirmed by two full checks.</p>
+<p v-if="['warning','critical'].includes(view.card.status)&&!view.summary.findings.length" class="problem">The incident stays open until two full checks confirm recovery.</p>
 <div class="metrics">
-  <div><small>Requests for {{ formatDuration(view.summary.windowSeconds) }}</small><strong><MetricValue :value="view.summary.counts.requests??0" :precision="0"/></strong><span class="sub" :title="`Source RPS: ${view.summary.rpsSource}`"><template v-if="view.summary.rps!=null"><MetricValue :value="view.summary.rps" :precision="2"/> RPS</template><template v-else>{{view.summary.coverage.initial?'RPS will be available after the next full review':'RPS unavailable'}}</template></span></div>
-  <div :class="{bad:(view.summary.counts['5xx']??0)>0}"><small>Responses 5xxx</small><strong><MetricValue :value="view.summary.counts['5xx']??0" :precision="0"/></strong><span class="sub">{{share(view.summary.counts['5xx'],view.summary.counts.requests)}} request</span></div>
-  <div><small>Time of request</small><strong :class="{none:!view.summary.requestTime.samples}">{{avg(view.summary.requestTime)}}</strong><span class="sub">p95 {{p95(view.summary.requestTime)}}</span></div>
-  <div><small>Upstream</small><strong :class="{none:!view.summary.upstreamTime.samples}">{{avg(view.summary.upstreamTime)}}</strong><span class="sub">{{view.summary.upstreamTime.samples?`p95 ${p95(view.summary.upstreamTime)}`:'log-free'}}</span></div>
+  <div><small>Requests for {{ formatDuration(view.summary.windowSeconds) }}</small><strong><MetricValue :value="view.summary.counts.requests??0" :precision="0"/></strong><span class="sub" :title="`RPS source: ${view.summary.rpsSource}`"><template v-if="view.summary.rps!=null"><MetricValue :value="view.summary.rps" :precision="2"/> RPS</template><template v-else>{{view.summary.coverage.initial?'RPS needs another full check':'RPS unavailable'}}</template></span></div>
+  <div :class="{bad:(view.summary.counts['5xx']??0)>0}"><small>5xx responses</small><strong><MetricValue :value="view.summary.counts['5xx']??0" :precision="0"/></strong><span class="sub">{{share(view.summary.counts['5xx'],view.summary.counts.requests)}} of requests</span></div>
+  <div><small>Request time</small><strong :class="{none:!view.summary.requestTime.samples}">{{avg(view.summary.requestTime)}}</strong><span class="sub">p95 {{p95(view.summary.requestTime)}}</span></div>
+  <div><small>Upstream response time</small><strong :class="{none:!view.summary.upstreamTime.samples}">{{avg(view.summary.upstreamTime)}}</strong><span class="sub">{{view.summary.upstreamTime.samples?`p95 ${p95(view.summary.upstreamTime)}`:'No timing data'}}</span></div>
 </div>
 <section v-if="codes.total" class="codes"><h4>Response codes</h4><div class="stack" role="img" :aria-label="codes.items.map(c=>`${c.key}: ${c.count}`).join(', ')"><i v-for="c in codes.items" :key="c.key" :class="`c${c.key[0]}`" :style="{width:`${c.count/codes.total*100}%`}"></i></div><div class="legend"><span v-for="c in codes.items" :key="c.key"><i :class="`c${c.key[0]}`"></i>{{c.key}} <b><MetricValue :value="c.count" :precision="0"/></b></span></div></section>
-<div v-if="view.summary.status" class="row"><span>Connections: {{view.summary.status.active}}</span><span>Reading {{view.summary.status.reading}} · record {{view.summary.status.writing}} · waiting {{view.summary.status.waiting}}</span></div>
+<div v-if="view.summary.status" class="row"><span>Connections: {{view.summary.status.active}}</span><span>Reading {{view.summary.status.reading}} · writing {{view.summary.status.writing}} · waiting {{view.summary.status.waiting}}</span></div>
 <dl v-if="other.length" class="other"><template v-for="[k,n] in other" :key="k"><dt>{{labels[k]??k}}</dt><dd><MetricValue :value="n" :precision="0"/></dd></template></dl>
 <details class="quality"><summary>Data quality<template v-if="qualityCount"> · {{qualityCount}}</template></summary><ul>
 <li>Service {{ view.summary.service }} · period {{ formatTimeRange(view.summary.at - view.summary.windowSeconds, view.summary.at) }}</li>
-<li>Data collected for {{ formatDuration(view.summary.windowSeconds) }}. Completed queries from selected Nginx journal are taken into account.</li>
-<li v-if="view.summary.coverage.initial">To calculate the RPS, you need another full check.</li>
-<li v-if="view.summary.missing.length">Indicators not available: <code>{{view.summary.missing.join(', ')}}</code></li>
+<li>Data collected for {{ formatDuration(view.summary.windowSeconds) }}. Counts include completed requests in the selected Nginx log.</li>
+<li v-if="view.summary.coverage.initial">Calculating RPS requires another full check.</li>
+<li v-if="view.summary.missing.length">Unavailable metrics: <code>{{view.summary.missing.join(', ')}}</code></li>
 <li v-for="(g,i) in view.summary.coverage.gaps" :key="i">{{g.source}}: {{gaps[g.reason]??g.reason}}<small v-if="g.fromOffset!=null"> · bytes {{g.fromOffset}}–{{g.toOffset}}</small></li>
-<li><small>Summary {{view.summary.bytesReceived}} bytes · server-read {{view.summary.bytesRead}} bytes · {{view.summary.durationMs}} MS. SSH traffic is accounted for separately.</small></li></ul></details>
-<details class="help"><summary>How delays are calculated</summary><p>p95 is the upper limit of the histogram interval. Delays are only available if they’re already logged.</p></details>
-<details class="help"><summary>When an incident is created</summary><p>4xx and normal scanning do not trigger AUTOs. 5xx, upstream delays and errors create incidents with data completeness in mind.</p></details>
+<li><small>Received {{view.summary.bytesReceived}} bytes · read {{view.summary.bytesRead}} bytes on the server · {{view.summary.durationMs}} ms. Figures exclude SSH overhead.</small></li></ul></details>
+<details class="help"><summary>How latency is calculated</summary><p>The p95 estimate uses the upper bound of the matching histogram bucket. Latency data requires request timings in the log.</p></details>
+<details class="help"><summary>When an incident is created</summary><p>HTTP 4xx responses and routine scans do not trigger automatic investigations. Cyberbot checks data coverage before opening incidents for 5xx responses, latency, and upstream errors.</p></details>
 <details v-if="view.evidence?.length" class="help"><summary>Evidence of open incidents</summary><article v-for="e in view.evidence" :key="e.summaryId"><p><RelativeDate :at="e.at"/></p><p v-for="f in e.findings" :key="f.check">{{f.title}} · {{f.count}}</p><small>Summary {{e.summaryId}}</small></article></details>
-<details v-if="view.summary.examples.length" class="help"><summary>Cleared events: {{view.summary.examples.length}}</summary><p v-for="(e,i) in view.summary.examples" :key="i"><RelativeDate :at="e.at"/> · {{labels[e.category]??e.category}}</p></details>
+<details v-if="view.summary.examples.length" class="help"><summary>Redacted events: {{view.summary.examples.length}}</summary><p v-for="(e,i) in view.summary.examples" :key="i"><RelativeDate :at="e.at"/> · {{labels[e.category]??e.category}}</p></details>
 </template></template></section></template>
 <style scoped>
 .nginx{border:0;margin:0;padding:0}h4{font-size:13px;font-weight:600;margin:0 0 8px}.tag{display:inline-flex;align-items:center;padding:1px 9px;border-radius:20px;background:var(--subtle);color:var(--muted);white-space:nowrap}.tag.ok{background:var(--accent-bg);color:var(--success)}.tag.warn{background:var(--warning-bg);color:var(--warning)}.tag.crit{background:var(--danger-bg);color:var(--danger)}

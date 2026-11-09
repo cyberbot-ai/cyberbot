@@ -17,7 +17,7 @@ it('keeps large service counters and byte metrics compact with original units av
  expect(w.findAll('.metric-value').find(v=>v.attributes('title')===String(huge))).toBeDefined();
  w.unmount();
 });
-it('shows partial service coverage and only reads cached data',async()=>{const w=mount(ServicePanel,{props:{serverId:'host',kind:'redis',now:100}});await flushPromises();expect(w.text()).toContain('Incomplete coverage');expect(w.text()).toContain('Condition unconfirmed');expect(w.text()).toContain('—');expect(call).toHaveBeenCalledWith('service_summary',{id:'host',kind:'redis'});expect(call).not.toHaveBeenCalledWith('refresh_service',expect.anything());w.unmount();});
+it('shows partial service coverage and only reads cached data',async()=>{const w=mount(ServicePanel,{props:{serverId:'host',kind:'redis',now:100}});await flushPromises();expect(w.text()).toContain('Incomplete coverage');expect(w.text()).toContain('Status unconfirmed');expect(w.text()).toContain('—');expect(call).toHaveBeenCalledWith('service_summary',{id:'host',kind:'redis'});expect(call).not.toHaveBeenCalledWith('refresh_service',expect.anything());w.unmount();});
 it('refresh and configure always scope both server and service',async()=>{const w=mount(ServicePanel,{props:{serverId:'host',kind:'redis',now:100}});await flushPromises();await w.get('header button').trigger('click');await flushPromises();expect(call).toHaveBeenCalledWith('refresh_service',{id:'host',kind:'redis'});await w.get('form').trigger('submit');await flushPromises();expect(call).toHaveBeenCalledWith('configure_service',{id:'host',kind:'redis',config});expect(w.find('input[type=password]').exists()).toBe(false);w.unmount();});
 it('a server with several services retains independent panels and profiles',async()=>{const a=mount(ServicePanel,{props:{serverId:'host',kind:'redis',now:100}});const b=mount(ServicePanel,{props:{serverId:'host',kind:'mysql',now:100}});await flushPromises();await a.get('header button').trigger('click');await flushPromises();expect(call).toHaveBeenCalledWith('service_summary',{id:'host',kind:'mysql'});expect(call).not.toHaveBeenCalledWith('refresh_service',{id:'host',kind:'mysql'});a.unmount();b.unmount();});
 it('lets an automatic Redis profile switch to an explicit local IP and port', async () => {
@@ -68,7 +68,7 @@ it('shows the reason at first breach and removes it after resolution without a n
  deviations=[];
  await w.setProps({refreshKey:'resolved'});await flushPromises();
  expect(w.find('.deviation').exists()).toBe(false);
- expect(w.get('.tag').text()).toBe('Available checks are normal');
+ expect(w.get('.tag').text()).toBe('No issues found');
  w.unmount();
 });
 

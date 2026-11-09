@@ -14,7 +14,7 @@ async function resolve(){
  finally{busy.value=false;}
 }
 </script>
-<template><button v-if="incident.status==='open'" type="button" class="resolve" :disabled="busy||preview" :aria-busy="busy" :aria-label="`Marking it up: ${incident.title}`" :title="busy?'Save it…':'Marking it up'" @click.stop="resolve"><UiIcon name="resolve" :size="18"/></button></template>
+<template><button v-if="incident.status==='open'" type="button" class="resolve" :disabled="busy||preview" :aria-busy="busy" :aria-label="`Mark resolved: ${incident.title}`" :title="busy?'Resolving…':'Mark resolved'" @click.stop="resolve"><UiIcon name="resolve" :size="18"/></button></template>
 <style scoped>
 .resolve{display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;width:32px;height:32px;padding:6px;border:0;background:transparent;color:var(--muted);border-radius:6px;cursor:pointer}.resolve:hover:enabled{color:var(--success);background:var(--accent-bg)}.resolve:disabled{opacity:.45;cursor:default}.resolve:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 </style>

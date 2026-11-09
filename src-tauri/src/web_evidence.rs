@@ -28,14 +28,14 @@ fn parse_url(raw: &str) -> Result<Url, String> {
     if raw.len() > 2048 {
         return Err("The link is too long".into());
     }
-    let mut url = Url::parse(raw).map_err(|_| "Incorrect reference")?;
+    let mut url = Url::parse(raw).map_err(|_| "Invalid URL")?;
     if url.scheme() != "https"
         || url.port_or_known_default() != Some(443)
         || !url.domain().is_some_and(|host| host.contains('.'))
         || !url.username().is_empty()
         || url.password().is_some()
     {
-        return Err("Allowed public HTTPS links to domains without credentials".into());
+        return Err("Use a public HTTPS URL without credentials".into());
     }
     url.set_fragment(None);
     Ok(url)
@@ -64,7 +64,7 @@ pub(crate) fn requested_url(raw: &str, allowed: &[Url]) -> Result<Url, String> {
     if allowed.contains(&url) {
         Ok(url)
     } else {
-        Err("An HTTPS link from the current user message is expected".into())
+        Err("Use an HTTPS link from the latest user message".into())
     }
 }
 
@@ -73,7 +73,7 @@ fn public_addresses(addresses: Vec<SocketAddr>) -> Result<Vec<SocketAddr>, Strin
         || addresses.len() > 32
         || addresses.iter().any(|a| !crate::egress::public(a.ip()))
     {
-        return Err("Domains are not allowed exclusively in public addresses".into());
+        return Err("The domain resolves to a nonpublic address".into());
     }
     Ok(addresses)
 }
@@ -87,21 +87,21 @@ async fn addresses(url: &Url) -> Result<Vec<SocketAddr>, String> {
 }
 
 fn redirect_url(url: &Url, location: &str) -> Result<Url, String> {
-    let next = url.join(location).map_err(|_| "Incorrect redirection")?;
+    let next = url.join(location).map_err(|_| "Invalid redirect")?;
     parse_url(next.as_str())
 }
 
 struct NoUnverifiedDns;
 impl Resolve for NoUnverifiedDns {
     fn resolve(&self, _: Name) -> Resolving {
-        Box::pin(async { Err(std::io::Error::other("Unverified destination").into()) })
+        Box::pin(async { Err(std::io::Error::other("Could not verify the destination").into()) })
     }
 }
 
 pub(crate) async fn read(url: Url) -> Result<Page, String> {
     tokio::time::timeout(Duration::from_secs(20), read_inner(url))
         .await
-        .map_err(|_| "It is time to read the public page".to_string())?
+        .map_err(|_| "Timed out while reading the public page".to_string())?
 }
 
 async fn read_inner(mut url: Url) -> Result<Page, String> {
@@ -116,7 +116,7 @@ async fn read_inner(mut url: Url) -> Result<Page, String> {
             .resolve_to_addrs(host, &ips)
             .connect_timeout(Duration::from_secs(5))
             .build()
-            .map_err(|_| "It was not possible to read the page")?;
+            .map_err(|_| "Could not read the page")?;
         let mut response = client
             .get(url.clone())
             .header(header::USER_AGENT, "Cyberbot public evidence reader")
@@ -132,13 +132,13 @@ async fn read_inner(mut url: Url) -> Result<Page, String> {
                 .headers()
                 .get(header::LOCATION)
                 .and_then(|value| value.to_str().ok())
-                .ok_or("No redirection address")?;
+                .ok_or("Redirect is missing a destination URL")?;
             url = redirect_url(&url, location)?;
             continue;
         }
         if !response.status().is_success() {
             return Err(format!(
-                "Source responds to HTTP {}",
+                "The source returned HTTP {}",
                 response.status().as_u16()
             ));
         }
@@ -156,22 +156,22 @@ async fn read_inner(mut url: Url) -> Result<Page, String> {
             mime.as_str(),
             "text/html" | "application/xhtml+xml" | "text/plain" | "application/json"
         ) {
-            return Err("Source returns unsupported page type".into());
+            return Err("The source returned an unsupported content type".into());
         }
         if response
             .content_length()
             .is_some_and(|len| len > MAX_BODY as u64)
         {
-            return Err("Page topped 1 MiB".into());
+            return Err("Page exceeds 1 MiB".into());
         }
         let mut body = Vec::new();
         while let Some(chunk) = response
             .chunk()
             .await
-            .map_err(|_| "I couldn’t finish the page")?
+            .map_err(|_| "Could not finish reading the page")?
         {
             if body.len() + chunk.len() > MAX_BODY {
-                return Err("Page topped 1 MiB".into());
+                return Err("Page exceeds 1 MiB".into());
             }
             body.extend_from_slice(&chunk);
         }

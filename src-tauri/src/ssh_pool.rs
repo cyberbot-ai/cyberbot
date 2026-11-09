@@ -192,14 +192,14 @@ impl Entry {
 }
 impl Drop for Entry {
     fn drop(&mut self) {
-        self.close("Closing the SSH");
+        self.close("Close SSH connection");
     }
 }
 impl Drop for Inner {
     fn drop(&mut self) {
         if let Ok(state) = self.state.get_mut() {
             for entry in state.entries.values() {
-                entry.close("Closing the SSH");
+                entry.close("Close SSH connection");
             }
         }
         let _ = std::fs::remove_dir(&self.root);
@@ -211,7 +211,7 @@ impl Pool {
     pub fn new(limit: usize, idle: Duration, config: Option<PathBuf>) -> Result<Self, String> {
         if !(1..=256).contains(&limit) || idle.is_zero() || idle > Duration::from_secs(IDLE_SECONDS)
         {
-            return Err("Incorrect SSH Pool Limitations".into());
+            return Err("Invalid SSH pool limits".into());
         }
         // Short paths fit sockaddr_un on macOS; the directory is private from creation.
         let base = if cfg!(target_os = "macos") {
@@ -283,7 +283,7 @@ impl Pool {
         if let Ok(mut state) = self.0.state.lock() {
             state.stopped = true;
         }
-        self.prune(|_| true, "Closing the SSH on exit");
+        self.prune(|_| true, "Close SSH connections on exit");
         self.0.changed.notify_waiters();
         if self.0.leases.load(Ordering::SeqCst) == 0 {
             let _ = std::fs::remove_dir(&self.0.root);
@@ -343,7 +343,7 @@ impl Pool {
         }
         drop(state);
         for entry in idle {
-            if self.retire(&entry, "SSH: recuperation") {
+            if self.retire(&entry, "Recover SSH connection") {
                 self.0.evicted.fetch_add(1, Ordering::Relaxed);
             }
         }
@@ -391,7 +391,7 @@ impl Pool {
         crate::inventory::validate_endpoint(endpoint)?;
         let result = tokio::time::timeout(Duration::from_secs(25), self.reserve(endpoint))
             .await
-            .map_err(|_| "Timeout waiting pool SSH".to_string())??;
+            .map_err(|_| "Timed out waiting for an SSH connection from the pool".to_string())??;
         result.ready().await?;
         Ok(result)
     }
@@ -474,7 +474,7 @@ impl Pool {
                 }
             }
             if let Some(entry) = retired {
-                if self.retire(&entry, "SSH: pooling") {
+                if self.retire(&entry, "Open pooled SSH connection") {
                     if eviction {
                         self.0.evicted.fetch_add(1, Ordering::Relaxed);
                     }
@@ -711,7 +711,7 @@ impl Lease {
         })
     }
     pub fn invalidate(&self) {
-        self.entry.close("SSH: linkage");
+        self.entry.close("Verify SSH connection");
         self.pool.0.changed.notify_waiters();
     }
 }
@@ -763,7 +763,7 @@ fn control(path: &Path, terminate: bool) -> Result<u32, String> {
         stream.read_exact(&mut size).map_err(|e| e.to_string())?;
         let size = u32::from_be_bytes(size) as usize;
         if !(4..=1024).contains(&size) || size % 4 != 0 {
-            return Err("The Incorrect SSH Mux Package".into());
+            return Err("Invalid SSH multiplexing packet".into());
         }
         let mut bytes = vec![0; size];
         stream.read_exact(&mut bytes).map_err(|e| e.to_string())?;
@@ -792,7 +792,7 @@ fn control(path: &Path, terminate: bool) -> Result<u32, String> {
     {
         return Ok(response[2]);
     }
-    Err("SSH mux rejects request".into())
+    Err("SSH multiplexing rejected the request".into())
 }
 
 #[cfg(test)]

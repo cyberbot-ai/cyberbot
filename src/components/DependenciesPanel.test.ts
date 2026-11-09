@@ -56,7 +56,7 @@ describe('server dependencies editor', () => {
     const w = mount(DependenciesPanel, { props: { serverId: 'web' } }); await flushPromises();
     mocks.call.mockRejectedValueOnce(new Error('The server is remote'));
     await w.get('input[value="cache"]').setValue(true); await flushPromises();
-    expect(w.get('[role="alert"]').text()).toContain('Links not maintained: The server is remote');
+    expect(w.get('[role="alert"]').text()).toContain('Unsaved dependencies: The server is remote');
     await flushPromises(); expect(writes()).toHaveLength(1);
     await w.get('button').trigger('click'); await flushPromises();
     expect(writes()).toHaveLength(2); expect(w.find('[role="alert"]').exists()).toBe(false);
@@ -66,7 +66,7 @@ describe('server dependencies editor', () => {
     mocks.call.mockRejectedValueOnce(new Error('I couldn’t read the database'));
     const w = mount(DependenciesPanel, { props: { serverId: 'web' } }); await flushPromises();
     expect(w.findAll('input[type="checkbox"]')).toHaveLength(0);
-    expect(w.get('[role="alert"]').text()).toContain('Couldn’t download the link');
+    expect(w.get('[role="alert"]').text()).toContain('Could not load dependencies');
     expect(w.text()).not.toContain('Add another one');
     await w.get('button').trigger('click'); await flushPromises();
     expect(w.findAll('input[type="checkbox"]')).toHaveLength(2); expect(writes()).toHaveLength(0); w.unmount();

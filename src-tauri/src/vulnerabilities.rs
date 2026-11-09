@@ -297,7 +297,7 @@ impl Store {
         clamp_offset: bool,
     ) -> Result<View> {
         if offset > 20000 {
-            return Err("Inadmissible page".into());
+            return Err("Invalid page".into());
         }
         let state = self.cached_package_state(id)?;
         let apt = self.apt_cached(id)?;
@@ -470,7 +470,7 @@ impl Store {
             || expected.len() != 64
             || !expected.bytes().all(|b| b.is_ascii_hexdigit())
         {
-            return Err("Incorrect parameters of vulnerability".into());
+            return Err("Invalid vulnerability parameters".into());
         }
         let mut db = self.0.lock().map_err(err)?;
         let tx = db.transaction().map_err(err)?;
@@ -590,7 +590,7 @@ impl Store {
         for f in unique.values() {
             let size = serde_json::to_vec(f).map_err(err)?.len();
             if size > 16384 {
-                return Err("Proof of CVE exceeds 16 KiB".into());
+                return Err("CVE evidence exceeds 16 KiB".into());
             }
             write_bytes += size;
         }
@@ -837,7 +837,7 @@ impl Store {
         let meta = state
             .metadata
             .as_ref()
-            .ok_or("Package composition not yet assembled")?;
+            .ok_or("Installed package scan is incomplete")?;
         let assessment = advisories::assess(
             self,
             root,
@@ -903,7 +903,7 @@ impl Store {
             .map(|s| serde_json::from_str(&s).map_err(err))
             .transpose()?
             .unwrap_or_default();
-        evaluation.error = Some("Comparison not completed; repeat after 5 minutes".into());
+        evaluation.error = Some("Package matching is incomplete. Try again in 5 minutes.".into());
         evaluation.fresh_until = 0;
         evaluation.retry_after = now() + 300;
         db.execute("INSERT INTO vulnerability_evaluations VALUES(?1,?2) ON CONFLICT(server_id) DO UPDATE SET payload=excluded.payload",params![id,serde_json::to_string(&evaluation).map_err(err)?]).map_err(err)?;

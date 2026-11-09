@@ -41,7 +41,7 @@ async fn inspect(
 ) -> Result<(String, BTreeMap<String, String>, Vec<PathBuf>), String> {
     let output = process::bounded("/usr/bin/ssh", &args, None, 10, 65536).await?;
     if !output.success {
-        return Err("Unable to fix OpenSSH settings".into());
+        return Err("Could not capture OpenSSH settings".into());
     }
     if output
         .stderr
@@ -120,7 +120,7 @@ pub async fn capture(endpoint: &Endpoint) -> Result<Stamp, String> {
                 .bytes()
                 .all(|c| c.is_ascii_alphanumeric() || b"._-:@[]".contains(&c))
         {
-            return Err("Dynamic or non-standard ProxyJump cannot be fixed".into());
+            return Err("Could not capture dynamic or nonstandard ProxyJump settings".into());
         }
         let tag = format!("jump:{jump}");
         if hashes.contains_key(&tag) {

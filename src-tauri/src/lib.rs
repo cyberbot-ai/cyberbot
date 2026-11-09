@@ -199,7 +199,7 @@ fn take_notification_target(
     window: tauri::WebviewWindow,
 ) -> Result<notifications::Target, String> {
     if window.label() != "main" {
-        return Err("Transition is only available in the main window".into());
+        return Err("Open this page from the main window".into());
     }
     notifications::take_target(&state.store)
 }
@@ -230,7 +230,7 @@ async fn pick_inventory_file(
             });
         receiver
             .await
-            .map_err(|_| "Failed to open file selection")?
+            .map_err(|_| "Could not open the file picker")?
             .map(|file| {
                 let path = file
                     .into_path()
@@ -326,7 +326,7 @@ async fn refresh_source(state: State<'_, Arc<AppState>>, id: String) -> Result<u
             .sources
             .into_iter()
             .find(|s| s.id == id)
-            .ok_or("No list of servers found")?;
+            .ok_or("Server list not found")?;
         match sync_source(&state, &source).await {
             Ok(n) => Ok(n),
             Err(e) => {
@@ -508,7 +508,7 @@ async fn diagnose(
         crate::activity::begin("app", "diagnose", crate::activity::id_target(&id));
     let _activity_result = (async {
         if kind != "logs" {
-            return Err("Unknown inspection".into());
+            return Err("Unknown check".into());
         }
         serde_json::to_value(logs::collect(state.inner().clone(), id).await?).map_err(err_string)
     })
@@ -762,7 +762,7 @@ fn decide_action(
     decision: String,
 ) -> Result<ai_actions::Request, String> {
     if window.label() != ai_actions::approval_label(&id)? {
-        return Err("Permission is issued only in the window of the corresponding request".into());
+        return Err("Approve the action in its request window".into());
     }
     let request = state.store.action_request(&id)?;
     let mut span = activity::begin_run(
@@ -972,7 +972,7 @@ async fn start_console_chat(
     chat_id: Option<String>,
 ) -> Result<String, String> {
     if window.label() != "main" {
-        return Err("Console dialogs are only available in the main window".into());
+        return Err("Fleet chats are available in the main window".into());
     }
     let mut span = activity::begin("app", "start_console_chat", None);
     let result = agents::start_fleet_chat(
@@ -1308,9 +1308,7 @@ impl InstanceLock {
             .open(root.join("instance.lock"))
             .map_err(|e| e.to_string())?;
         if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-            return Err(
-                "This vault has already been opened by another instance of Cyberbot".into(),
-            );
+            return Err("Another Cyberbot instance is using this data directory".into());
         }
         Ok(Self(file))
     }
@@ -1335,8 +1333,9 @@ fn create_state(root: PathBuf) -> Result<Arc<AppState>, String> {
     for run in &mut runs {
         if run.status == "running" {
             run.status = "interrupted".into();
-            run.error =
-                Some("Application terminated during AI start-up; automatic replay disabled".into());
+            run.error = Some(
+                "Cyberbot closed during the AI run. The run will not restart automatically.".into(),
+            );
             run.ended_at = Some(now());
             store.settle(run)?;
         }
@@ -2121,7 +2120,7 @@ pub fn run() {
             }
         })
         .build(tauri::generate_context!())
-        .expect("Cyberbot Launch Error");
+        .expect("Cyberbot could not start");
     app.run(|app, event| match event {
         tauri::RunEvent::ExitRequested { .. } => window_size::flush(app),
         tauri::RunEvent::Exit => {

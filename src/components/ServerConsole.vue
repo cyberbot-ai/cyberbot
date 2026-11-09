@@ -13,10 +13,10 @@ const error = ref('');
 const exitCode = ref<number | null>(null);
 const labels = {
   idle: 'Ready to connect',
-  connecting: 'SSH connection…',
+  connecting: 'Connecting via SSH…',
   connected: 'SSH connected',
   closing: 'Disconnecting…',
-  ended: 'Session concluded',
+  ended: 'Session ended',
 };
 
 type Size = { rows: number; cols: number };
@@ -72,7 +72,7 @@ function initTerminal(element: HTMLDivElement) {
   term.parser.registerOscHandler(52, () => true);
   term.parser.registerOscHandler(8, () => true);
   term.open(viewport);
-  term.textarea?.setAttribute('aria-label', 'SSH commands input');
+  term.textarea?.setAttribute('aria-label', 'SSH command input');
   term.attachCustomKeyEventHandler(event => {
     if (event.key === 'Escape' && event.type === 'keydown') {
       event.preventDefault();
@@ -140,7 +140,7 @@ function enqueueInput(data: Uint8Array) {
   const current = session;
   if (!current || phase.value !== 'connected' || !data.length) return;
   if (current.inputBytes + data.length > maxQueuedInput) {
-    error.value = 'The input is too large. Insert the text in smaller parts.';
+    error.value = 'Input is too large. Paste smaller chunks of text.';
     return;
   }
   error.value = '';

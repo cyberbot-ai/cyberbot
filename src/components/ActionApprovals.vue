@@ -21,16 +21,16 @@ const root = ref<HTMLElement>(), listTitle = ref<HTMLElement>(), backButton = re
 let listScroll = 0, listTrigger: HTMLButtonElement | undefined;
 
 const labels: Record<string, string> = {
-  proposed: 'Preparation', validating: 'Verification of restrictions', reviewing: 'Risk verification',
-  awaitingApproval: 'Waiting for permission', approved: 'Permitted', queued: 'In line',
+  proposed: 'Preparing', validating: 'Checking restrictions', reviewing: 'Risk review',
+  awaitingApproval: 'Awaiting approval', approved: 'Approved', queued: 'Queued',
   running: 'Running', succeeded: 'Completed', failed: 'Failed', denied: 'Denied',
-  cancelled: 'Cancelled', expired: 'The request expired', unknown: 'Results require verification',
-  rollbackRunning: 'Recoiling is being carried out', rolledBack: 'Pushback verified', rollbackUnknown: 'Pushback requires verification',
+  cancelled: 'Cancelled', expired: 'Request expired', unknown: 'Result unconfirmed',
+  rollbackRunning: 'Rolling back', rolledBack: 'Rolled back', rollbackUnknown: 'Rollback unconfirmed',
 };
 const activeStates = new Set(['proposed', 'validating', 'reviewing', 'awaitingApproval', 'approved', 'queued', 'running', 'rollbackRunning']);
 const reviewLabels = {
-  allow: 'Check passed', confirm: 'One-time authorization required',
-  deny: 'Action blocked', uncertain: 'The risk could not be assessed',
+  allow: 'Check passed', confirm: 'One-time approval required',
+  deny: 'Action blocked', uncertain: 'Risk assessment inconclusive',
 };
 const groups = computed(() => [
   { title: 'Awaiting decision', rows: cards.value.filter(r => r.state === 'awaitingApproval') },
@@ -71,27 +71,27 @@ const outcome = computed(() => {
   if (!request) return '';
   if (shellResult.value?.exitCode != null) {
     const { exitCode } = shellResult.value;
-    return exitCode === 0 ? 'Teams completed successfully (code).' : `Teams ended with a mistake (code ${exitCode}).`;
+    return exitCode === 0 ? 'Commands completed successfully (exit code 0).' : `Commands failed (exit code ${exitCode}).`;
   }
   switch (request.state) {
     case 'succeeded':
-      return serviceAction.value?.success ?? 'The action ended successfully.';
+      return serviceAction.value?.success ?? 'Action completed successfully.';
     case 'denied':
       return request.decision === 'deny' ? 'You denied the request.' : 'Risk check blocked the action.';
-    case 'expired': return 'The request expired.';
+    case 'expired': return 'Request expired.';
     case 'cancelled': return 'Request cancelled.';
     case 'unknown': return 'Cyberbot could not confirm the result.';
     case 'failed': return 'Action failed.';
-    case 'rollbackRunning': return 'Cyberbot restores the original configuration.';
+    case 'rollbackRunning': return 'Cyberbot is restoring the original configuration.';
     case 'rolledBack': return 'Original configuration restored and verified.';
     case 'rollbackUnknown': return 'Cyberbot could not confirm the result of the rollback.';
     default: return labels[request.state] ?? request.state;
   }
 });
 const codeTitle = computed(() => {
-  if (proposedAction.value?.kind !== 'shell') return 'Verification code (Python)';
-  if (shellResult.value?.exitCode != null || current.value?.state === 'succeeded') return 'Executed teams';
-  return planning.value ? 'Commands to launch' : 'Proposed teams';
+  if (proposedAction.value?.kind !== 'shell') return 'Python script';
+  if (shellResult.value?.exitCode != null || current.value?.state === 'succeeded') return 'Executed commands';
+  return planning.value ? 'Commands to run' : 'Proposed commands';
 });
 
 let timer: ReturnType<typeof setInterval> | undefined, off: UnlistenFn | undefined, disposed = false, sequence = 0;
@@ -102,7 +102,7 @@ async function detail(id: string, version: number) {
   const value = await call<ActionRequest>('action_request', { id });
   if (!isVisible() || version !== sequence || selected.value !== id) return;
   if (value.id !== id || (props.serverId && value.serverId !== props.serverId) || (props.runId && value.runId !== props.runId)) {
-    throw new Error('The request relates to another launch.');
+    throw new Error('This request belongs to a different AI run or server.');
   }
   current.value = value;
 }
@@ -112,7 +112,7 @@ async function load() {
   try {
     const value = await call<ActionCard[]>('action_requests', { runId: props.runId ?? null, serverId: props.serverId ?? null });
     if (!isVisible() || version !== sequence) return;
-    if (!Array.isArray(value)) throw new Error('I was unable to read the list of actions');
+    if (!Array.isArray(value)) throw new Error('Could not load the action list.');
     cards.value = value;
     loading.value = false;
     if (selected.value) await detail(selected.value, version);
@@ -206,16 +206,16 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <section v-if="!compact || cards.length || error || loadError" ref="root" class="actions" :class="{ compact, 'detail-page': !compact && selected }" aria-label="AI action">
+  <section v-if="!compact || cards.length || error || loadError" ref="root" class="actions" :class="{ compact, 'detail-page': !compact && selected }" aria-label="AI actions">
     <div v-if="!compact" v-show="!selected" class="action-list">
       <header class="list-header">
-        <h2 ref="listTitle" tabindex="-1">AI action</h2>
-        <p>AI offers action. Cyberbot executes it at your permission.</p>
+        <h2 ref="listTitle" tabindex="-1">AI actions</h2>
+        <p>Review actions proposed by AI. Cyberbot runs them after approval.</p>
       </header>
-      <p v-if="loading" class="muted" role="status">Download the action…</p>
+      <p v-if="loading" class="muted" role="status">Loading actions…</p>
       <div v-else-if="!cards.length && !loadError" class="empty">
-        <strong>No action yet</strong>
-        <p>There will be AI proposals for which permission is required.</p>
+        <strong>No actions yet</strong>
+        <p>Proposed actions that require approval will appear here.</p>
       </div>
       <section v-for="group in groups" :key="group.title" class="action-group">
         <h3>{{ group.title }} <span class="count">{{ group.rows.length }}</span></h3>
@@ -241,21 +241,21 @@ onUnmounted(() => {
           <span class="compact-goal">{{ r.goal }}</span>
           <span class="status" :class="r.state">{{ labels[r.state] ?? r.state }}</span>
         </button>
-        <button v-if="r.state === 'awaitingApproval'" type="button" class="primary" :disabled="busy || preview" @click="action('open_action_approval', { id: r.id })">Open the permit</button>
+        <button v-if="r.state === 'awaitingApproval'" type="button" class="primary" :disabled="busy || preview" @click="action('open_action_approval', { id: r.id })">Review request</button>
       </div>
     </div>
 
     <button v-if="!compact && selected" ref="backButton" type="button" class="back" @click="back">
-      <UiIcon name="arrow" :size="16"/> To the action list
+      <UiIcon name="arrow" :size="16"/> Back to actions
     </button>
     <p v-if="error" class="error" role="alert">{{ error }}</p>
     <div v-if="loadError" class="load-error">
       <p class="error" role="alert">{{ loadError }}</p>
-      <button type="button" :disabled="busy" @click="load">Repeat</button>
+      <button type="button" :disabled="busy" @click="load">Retry</button>
     </div>
-    <p v-if="selected && !current && !loadError" class="muted" role="status">Download the action…</p>
+    <p v-if="selected && !current && !loadError" class="muted" role="status">Loading action…</p>
 
-    <article v-if="current" :key="current.id" class="detail" aria-label="Details of action">
+    <article v-if="current" :key="current.id" class="detail" aria-label="Action details">
       <header class="detail-header">
         <div class="detail-meta">
           <span class="status" :class="current.state" role="status">{{ labels[current.state] ?? current.state }}</span>
@@ -264,20 +264,20 @@ onUnmounted(() => {
         <component :is="compact ? 'h3' : 'h2'">{{ current.artifact.spec.goal }}</component>
       </header>
       <dl class="facts">
-        <div><dt>Proposed</dt><dd>{{ author }}</dd></div>
+        <div><dt>Proposed by</dt><dd>{{ author }}</dd></div>
         <div><dt>Server</dt><dd><ServerLink :id="current.serverId" :address="capturedAddress" captured/></dd></div>
       </dl>
 
       <section class="impact">
-        <h3>{{ planning ? proposedAction?.kind === 'diagnostic' ? 'What Cyberbot will test' : 'What’s gonna change' : 'What happened' }}</h3>
+        <h3>{{ planning ? proposedAction?.kind === 'diagnostic' ? 'What Cyberbot will calculate' : 'What will change' : 'What happened' }}</h3>
         <template v-if="planning">
-          <p v-if="proposedAction?.kind === 'diagnostic'">Cyberbot will calculate the result from the generated data. The code is blocked from accessing files, the network and running processes.</p>
+          <p v-if="proposedAction?.kind === 'diagnostic'">Cyberbot will calculate the result from the prepared data. The script runs without file access, networking, or process creation.</p>
           <p v-else-if="serviceAction">{{ serviceAction.impact }}</p>
-          <p v-else-if="!current.review?.verdict.effects.length">Cyberbot will execute commands below on the specified server.</p>
+          <p v-else-if="!current.review?.verdict.effects.length">Cyberbot will run the commands below on the specified server.</p>
           <ul v-if="current.review?.verdict.effects.length" class="effect-list">
             <li v-for="(effect, index) in current.review.verdict.effects" :key="index">{{ effect }}</li>
           </ul>
-          <div v-if="current.artifact.prepared.before" class="diff" aria-label="Change of configuration">
+          <div v-if="current.artifact.prepared.before" class="diff" aria-label="Configuration change">
             <code class="before">− {{ current.artifact.prepared.before }}</code>
             <code class="after">+ {{ current.artifact.prepared.after }}</code>
           </div>
@@ -288,22 +288,22 @@ onUnmounted(() => {
       <p v-if="proposedAction?.kind === 'shell' && (planning || shellResult)" class="risk">
         <UiIcon name="incident" :size="15"/>
         <span>
-          {{ planning ? 'Launch' : 'Teams launched' }} SSH
-          <template v-if="shellUser">on behalf <code>{{ shellUser }}</code></template>.
+          {{ planning ? 'Runs over SSH' : 'Ran over SSH' }}
+          <template v-if="shellUser">as <code>{{ shellUser }}</code></template>.
         </span>
       </p>
 
       <div class="detail-sections">
         <details v-if="resultValue !== undefined" class="output">
-          <summary>{{ shellResult ? 'Command output' : 'Outcome of implementation' }}</summary>
+          <summary>{{ shellResult ? 'Command output' : 'Action result' }}</summary>
           <template v-if="shellResult">
             <pre v-if="shellResult.stdout">{{ shellResult.stdout }}</pre>
             <template v-if="shellResult.stderr">
-              <p class="muted">Error stream (stderr)</p>
+              <p class="muted">Standard error (stderr)</p>
               <pre>{{ shellResult.stderr }}</pre>
             </template>
-            <p v-if="!shellResult.stdout && !shellResult.stderr" class="muted">Teams did not return text output.</p>
-            <p v-if="shellResult.truncated" class="muted">Output truncated to the storage limit.</p>
+            <p v-if="!shellResult.stdout && !shellResult.stderr" class="muted">The commands produced no output.</p>
+            <p v-if="shellResult.truncated" class="muted">Output was truncated at the storage limit.</p>
           </template>
           <pre v-else>{{ JSON.stringify(resultValue, null, 2) }}</pre>
         </details>
@@ -312,40 +312,40 @@ onUnmounted(() => {
           <pre>{{ current.artifact.spec.code }}</pre>
         </details>
         <details>
-          <summary>Risk verification and parameters</summary>
+          <summary>Risk review and parameters</summary>
           <template v-if="current.review">
-            <p><strong>{{ reviewLabels[current.review.verdict.decision] }}</strong> · {{ current.review.model ?? current.artifact.profile.low.model }} · {{ current.review.tokens.toLocaleString('en-US') }} token</p>
+            <p><strong>{{ reviewLabels[current.review.verdict.decision] }}</strong> · {{ current.review.model ?? current.artifact.profile.low.model }} · {{ current.review.tokens.toLocaleString('en-US') }} tokens</p>
             <p>{{ current.review.verdict.explanation }}</p>
             <ul v-if="!planning && current.review.verdict.effects.length" class="effect-list">
               <li v-for="(effect, index) in current.review.verdict.effects" :key="index">{{ effect }}</li>
             </ul>
           </template>
-          <p v-if="current.decision === 'once'">You only allowed this action.</p>
-          <p v-else-if="current.decision === 'session'">You’ve authorized action as part of this AI launch.</p>
-          <p v-if="current.artifactHash">Hash of code and parameters <code>{{ current.artifactHash }}</code></p>
-          <p v-if="scope.length">Permission servers</p>
+          <p v-if="current.decision === 'once'">You approved this action once.</p>
+          <p v-else-if="current.decision === 'session'">You approved actions for this AI run.</p>
+          <p v-if="current.artifactHash">Code and parameter hash <code>{{ current.artifactHash }}</code></p>
+          <p v-if="scope.length">Servers in scope</p>
           <ul v-if="scope.length"><li v-for="target in scope" :key="target.id"><ServerLink :id="target.id" :address="target.address" captured/></li></ul>
-          <details><summary>Input data and implementation limitations</summary><pre>{{ JSON.stringify({ inputs: current.artifact.inputs, isolation: current.artifact.isolation }, null, 2) }}</pre></details>
-          <details v-if="serviceAction?.rollback && current.artifact.spec.rollbackPlan"><summary>An AI recovery plan</summary><p>{{ current.artifact.spec.rollbackPlan }}</p></details>
-          <details v-if="current.artifact.prepared.before && !planning"><summary>Change of configuration</summary>
+          <details><summary>Inputs and execution limits</summary><pre>{{ JSON.stringify({ inputs: current.artifact.inputs, isolation: current.artifact.isolation }, null, 2) }}</pre></details>
+          <details v-if="serviceAction?.rollback && current.artifact.spec.rollbackPlan"><summary>Proposed rollback plan</summary><p>{{ current.artifact.spec.rollbackPlan }}</p></details>
+          <details v-if="current.artifact.prepared.before && !planning"><summary>Configuration change</summary>
             <div class="diff"><code class="before">− {{ current.artifact.prepared.before }}</code><code class="after">+ {{ current.artifact.prepared.after }}</code></div>
           </details>
-          <details v-if="current.result"><summary>Full result of implementation</summary><pre>{{ JSON.stringify(current.result, null, 2) }}</pre></details>
+          <details v-if="current.result"><summary>Full action result</summary><pre>{{ JSON.stringify(current.result, null, 2) }}</pre></details>
         </details>
       </div>
 
       <div v-if="waiting" class="approval">
         <button type="button" class="primary" :disabled="busy || preview" @click="action('open_action_approval', { id: current.id })">
-          Open the permission window <UiIcon name="external" :size="14"/>
+          Review request <UiIcon name="external" :size="14"/>
         </button>
-        <p v-if="current.review?.verdict.decision === 'confirm'">In the window, you can allow the launch once or reject the request.</p>
-        <p v-else>In the window you can check the details and decide whether to allow the launch.</p>
+        <p v-if="current.review?.verdict.decision === 'confirm'">You can approve this action once or decline it.</p>
+        <p v-else>Review the details before deciding whether to approve this action.</p>
       </div>
       <div v-else class="controls">
-        <button v-if="selectedCard?.sessionGranted" type="button" :disabled="busy || preview" @click="action('revoke_action_grant', { runId: current.runId })">Withdrawal of launch authorization</button>
-        <button v-if="activeStates.has(current.state)" type="button" :disabled="busy || preview" @click="action('cancel_action', { id: current.id })">Cancel the request</button>
-        <button v-if="current.state === 'unknown' || current.state === 'rollbackUnknown'" type="button" :disabled="busy || preview" @click="action('refresh_action_result', { id: current.id })">Check the saved result</button>
-        <button v-if="rollbackAvailable" type="button" :disabled="busy || preview" @click="action('rollback_action', { id: current.id, artifactHash: current.artifactHash })">Restoring the original configuration</button>
+        <button v-if="selectedCard?.sessionGranted" type="button" :disabled="busy || preview" @click="action('revoke_action_grant', { runId: current.runId })">Revoke approval for this run</button>
+        <button v-if="activeStates.has(current.state)" type="button" :disabled="busy || preview" @click="action('cancel_action', { id: current.id })">Cancel request</button>
+        <button v-if="current.state === 'unknown' || current.state === 'rollbackUnknown'" type="button" :disabled="busy || preview" @click="action('refresh_action_result', { id: current.id })">Check saved result</button>
+        <button v-if="rollbackAvailable" type="button" :disabled="busy || preview" @click="action('rollback_action', { id: current.id, artifactHash: current.artifactHash })">Restore original configuration</button>
       </div>
     </article>
   </section>

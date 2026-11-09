@@ -271,7 +271,7 @@ mod macos {
     pub(crate) async fn sample() -> Result<Sample, String> {
         let _guard = SAMPLING
             .try_lock()
-            .map_err(|_| "Measurement of resources is already under way")?;
+            .map_err(|_| "Resource measurement is already in progress")?;
         let root = std::process::id();
         let before = snapshot(root, &crate::ssh_pool::resource_masters());
         if !before.contains_key(&root) {

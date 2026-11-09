@@ -225,24 +225,26 @@ impl Settings {
     }
     pub fn validate(&self) -> Result<(), String> {
         if !["manual", "auto"].contains(&self.mode.as_str()) {
-            return Err("Unknown regime".into());
+            return Err("Unknown automation mode".into());
         }
         if !["codex", "claude"].contains(&self.auto_agent.as_str()) {
             return Err("Choose Codex or Claude".into());
         }
         // Match the integer precision of the JavaScript settings API.
         if self.run_token_limit > (1u64 << 53) - 1 {
-            return Err("The budget of a single launch should be an integer that can be saved without losing accuracy.".into());
+            return Err(
+                "Enter a whole number of tokens per run within the supported range.".into(),
+            );
         }
         if self.daily_runs_cap().is_some_and(|v| v > 1000)
             || self
                 .daily_tokens_cap()
                 .is_some_and(|v| !(1_000..=1_000_000_000).contains(&v))
         {
-            return Err("Specify 0 without limit, 1 to 1,000 launches per day or 1,000 to 1,000,000 tokens per day.".into());
+            return Err("Enter 1 to 1,000 runs per day or 1,000 to 1,000,000 tokens per day. Set either limit to 0 for no limit.".into());
         }
         if !(60..=86400).contains(&self.log_poll_seconds) {
-            return Err("Lounge interval: 60–86400 seconds".into());
+            return Err("Enter a log check interval from 60 to 86,400 seconds.".into());
         }
         if !(30..=86400).contains(&self.poll_seconds) || !(1..=16).contains(&self.concurrency) {
             return Err("Interval: 30–86400 seconds; parallelism: 1–16".into());

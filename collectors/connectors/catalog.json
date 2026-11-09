@@ -20,7 +20,7 @@
       },
       {
         "key": "connectionUsage",
-        "label": "Employment of compounds",
+        "label": "Connection usage",
         "unit": "percent",
         "rule": {
           "threshold": 90,
@@ -30,12 +30,12 @@
       },
       {
         "key": "active",
-        "label": "Active requests",
+        "label": "Active queries",
         "unit": "count"
       },
       {
         "key": "longQueries",
-        "label": "Requests longer than 60s",
+        "label": "Queries running longer than 60 s",
         "unit": "count",
         "rule": {
           "threshold": 1,
@@ -45,17 +45,17 @@
       },
       {
         "key": "longestQuery",
-        "label": "Longest request",
+        "label": "Longest query",
         "unit": "seconds"
       },
       {
         "key": "blocked",
-        "label": "Expecting InnoDB Transactions",
+        "label": "Waiting InnoDB transactions",
         "unit": "count"
       },
       {
         "key": "lockWait",
-        "label": "Waiting for lockdown",
+        "label": "Lock waits",
         "unit": "seconds",
         "rule": {
           "threshold": 30,
@@ -75,7 +75,7 @@
       },
       {
         "key": "slowQueries",
-        "label": "Slow requests",
+        "label": "Slow queries",
         "unit": "counter",
         "rule": {
           "threshold": 20,
@@ -85,7 +85,7 @@
       },
       {
         "key": "slowThreshold",
-        "label": "The slow query threshold",
+        "label": "Slow query threshold",
         "unit": "seconds"
       },
       {
@@ -115,7 +115,7 @@
       },
       {
         "key": "replicationStopped",
-        "label": "Shut down channels",
+        "label": "Stopped replication channels",
         "unit": "count",
         "rule": {
           "threshold": 1,
@@ -125,7 +125,7 @@
       },
       {
         "key": "replicationErrors",
-        "label": "Error channels",
+        "label": "Replication channels with errors",
         "unit": "count",
         "rule": {
           "threshold": 1,
@@ -135,7 +135,7 @@
       },
       {
         "key": "replicationLag",
-        "label": "Delayed replication",
+        "label": "Replication lag",
         "unit": "seconds",
         "rule": {
           "threshold": 60,
@@ -145,12 +145,12 @@
       },
       {
         "key": "replicationUnknown",
-        "label": "Channels with unknown/determined delay",
+        "label": "Channels with unknown replication lag",
         "unit": "count"
       },
       {
         "key": "bufferPoolUsed",
-        "label": "Employment of buffer pool",
+        "label": "Buffer pool usage",
         "unit": "percent"
       },
       {
@@ -160,7 +160,7 @@
       },
       {
         "key": "bufferPoolWaits",
-        "label": "Expectations of a free page",
+        "label": "Waits for free buffer pages",
         "unit": "counter",
         "rule": {
           "threshold": 1,
@@ -180,7 +180,7 @@
       },
       {
         "key": "uptimeFlush",
-        "label": "Seconds since the counters were reset",
+        "label": "Seconds since counters were reset",
         "unit": "seconds"
       }
     ],
@@ -220,7 +220,7 @@
       },
       {
         "key": "blocked",
-        "label": "Blocked customers",
+        "label": "Blocked clients",
         "unit": "count",
         "rule": {
           "threshold": 1,
@@ -240,7 +240,7 @@
       },
       {
         "key": "memoryUsage",
-        "label": "Use of the limit",
+        "label": "Memory limit usage",
         "unit": "%",
         "rule": {
           "threshold": 90,
@@ -250,7 +250,7 @@
       },
       {
         "key": "evictions",
-        "label": "Repression",
+        "label": "Evictions",
         "unit": "counter",
         "rule": {
           "threshold": 20,
@@ -270,17 +270,17 @@
       },
       {
         "key": "commands",
-        "label": "Teams",
+        "label": "Commands",
         "unit": "counter"
       },
       {
         "key": "replicas",
-        "label": "Remarks",
+        "label": "Replicas",
         "unit": "count"
       },
       {
         "key": "persistenceErrors",
-        "label": "Conservation errors",
+        "label": "Persistence errors",
         "unit": "count",
         "rule": {
           "threshold": 1,
@@ -300,7 +300,7 @@
       },
       {
         "key": "missingPeers",
-        "label": "Missing lines",
+        "label": "Missing expected replicas",
         "unit": "count",
         "rule": {
           "threshold": 1,
@@ -363,7 +363,7 @@
       },
       {
         "key": "connectionUsage",
-        "label": "Use of connections",
+        "label": "Connection usage",
         "unit": "%",
         "rule": {
           "threshold": 90,
@@ -378,7 +378,7 @@
       },
       {
         "key": "queued",
-        "label": "Waiting for lockdowns",
+        "label": "Queued operations",
         "unit": "count",
         "rule": {
           "threshold": 5,
@@ -398,7 +398,7 @@
       },
       {
         "key": "replicationLag",
-        "label": "Optime backlog",
+        "label": "Replication lag",
         "unit": "s",
         "rule": {
           "threshold": 60,
@@ -408,7 +408,7 @@
       },
       {
         "key": "missingPeers",
-        "label": "Missing participants",
+        "label": "Missing expected replica set members",
         "unit": "count",
         "rule": {
           "threshold": 1,
@@ -442,7 +442,7 @@
     "metrics": [
       {
         "key": "running",
-        "label": "Working",
+        "label": "Running",
         "unit": "count"
       },
       {
@@ -452,7 +452,7 @@
       },
       {
         "key": "paused",
-        "label": "Suspended",
+        "label": "Paused",
         "unit": "count"
       },
       {
@@ -462,7 +462,7 @@
       },
       {
         "key": "unhealthy",
-        "label": "Not pass healthcheck",
+        "label": "Failing health checks",
         "unit": "count",
         "rule": {
           "threshold": 1,
@@ -472,7 +472,7 @@
       },
       {
         "key": "restarting",
-        "label": "Relaunch",
+        "label": "Restarting",
         "unit": "count",
         "rule": {
           "threshold": 1,
@@ -482,7 +482,7 @@
       },
       {
         "key": "dead",
-        "label": "Emergency containers",
+        "label": "Dead containers",
         "unit": "count",
         "rule": {
           "threshold": 1,
@@ -522,7 +522,7 @@
     "metrics": [
       {
         "key": "queue",
-        "label": "Queueue of requests",
+        "label": "Request queue",
         "unit": "count",
         "rule": {
           "threshold": 5,
@@ -532,12 +532,12 @@
       },
       {
         "key": "active",
-        "label": "Occupied processes",
+        "label": "Active processes",
         "unit": "count"
       },
       {
         "key": "idle",
-        "label": "Free processes",
+        "label": "Idle processes",
         "unit": "count"
       },
       {
@@ -552,7 +552,7 @@
       },
       {
         "key": "maxChildren",
-        "label": "Reach max_children",
+        "label": "Times max_children was reached",
         "unit": "counter",
         "rule": {
           "threshold": 1,
@@ -604,12 +604,12 @@
       },
       {
         "key": "processed",
-        "label": "Call processing",
+        "label": "Calls processed",
         "unit": "counter"
       },
       {
         "key": "registrationErrors",
-        "label": "Errors of PJSIP registration",
+        "label": "PJSIP registration errors",
         "unit": "count",
         "rule": {
           "threshold": 1,
@@ -642,12 +642,12 @@
     "metrics": [
       {
         "key": "queries",
-        "label": "Active requests",
+        "label": "Active queries",
         "unit": "count"
       },
       {
         "key": "longQueries",
-        "label": "Requests longer than 60s",
+        "label": "Queries running longer than 60 s",
         "unit": "count",
         "rule": {
           "threshold": 1,
@@ -657,17 +657,17 @@
       },
       {
         "key": "queryMemory",
-        "label": "Memory of requests",
+        "label": "Query memory usage",
         "unit": "bytes"
       },
       {
         "key": "replicaTables",
-        "label": "Replicable tables",
+        "label": "Replicated tables",
         "unit": "count"
       },
       {
         "key": "replicationErrors",
-        "label": "Readonly / expired replicas",
+        "label": "Read-only or expired replicas",
         "unit": "count",
         "rule": {
           "threshold": 1,
@@ -677,7 +677,7 @@
       },
       {
         "key": "replicationLag",
-        "label": "Delayed replication",
+        "label": "Replication lag",
         "unit": "s",
         "rule": {
           "threshold": 60,
@@ -697,12 +697,12 @@
       },
       {
         "key": "pendingMutations",
-        "label": "Expecting mutations",
+        "label": "Pending mutations",
         "unit": "count"
       },
       {
         "key": "failedMutations",
-        "label": "Mistakes of mutations",
+        "label": "Failed mutations",
         "unit": "count",
         "rule": {
           "threshold": 1,
@@ -771,7 +771,7 @@
       },
       {
         "key": "underreplicatedRanges",
-        "label": "Not enough ranges replicas",
+        "label": "Under-replicated ranges",
         "unit": "count",
         "rule": {
           "threshold": 1,
@@ -803,7 +803,7 @@
     "endpoints": [],
     "port": 80,
     "credentials": "none",
-    "rights": "Existing access/error log and local stub_status. no configuration changes; native read positions and server aggregation.",
+    "rights": "Reads existing access and error logs and local stub_status. Tracks log positions and aggregates data on the server.",
     "metrics": [],
     "python": "nginx",
     "multiple": false,
@@ -819,11 +819,11 @@
     "scopeInstances": false,
     "legacyLogInterval": true,
     "monitoring": {
-      "purpose": "RPS, response codes, upstream and delays when data is available",
-      "reads": "Available status and configuration of Nginx to search for format/logs; access/error logs on the server",
-      "commands": "python3 -I <collector>; A local HTTP request to an already available stub_status",
-      "rights": "Reading rights to existing configurations/logs; status not included in the annex",
-      "limits": "Answer up to 32 KiB, limited units; Nginx configuration unchanged",
+      "purpose": "Requests per second, response codes, upstream errors, and latency where available",
+      "reads": "Existing Nginx status and configuration, plus access and error logs on the server",
+      "commands": "python3 -I <collector> and a local HTTP request to the existing stub_status endpoint",
+      "rights": "Read access to existing configuration and logs. Cyberbot uses stub_status if already enabled.",
+      "limits": "Response limited to 32 KiB. Nginx configuration stays unchanged.",
       "schedule": "Log analysis interval"
     },
     "factoryInterval": 600,
@@ -839,7 +839,7 @@
     "mutationKind": "nginx_workers",
     "actionPresentation": "NginxAction",
     "activityLabels": {
-      "nginx.collect": "Nginx Diagnostics"
+      "nginx.collect": "Nginx diagnostics"
     }
   },
   "postgresql": {
@@ -860,7 +860,7 @@
     ],
     "port": 5432,
     "credentials": "pgpass",
-    "rights": "CONNECT, pg_read_all_stats; existing peer/.pgpass. PostgreSQL Typed Advanced Diagnostics.",
+    "rights": "CONNECT, pg_read_all_stats; existing peer/.pgpass. PostgreSQL diagnostics use fixed queries.",
     "metrics": [],
     "python": "postgresql",
     "multiple": true,
@@ -875,11 +875,11 @@
     "unixSocketName": ".s.PGSQL.{port}",
     "hideUnits": true,
     "monitoring": {
-      "purpose": "Connections, locks, long-term requests, and replication",
-      "reads": "System catalogs/statistics; table contents and query texts are not transmitted",
+      "purpose": "Connections, locks, long-running queries, and replication",
+      "reads": "System catalogs and statistics. Table contents and query text stay on the server.",
       "commands": "psql -X: fixed read-only PG_META/PG_STATS; full SQL in source",
-      "rights": "Connecting an existing role; full statistics require pg_read_all_stats/pg_monitor",
-      "limits": "Answer up to 32 KiB; statement timeout; unknown data is not considered zeros",
+      "rights": "Connects with an existing role. Full statistics require pg_read_all_stats or pg_monitor.",
+      "limits": "Response limited to 32 KiB with a statement timeout. Missing values are reported as unknown.",
       "schedule": "Every 3 minutes"
     },
     "profileDefaults": {
@@ -912,7 +912,7 @@
       },
       {
         "key": "waitingClients",
-        "label": "Waiting customers",
+        "label": "Waiting clients",
         "unit": "count"
       },
       {
@@ -970,7 +970,7 @@
       },
       {
         "key": "slowQueries",
-        "label": "Slow requests",
+        "label": "Slow queries",
         "unit": "counter"
       }
     ],
@@ -1007,7 +1007,7 @@
       },
       {
         "key": "forwardErrors",
-        "label": "Transfer errors",
+        "label": "Forwarding errors",
         "unit": "counter"
       },
       {
@@ -1055,12 +1055,12 @@
       },
       {
         "key": "upstreamConnections",
-        "label": "Connections to upstream",
+        "label": "Upstream connections",
         "unit": "count"
       },
       {
         "key": "memory",
-        "label": "Dedicated memory",
+        "label": "Allocated memory",
         "unit": "bytes"
       }
     ],
@@ -1102,7 +1102,7 @@
       },
       {
         "key": "restResponses",
-        "label": "Replies to REST",
+        "label": "REST responses",
         "unit": "counter"
       },
       {
@@ -1138,7 +1138,7 @@
     "metrics": [
       {
         "key": "processUptime",
-        "label": "Time of the process",
+        "label": "Process uptime",
         "unit": "seconds"
       },
       {
@@ -1174,17 +1174,17 @@
     "metrics": [
       {
         "key": "jails",
-        "label": "Jail",
+        "label": "Jails",
         "unit": "count"
       },
       {
         "key": "currentlyBanned",
-        "label": "Existing lockdowns",
+        "label": "Current bans",
         "unit": "count"
       },
       {
         "key": "totalBanned",
-        "label": "Blocking everything",
+        "label": "Total bans",
         "unit": "counter"
       }
     ],
@@ -1221,7 +1221,7 @@
       },
       {
         "key": "goroutines",
-        "label": "Goroutine",
+        "label": "Goroutines",
         "unit": "count"
       }
     ],

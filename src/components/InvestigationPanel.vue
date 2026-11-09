@@ -46,9 +46,9 @@ const chats = computed(() => {
     const id = run.chat?.id ?? run.id;
     let chat = groups.get(id);
     if (!chat) {
-      const title = run.chat?.title ?? (run.groupId ? 'Diagnostics of the server group' :
-        run.origin === 'auto' ? 'Automatic diagnostics' : run.question.trim().replace(/\s+/g, ' ').slice(0, 80));
-      chat = { id, title: title || 'Dialogue with AI', turns: [] };
+      const title = run.chat?.title ?? (run.groupId ? 'Incident group investigation' :
+        run.origin === 'auto' ? 'Automatic investigation' : run.question.trim().replace(/\s+/g, ' ').slice(0, 80));
+      chat = { id, title: title || 'AI chat', turns: [] };
       groups.set(id, chat);
     }
     chat.turns.push(run);
@@ -76,8 +76,8 @@ const question = computed({
 const canSend = computed(() => ready.value && !preview && !sending.value && !running.value &&
   !readOnly.value && !scopeChanged.value && validTargets.value && Boolean(question.value.trim()));
 const labels: Record<string, string> = {
-  running: 'AI responds…', failed: 'Response interrupted', cancelled: 'Response stopped',
-  interrupted: 'Response interrupted at exit', budget_exceeded: 'Token Limit Reached',
+  running: 'AI is responding…', failed: 'Response interrupted', cancelled: 'Response stopped',
+  interrupted: 'Response interrupted when the app closed', budget_exceeded: 'Token limit reached',
 };
 
 let unlisten: UnlistenFn | undefined;
@@ -254,29 +254,29 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <section class="investigation" aria-label="Conversations with AI">
+  <section class="investigation" aria-label="AI chats">
     <template v-if="loaded && ready">
-      <ServerTabBar title="Conversations with AI" :busy="refreshing" @refresh="refresh">
+      <ServerTabBar title="AI chats" :busy="refreshing" @refresh="refresh">
         <span v-if="fleet">Servers · {{ targetCount }}</span>
         <RelativeDate v-if="latest" :at="latest.endedAt ?? latest.startedAt"/>
-        <span v-else>New dialogue</span>
+        <span v-else>New chat</span>
       </ServerTabBar>
       <div class="chat-layout">
         <aside class="sidebar">
-          <button type="button" class="new-chat" :disabled="sending" @click="newChat"><UiIcon name="plus" :size="15"/>New dialogue</button>
-          <nav class="chat-list" aria-label="History of dialogues">
+          <button type="button" class="new-chat" :disabled="sending" @click="newChat"><UiIcon name="plus" :size="15"/>New chat</button>
+          <nav class="chat-list" aria-label="Chat history">
             <button v-for="chat in chats" :key="chat.id" type="button" class="chat-link" :disabled="sending"
               :aria-current="selected===chat.id ? 'true' : undefined" :title="chat.title" @click="select(chat.id)">
               {{ chat.title }}<small v-if="fleet" class="chat-count">{{ chat.turns[0]?.serverIds.length }}</small>
             </button>
-            <p v-if="!chats.length" class="empty-list">This is where your dialogue will come in.</p>
+            <p v-if="!chats.length" class="empty-list">Your chats will appear here.</p>
           </nav>
         </aside>
 
         <div class="conversation">
-          <div ref="messages" class="messages" aria-label="Correspondence" @scroll.passive="onScroll">
+          <div ref="messages" class="messages" aria-label="Conversation" @scroll.passive="onScroll">
             <div v-if="!current" class="welcome">
-              <h3>{{ fleet ? 'How to help with servers?' : 'How to help with the server?' }}</h3>
+              <h3>{{ fleet ? 'How can I help with these servers?' : 'How can I help with this server?' }}</h3>
               <p>{{ fleet ? 'Ask a question about the selected servers or describe the task.' : 'Ask a question about the status of the server or describe the task.' }}</p>
             </div>
             <div v-else class="transcript">
@@ -286,12 +286,12 @@ onUnmounted(() => {
                   <div class="speaker">
                     <strong>{{ turn.agent === 'claude' ? 'Claude Code' : 'Codex' }}</strong>
                     <details v-if="turn.audit.length || turn.modelProfile || turn.usage" class="turn-details">
-                      <summary aria-label="Details of response" title="Details of response"><UiIcon name="info" :size="14"/></summary>
+                      <summary aria-label="Response details" title="Response details"><UiIcon name="info" :size="14"/></summary>
                       <div class="turn-details-panel">
                         <p v-if="turn.modelProfile">{{ turn.modelProfile.alias }} · {{ turn.actualModel ?? turn.modelProfile.primary.model }}</p>
-                        <ul v-if="turn.audit.length"><li v-for="(item, i) in turn.audit" :key="i"><code>{{ item.tool }}</code> · {{ item.ok ? 'accomplished' : 'mistake/failure' }}</li></ul>
+                        <ul v-if="turn.audit.length"><li v-for="(item, i) in turn.audit" :key="i"><code>{{ item.tool }}</code> · {{ item.ok ? 'Succeeded' : 'Failed' }}</li></ul>
                         <pre v-if="turn.usage && Object.keys(turn.usage).length">{{ JSON.stringify(turn.usage, null, 2) }}</pre>
-                        <p v-if="!turn.usageComplete">CLI passed incomplete information about the consumption of tokens.</p>
+                        <p v-if="!turn.usageComplete">The CLI reported incomplete token usage.</p>
                       </div>
                     </details>
                   </div>
@@ -305,25 +305,25 @@ onUnmounted(() => {
           </div>
           <div class="composer-area">
             <div v-if="scopeChanged" class="scope-note">
-              <span>{{ missingTargets ? 'Some dialog servers are no longer available. Start a new dialog.' : 'Selected servers are different from the servers of this dialog.' }}</span>
+              <span>{{ missingTargets ? 'Some servers in this chat are no longer available. Start a new chat.' : 'This chat uses a different set of servers.' }}</span>
               <button v-if="!missingTargets" type="button" :disabled="sending"
-                @click="latest && emit('useServers', [...latest.serverIds])">Use dialogue servers</button>
+                @click="latest && emit('useServers', [...latest.serverIds])">Use servers from this chat</button>
             </div>
             <p v-else-if="fleet && !validTargets" class="busy-note">Choose from 1 to 500 servers.</p>
             <p v-if="error" class="error" role="alert">{{ error }}</p>
             <form v-if="!readOnly" class="composer" @submit.prevent="send">
               <textarea ref="input" v-model="question" rows="2" maxlength="4000" :disabled="sending || scopeChanged || !validTargets"
-                placeholder="Write a message" aria-label="Message for AI" @keydown="composerKey"/>
+                placeholder="Write a message" aria-label="Message to AI" @keydown="composerKey"/>
               <div class="composer-actions">
                 <UiSelect v-model="modelAlias" compact aria-label="Model" :disabled="sending||running">
                   <option value="low">low</option><option value="medium">medium</option><option value="high">high</option>
                 </UiSelect>
                 <button v-if="latest?.status==='running'" type="button" @click="cancel">Stop it</button>
-                <button v-else type="submit" class="primary" :disabled="!canSend">Send a message</button>
+                <button v-else type="submit" class="primary" :disabled="!canSend">Send message</button>
               </div>
               <div v-if="running && activeRun?.id!==latest?.id" class="scope-note busy-session">
-                <span>AI is already busy with another task. A draft can be sent when it is complete.</span>
-                <button type="button" @click="cancel">Stop the current task</button>
+                <span>The agent is busy with another task. Send your draft when that task finishes.</span>
+                <button type="button" @click="cancel">Stop current task</button>
               </div>
             </form>
             <div v-else-if="running" class="read-only-actions"><button type="button" @click="cancel">Stop it</button></div>
@@ -332,11 +332,11 @@ onUnmounted(() => {
       </div>
     </template>
     <div v-else class="setup">
-      <template v-if="!loaded"><p role="status">Checking the AI settings…</p></template>
+      <template v-if="!loaded"><p role="status">Checking AI settings…</p></template>
       <template v-else>
-        <h3>Connect the AI agent</h3>
-        <p>{{ agent?.reason || error || 'Select and configure an agent to start a dialogue.' }}</p>
-        <button type="button" class="primary" @click="emit('aiSettings')">Go to the AI settings</button>
+        <h3>Set up an AI agent</h3>
+        <p>{{ agent?.reason || error || 'Select and configure an agent to start a chat.' }}</p>
+        <button type="button" class="primary" @click="emit('aiSettings')">Open AI settings</button>
       </template>
     </div>
   </section>

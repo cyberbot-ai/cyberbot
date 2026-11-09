@@ -590,7 +590,7 @@ pub(crate) async fn call(scope: &Scope, name: &str, args: Value) -> Result<Value
         let check = scope
             .authoring
             .as_ref()
-            .ok_or("Creation is available only with a separate start of the preparation of the verification")?;
+            .ok_or("Start an AI run from the check editor to draft a check")?;
         for id in scope.targets.keys() {
             target(scope, id)?;
         }
@@ -604,7 +604,7 @@ pub(crate) async fn call(scope: &Scope, name: &str, args: Value) -> Result<Value
                 .definitions
                 .iter()
                 .find(|d| d.id == *check)
-                .ok_or("Verification removed")?;
+                .ok_or("Check removed")?;
             return Ok(
                 json!({"latestDraft":definition.versions.first(),"checkId":check,"engine":crate::check_engine::ENGINE,"fields":crate::check_engine::fields(),"example":crate::check_engine::example(),"grammar":{"number":"{op:field,name} | {op:constant,value} | {op:add|sub|mul|div,left:Number,right:Number}","condition":"{op:gt|gte|lt|lte|eq,left:Number,right:Number} | {op:all|any,items:Condition[]} | {op:not,item:Condition}","limits":"16KiB spec; 8 inputs; depth 8; 64 nodes; 3..16 tests including healthy/unknown/severity; intervalSeconds 60..86400; badWindows 1..5; severity warning|critical; inputs must exactly match referenced fields; missing inputs always unknown"}}),
             );
@@ -712,7 +712,7 @@ pub(crate) async fn call(scope: &Scope, name: &str, args: Value) -> Result<Value
     let (id, kind) = if name == "get_log_summary" {
         let t: LogTarget = serde_json::from_value(args).map_err(|_| "Incorrect parameters")?;
         if t.kind != "logs" {
-            return Err("Unknown inspection".into());
+            return Err("Unknown check".into());
         }
         (t.server_id, Some(t.kind))
     } else {
@@ -951,7 +951,7 @@ mod integration_tests {
         )
         .await
         .unwrap_err()
-        .contains("current"));
+        .contains("latest user message"));
         assert!(call(
             &manual.scope,
             "read_cve_advisory",

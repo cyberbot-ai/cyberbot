@@ -132,7 +132,7 @@ async fn transport(
             lease.invalidate();
         }
     }
-    let cache_miss = action == "Verification of assembler’s version"
+    let cache_miss = action == "Check collector version"
         && output
             .as_ref()
             .is_ok_and(|o| o.exit_code == Some(1) && o.stderr.is_empty());
@@ -146,7 +146,7 @@ async fn transport(
         }
     });
     if cache_miss {
-        operation.finish_as("info", "Delivery of the assembler is required");
+        operation.finish_as("info", "Collector deployment required");
     } else {
         operation.result(&result);
     }
@@ -189,23 +189,23 @@ pub fn classify_error(message: &str) -> String {
     if message.contains("Host key verification failed")
         || message.contains("REMOTE HOST IDENTIFICATION HAS CHANGED")
     {
-        "SSH host key is unknown or changed. Check the key via SSH off-app.".into()
+        "The SSH host key is unknown or has changed. Verify it with OpenSSH in a terminal.".into()
     } else if message.contains("Permission denied") {
-        "SSH: refusal of authorization or insufficient rights".into()
+        "SSH authentication failed or permission denied".into()
     } else if message.contains("Could not resolve") {
-        "SSH: the server name is not allowed".into()
+        "SSH could not resolve the server hostname".into()
     } else if message.contains("Connection refused") {
-        "SSH: connection rejected".into()
+        "SSH connection refused".into()
     } else {
         format!("SSH: {}", message.chars().take(500).collect::<String>())
     }
 }
 
 pub(crate) const PACKAGE_DATABASE_BUSY: &str =
-    "The package database changed during the check. Repeat after the installation or update of the packages is completed.";
+    "The package database changed during the check. Try again after the installation or update finishes.";
 
 fn package_collector_error(action: &str, output: &process::Output) -> Option<&'static str> {
-    if !matches!(action, "Composition of packages" | "APT vetting") || !connected(output) {
+    if !matches!(action, "Collect installed packages" | "Check APT updates") || !connected(output) {
         return None;
     }
     let error: serde_json::Value = serde_json::from_str(&output.stderr).ok()?;
@@ -219,24 +219,18 @@ fn package_collector_error(action: &str, output: &process::Output) -> Option<&'s
             "The SSH user does not have access to the installed package database."
         }
         "package_read_failed" => "The collector could not read the database of installed packages.",
-        "package_format" => {
-            "In the database of installed packages there was a record of an unsupported format."
-        }
+        "package_format" => "The installed package database contains an unsupported record format.",
         "package_limit" => "The list of installed packages exceeded the limit of the collector.",
-        "apt_unsupported" => "Verification of updates for this OS is not yet supported.",
-        "apt_scope_changed" => {
-            "First, rescan the list of installed packages, then check the updates again."
-        }
-        "apt_missing" => "There is no apt-cache command on the server.",
-        "apt_permission_denied" => "SSH Users Cannot Launch Apt-Cache.",
-        "apt_timeout" => "The apt-cache team did not have time to read the repository data.",
+        "apt_unsupported" => "Checking for package updates is unsupported on this OS.",
+        "apt_scope_changed" => "Rescan installed packages, then check for updates again.",
+        "apt_missing" => "apt-cache is missing from the server.",
+        "apt_permission_denied" => "The SSH user cannot run apt-cache.",
+        "apt_timeout" => "apt-cache timed out while reading repository data.",
         "apt_memory_limit" => "APT did not have enough memory to read repository data.",
         "apt_temp_file_limit" => {
-            "Temporary APT file exceeds size limit when reading repository index."
+            "An APT temporary file exceeded the size limit while reading the repository index."
         }
-        "apt_read_failed" => {
-            "The apt-cache team ended up with an error when reading the repository data."
-        }
+        "apt_read_failed" => "apt-cache failed to read repository data.",
         "apt_output_limit" => "The apt-cache response exceeded the size limit.",
         _ => "The collector on the server was unable to process the data.",
     })
@@ -248,8 +242,7 @@ pub async fn deploy(e: &Endpoint, path: &Path) -> Result<(), String> {
     // A bounded check avoids rsync negotiation on every metric collection.
     let probe = format!("test -f \"$HOME/{remote}\" && sha256sum \"$HOME/{remote}\"");
     let expected = format!("{:x}", Sha256::digest(COLLECTOR.as_bytes()));
-    if let Ok(output) = command(e, "Verification of assembler’s version", &probe, None, 1024).await
-    {
+    if let Ok(output) = command(e, "Check collector version", &probe, None, 1024).await {
         if String::from_utf8_lossy(&output.stdout)
             .split_whitespace()
             .next()
@@ -260,7 +253,7 @@ pub async fn deploy(e: &Endpoint, path: &Path) -> Result<(), String> {
     }
     command(
         e,
-        "Preparation of a catalog of inspections",
+        "Prepare collector directory",
         "umask 077; mkdir -p \"$HOME/.cache/cyberbot\"",
         None,
         1024,
@@ -290,11 +283,8 @@ pub async fn deploy(e: &Endpoint, path: &Path) -> Result<(), String> {
         destination,
     ];
     crate::activity::info("ssh", "SSH channel for rsync", Some(target(e)));
-    let mut delivery = crate::activity::begin(
-        "server",
-        "Delivery of the assembler (rsync)",
-        Some(target(e)),
-    );
+    let mut delivery =
+        crate::activity::begin("server", "Deploy collector with rsync", Some(target(e)));
     let result = process::bounded("/usr/bin/rsync", &args, None, 30, 4096).await;
     let ok = result.as_ref().is_ok_and(|o| o.success);
     if !ok {
@@ -308,13 +298,13 @@ pub async fn deploy(e: &Endpoint, path: &Path) -> Result<(), String> {
             output.stderr.chars().take(500).collect::<String>()
         ));
     }
-    let output = command(e, "Verification of assembler’s version", &probe, None, 1024).await?;
+    let output = command(e, "Check collector version", &probe, None, 1024).await?;
     if String::from_utf8_lossy(&output.stdout)
         .split_whitespace()
         .next()
         != Some(expected.as_str())
     {
-        return Err("The check sum of the collector is not the same".into());
+        return Err("Collector checksum mismatch".into());
     }
     Ok(())
 }
@@ -323,7 +313,7 @@ pub async fn collect(e: &Endpoint, path: &Path) -> Result<Observation, String> {
     deploy(e, path).await?;
     let output = run_collector(e, &serde_json::json!({"kind":"metrics"}), 8192).await?;
     let mut observation: Observation =
-        serde_json::from_slice(&output).map_err(|e| format!("Assembler’s response: {e}"))?;
+        serde_json::from_slice(&output).map_err(|e| format!("Invalid collector response: {e}"))?;
     if let Some(platform) = &observation.platform {
         platform.validate()?;
     }
@@ -337,7 +327,7 @@ pub async fn collect(e: &Endpoint, path: &Path) -> Result<Observation, String> {
                 || crate::services::descriptor(&r.kind).is_none()
         })
     {
-        return Err("Incorrect summary of service processes".into());
+        return Err("Invalid service process summary".into());
     }
     // Scheduling and freshness use local receipt time; remote clock is untrusted.
     observation.at = crate::model::now();
@@ -352,7 +342,7 @@ pub async fn collect(e: &Endpoint, path: &Path) -> Result<Observation, String> {
     .flatten()
     {
         if !v.is_finite() || !(0.0..=100.0).contains(&v) {
-            return Err("Wrong metric".into());
+            return Err("Invalid metric".into());
         }
     }
     Ok(observation)
@@ -381,12 +371,12 @@ pub async fn run_collector(
     } else {
         match kind {
             "metrics" => "Collect metrics",
-            "remote_read" => "Reading files via MCP",
-            "logs" => "Analysis of system and SSH logs",
-            "packages" if request["state"].get("apt").is_some() => "APT vetting",
-            "packages" => "Composition of packages",
-            "service" => "Diagnostics of service",
-            _ => "Launch of the built-in assembler",
+            "remote_read" => "Read files via MCP",
+            "logs" => "Analyze system and SSH logs",
+            "packages" if request["state"].get("apt").is_some() => "Check APT updates",
+            "packages" => "Collect installed packages",
+            "service" => "Collect service diagnostics",
+            _ => "Run built-in collector",
         }
         .to_owned()
     };
@@ -432,7 +422,7 @@ pub(crate) async fn service_sample(
         || sample.details["detected"].as_bool() != Some(sample.detected)
         || complete != Some(sample.complete)
     {
-        return Err("Incorrect summary of diagnostics".into());
+        return Err("Invalid diagnostics summary".into());
     }
     serde_json::to_vec(&sample.details).map_err(|e| e.to_string())
 }
@@ -455,7 +445,7 @@ pub(crate) async fn run_shell_action(
     data.push(b'\n');
     Ok(transport(
         endpoint,
-        "Execution of shell via MCP",
+        "Run shell command via MCP",
         &args,
         Some(&data),
         32768,
@@ -478,16 +468,16 @@ mod tests {
             exit_code: Some(1),
         };
         assert_eq!(
-            package_collector_error("APT vetting", &output),
-            Some("There is no apt-cache command on the server.")
+            package_collector_error("Check APT updates", &output),
+            Some("apt-cache is missing from the server.")
         );
         output.stderr = r#"{"error":"ValueError"}"#.into();
         assert_eq!(
-            package_collector_error("APT vetting", &output),
+            package_collector_error("Check APT updates", &output),
             Some("The collector on the server was unable to process the data.")
         );
         output.exit_code = Some(255);
-        assert_eq!(package_collector_error("APT vetting", &output), None);
+        assert_eq!(package_collector_error("Check APT updates", &output), None);
     }
 
     #[test]

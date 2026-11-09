@@ -30,7 +30,7 @@ async function resolveAll() {
 <template>
   <button v-if="open.length || busy" type="button" class="resolve-all" :disabled="busy || preview"
     :aria-busy="busy" :title="title" @click="resolveAll">
-    <UiIcon name="resolve" :size="16" />{{ busy ? 'Label…' : 'Mark everything resolved' }}
+    <UiIcon name="resolve" :size="16" />{{ busy ? 'Resolving…' : 'Mark all resolved' }}
   </button>
 </template>
 

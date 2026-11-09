@@ -67,7 +67,7 @@ impl Runtime {
             self.identity = self
                 .identity
                 .checked_add(1)
-                .ok_or("Exhausted inspection numbers")?;
+                .ok_or("Check sequence limit reached")?;
             self.entries.insert(
                 server.id.clone(),
                 Entry {
@@ -96,7 +96,7 @@ impl Runtime {
     }
     pub fn begin(&mut self, server: &Server, at: i64) -> Result<Attempt, String> {
         if self.suspended {
-            return Err("SSH recovery is expected to be completed after sleep".into());
+            return Err("Waiting for SSH to reconnect after sleep".into());
         }
         self.ensure(server, at)?;
         let e = &self.entries[&server.id];

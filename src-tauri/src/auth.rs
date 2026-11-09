@@ -32,14 +32,14 @@ async fn read() -> Result<Oauth, String> {
         65536,
     )
     .await
-    .map_err(|_| "I could not read Claude’s full-time authorization")?;
+    .map_err(|_| "Could not read Claude Code credentials")?;
     let bytes = Zeroizing::new(std::mem::take(&mut output.stdout));
     if !output.success {
-        return Err("Claude is not authorized in standard Keychain. execute claude auth login in the terminal.".into());
+        return Err("Claude Code credentials are missing from Keychain. Run claude auth login in a terminal.".into());
     }
     serde_json::from_slice::<Credentials>(&bytes)
         .map(|v| v.claude_ai_oauth)
-        .map_err(|_| "Claude Authorization Format is Incompatible".into())
+        .map_err(|_| "Unsupported Claude Code credential format".into())
 }
 pub async fn claude_token(executable: &Path) -> Result<Zeroizing<String>, String> {
     let mut _activity_span = crate::activity::begin("process", "auth.claude_token", None);
@@ -50,7 +50,7 @@ pub async fn claude_token(executable: &Path) -> Result<Zeroizing<String>, String
                 oauth
                     .refresh_token
                     .take()
-                    .ok_or("Claude’s authorization expired.")?,
+                    .ok_or("Claude Code credentials expired.")?,
             );
             // This fixed CLI subcommand only renews native auth. It never starts an agent,
             // receives infrastructure data, or evaluates prompts. Auth persistence remains CLI-owned.
@@ -73,7 +73,7 @@ pub async fn claude_token(executable: &Path) -> Result<Zeroizing<String>, String
                 .process_group(0);
             let mut child = c
                 .spawn()
-                .map_err(|_| "Failed to update Claude’s authorization")?;
+                .map_err(|_| "Could not refresh Claude Code credentials")?;
             let _guard = process::GroupGuard::register(child.id().ok_or("No PID")?)?;
             let out = child.stdout.take().ok_or("No stdout")?;
             let renewed = tokio::time::timeout(Duration::from_secs(40), async {
@@ -95,13 +95,13 @@ pub async fn claude_token(executable: &Path) -> Result<Zeroizing<String>, String
             })
             .await;
             if !matches!(renewed, Ok(Ok(()))) {
-                return Err("Failed to update Claude’s full-time authorization.".into());
+                return Err("Could not refresh Claude Code credentials.".into());
             }
             oauth = read().await?;
         }
         if oauth.expires_at < (now() + 900) * 1000 || oauth.access_token.is_empty() {
             return Err(
-                "Claude’s authorization expires before AI’s operating time limit; re-enter CLI"
+                "Claude Code credentials expire before the run can finish. Sign in to the CLI again."
                     .into(),
             );
         }

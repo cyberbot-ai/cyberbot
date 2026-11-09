@@ -35,7 +35,7 @@ fn binary() -> Result<PathBuf, String> {
             .join("cyberbot-check-runner")
     };
     path.canonicalize().map_err(|_| {
-        "No built-in artist found. Collect the application via npm run desktop:build".into()
+        "The bundled check runner is missing. Build the app with npm run desktop:build.".into()
     })
 }
 pub(crate) fn profile(exe: &Path) -> String {
@@ -56,7 +56,7 @@ async fn launch(exe: &Path, args: &[String], input: &[u8]) -> Result<Vec<u8>, St
     let mut _activity_span = crate::activity::begin("process", "launch", None);
     let _activity_result = (async {
         if !cfg!(target_os = "macos") {
-            return Err("Isolated checks are only available on macOS; launch is blocked".into());
+            return Err("Isolated checks are available on macOS only".into());
         }
         let mut cmd = Command::new("/usr/bin/sandbox-exec");
         cmd.args(["-p", &profile(exe)])
@@ -72,7 +72,8 @@ async fn launch(exe: &Path, args: &[String], input: &[u8]) -> Result<Vec<u8>, St
         #[cfg(unix)]
         cmd.process_group(0);
         let mut child = cmd.spawn().map_err(err)?;
-        let _guard = GroupGuard::register(child.id().ok_or("No PID performer")?)?;
+        let _guard =
+            GroupGuard::register(child.id().ok_or("Check runner process ID unavailable")?)?;
         let mut stdin = child.stdin.take().ok_or("No stdin")?;
         let stdout = child.stdout.take().ok_or("No stdout")?;
         let stderr = child.stderr.take().ok_or("No stderr")?;
@@ -91,7 +92,7 @@ async fn launch(exe: &Path, args: &[String], input: &[u8]) -> Result<Vec<u8>, St
                     .await
                     .map_err(err)?;
                 if bytes.len() > 8192 {
-                    return Err("Executor’s withdrawal limit".into());
+                    return Err("Check runner output limit exceeded".into());
                 }
                 Ok(bytes)
             };
@@ -103,19 +104,19 @@ async fn launch(exe: &Path, args: &[String], input: &[u8]) -> Result<Vec<u8>, St
                     .await
                     .map_err(err)?;
                 if bytes.len() > 4096 {
-                    return Err("Performer’s stderr limit".into());
+                    return Err("Check runner standard error limit exceeded".into());
                 }
                 Ok(())
             };
             let ((), bytes, ()) = tokio::try_join!(write, read, errors)?;
             let status = child.wait().await.map_err(err)?;
             if !status.success() {
-                return Err("Isolated performer fails or exceeds CPU/memory limit".into());
+                return Err("The check runner failed or exceeded its CPU or memory limit".into());
             }
             Ok(bytes)
         })
         .await
-        .map_err(|_| "Contractor stopped: 3-second".to_string())?
+        .map_err(|_| "Check runner timed out after 3 seconds".to_string())?
     })
     .await;
     _activity_span.result(&_activity_result);
@@ -137,7 +138,7 @@ impl Runtime {
         let exe = binary()?;
         let bytes = std::fs::read(&exe).map_err(err)?;
         if bytes.len() > 16 * 1024 * 1024 {
-            return Err("The unexpected size of the performer".into());
+            return Err("Unexpected check runner response size".into());
         }
         let identity = format!("{ENGINE}:{:x}", Sha256::digest(bytes));
         if self.verified.lock().map_err(err)?.as_ref() != Some(&identity) {
@@ -146,13 +147,13 @@ impl Runtime {
         }
         let input = serde_json::to_vec(requests).map_err(err)?;
         if input.len() > 147456 || requests.is_empty() || requests.len() > 8 {
-            return Err("Entry of the performer exceeds 144 KiB".into());
+            return Err("Check runner input exceeds 144 KiB".into());
         }
         let bytes = launch(&exe, &[], &input).await?;
         let value: Vec<Response> =
-            serde_json::from_slice(&bytes).map_err(|_| "Incorrect response of the performer")?;
+            serde_json::from_slice(&bytes).map_err(|_| "Invalid check runner response")?;
         if value.len() != requests.len() || value.iter().any(|v| v.engine != ENGINE) {
-            return Err("Performer’s version didn’t match".into());
+            return Err("Check runner version mismatch".into());
         }
         Ok(value)
     }
@@ -184,7 +185,9 @@ impl Runtime {
                 .iter()
                 .any(|k| value[k] != false)
         {
-            return Err("Isolation of performer not confirmed; inclusion prohibited".into());
+            return Err(
+                "Cyberbot could not verify check runner isolation and blocked activation".into(),
+            );
         }
         Ok(())
     }

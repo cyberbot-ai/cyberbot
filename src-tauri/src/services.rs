@@ -145,7 +145,7 @@ pub(crate) fn snapshot_for(
     instances::validate(instance)?;
     let descriptor = descriptor(kind).ok_or("Unknown connector")?;
     if !descriptor.multiple && instance != DEFAULT {
-        return Err("Unknown instance of the service".into());
+        return Err("Unknown service instance".into());
     }
     let mut value = if let Some(adapter) = backend(kind) {
         (adapter.view)(store, id, instance)?
@@ -168,7 +168,7 @@ pub(crate) fn configure_for(
     instances::validate(instance)?;
     let spec = descriptor(kind).ok_or("Unknown connector")?;
     if !spec.multiple && instance != DEFAULT {
-        return Err("Unknown instance of the service".into());
+        return Err("Unknown service instance".into());
     }
     if let Some(adapter) = backend(kind) {
         let configure = adapter
@@ -193,7 +193,7 @@ pub(crate) async fn refresh_for(
     instances::validate(&instance)?;
     let spec = descriptor(&kind).ok_or("Unknown connector")?;
     if !spec.multiple && instance != DEFAULT {
-        return Err("Unknown instance of the service".into());
+        return Err("Unknown service instance".into());
     }
     if let Some(adapter) = backend(&kind) {
         (adapter.refresh)(state, id, instance).await
@@ -383,7 +383,7 @@ impl Config {
                     || i > 0 && (b.is_ascii_digit() || b == b'.' || b == b'-')
             })
         {
-            return Err("Inadmissible local connector profile".into());
+            return Err("Invalid local connector profile".into());
         }
         Ok(())
     }
@@ -565,7 +565,7 @@ fn validate(kind: &str, w: &Wire) -> Result<()> {
             .is_some_and(|v| v.len() != 64 || !v.bytes().all(|b| b.is_ascii_hexdigit()))
         || !w.connected && w.metrics.values().any(Option::is_some)
     {
-        return Err("Incorrect summation of connector".into());
+        return Err("Invalid connector summary".into());
     }
     Ok(())
 }
@@ -1274,7 +1274,7 @@ impl Store {
         at: i64,
     ) -> Result<Summary> {
         if bytes.len() > 32768 {
-            return Err("Briefing over 32 KiB".into());
+            return Err("Summary exceeds 32 KiB".into());
         }
         let wire: Wire = serde_json::from_slice(bytes).map_err(|_| "Incorrect summary format")?;
         validate(kind, &wire)?;
@@ -1527,7 +1527,7 @@ impl Store {
             if s.revision == expected.revision && s.epoch == expected.epoch {
                 s.revision += 1;
                 s.failures = s.failures.saturating_add(1);
-                s.error = Some("Not received; check access and rights".into());
+                s.error = Some("No summary received. Check the connection and permissions.".into());
                 s.status = "unknown".into();
                 s.streaks.clear();
                 s.escalating.clear();

@@ -117,19 +117,19 @@ function toggleProfiles(event: Event) {
 }
 
 const labels: Record<string, string> = {
-  merged: 'Merged into an incident group', queued: 'In line', suppressed: 'Not allowed by the AUTO policy',
-  running: 'Implemented', completed: 'Completed', failed: 'Mistake', cancelled: 'Cancelled',
-  interrupted: 'Interrupted', obsolete: 'The issue has cleared', dismissed: 'Missed', budget_exceeded: 'Token limit',
+  merged: 'Merged into an incident group', queued: 'Queued', suppressed: 'Blocked by the automation policy',
+  running: 'Running', completed: 'Completed', failed: 'Failed', cancelled: 'Cancelled',
+  interrupted: 'Interrupted', obsolete: 'Issue resolved', dismissed: 'Skipped', budget_exceeded: 'Token limit',
 };
 const number = (n: number) => n.toLocaleString('en-US');
 </script>
 
 <template>
   <div class="ai-page">
-    <div ref="tabList" class="ai-tabs" role="tablist" aria-label="Sections of AI" @keydown="switchTab">
+    <div ref="tabList" class="ai-tabs" role="tablist" aria-label="AI sections" @keydown="switchTab">
       <button v-for="item in tabs" :id="`ai-${item.id}-tab`" :key="item.id" type="button" role="tab"
         :aria-controls="`ai-${item.id}-panel`" :aria-selected="tab === item.id" :tabindex="tab === item.id ? 0 : -1"
-        :aria-label="item.id === 'actions' && pendingActions ? `Actions awaiting confirmation ${pendingActions}` : undefined"
+        :aria-label="item.id === 'actions' && pendingActions ? `Actions awaiting approval ${pendingActions}` : undefined"
         @click="tab = item.id">
         {{ item.label }}<span v-if="item.id === 'actions' && pendingActions" class="tab-count" aria-hidden="true">{{ pendingActions }}</span>
       </button>
@@ -139,37 +139,37 @@ const number = (n: number) => n.toLocaleString('en-US');
       <template v-if="visited.has('sessions')">
         <section class="queue">
           <header class="section-heading">
-            <h2>Automatic launches</h2>
-            <span v-if="status?.queued" class="muted">In line {{ number(status.queued) }}</span>
+            <h2>Automatic investigations</h2>
+            <span v-if="status?.queued" class="muted">Queued {{  number(status.queued) }}</span>
           </header>
           <p v-if="error" class="error" role="alert">{{ error }}</p>
           <div v-if="refreshError" class="error refresh-error">
-            <span role="alert">Failed to update launches. {{ refreshError }}</span>
-            <button type="button" class="secondary" :disabled="refreshing" @click="refresh">Repeat</button>
+            <span role="alert">Could not refresh AI runs. {{ refreshError }}</span>
+            <button type="button" class="secondary" :disabled="refreshing" @click="refresh">Retry</button>
           </div>
           <template v-if="status">
             <div v-if="status.blockedReason" class="notice">
-              <p role="status">We need to check the expense: {{ status.blockedReason }}</p>
-              <button type="button" class="secondary" :disabled="busy || preview" @click="action('resume_auto')">Expenditure verified - continue</button>
-              <p class="small">Finished and cancelled tasks are not repeated.</p>
+              <p role="status">Token usage needs review. {{ status.blockedReason }}</p>
+              <button type="button" class="secondary" :disabled="busy || preview" @click="action('resume_auto')">Confirm usage and resume</button>
+              <p class="small">Resuming does not restart completed or cancelled jobs.</p>
             </div>
             <div v-if="status.waitingReason" class="notice">
               <p role="status">{{ status.waitingReason }}</p>
-              <button type="button" class="text-button" @click="openLimits">Modify restrictions</button>
+              <button type="button" class="text-button" @click="openLimits">Edit limits</button>
             </div>
             <div v-if="!activeJobs.length" class="empty">
-              <strong>No active assignments</strong>
-              <p v-if="settings.mode === 'auto'">There will be tasks for new significant incidents.</p>
+              <strong>No active jobs</strong>
+              <p v-if="settings.mode === 'auto'">New significant incidents will appear here as jobs.</p>
             </div>
             <article v-for="job in activeJobs" :key="job.id" class="job">
               <div class="job-description">
                 <button type="button" class="text-button title" @click="emit('open', job.serverId)">{{ job.title }}</button>
                 <ServerLink :id="job.serverId"/>
                 <p>{{ job.evidence }}</p>
-                <small>{{ labels[job.state] }}<template v-if="job.state === 'queued'"> · expecting fresh data and an affordable budget</template></small>
+                <small>{{ labels[job.state] }}<template v-if="job.state === 'queued'"> · waiting for fresh data and available budget</template></small>
               </div>
-              <button v-if="job.state === 'queued'" type="button" class="secondary" :disabled="busy || preview" @click="action('dismiss_auto_job', job.id)">Let it pass</button>
-              <button v-if="job.state === 'running' && job.runId" type="button" class="secondary" :disabled="busy || preview" @click="action('cancel_investigation', job.runId)">Stop it</button>
+              <button v-if="job.state === 'queued'" type="button" class="secondary" :disabled="busy || preview" @click="action('dismiss_auto_job', job.id)">Skip</button>
+              <button v-if="job.state === 'running' && job.runId" type="button" class="secondary" :disabled="busy || preview" @click="action('cancel_investigation', job.runId)">Stop</button>
             </article>
             <details v-if="history.length" class="disclosure history">
               <summary>History <span>{{ history.length }}</span></summary>
@@ -178,29 +178,29 @@ const number = (n: number) => n.toLocaleString('en-US');
                 <ServerLink :id="job.serverId"/>
                 <span>{{ labels[job.state] ?? job.state }}</span>
               </article>
-              <p v-if="status.jobs.length === 100" class="small">Shown the last 100 tasks, including the queue.</p>
+              <p v-if="status.jobs.length === 100" class="small">Showing the latest 100 jobs, including queued jobs.</p>
             </details>
           </template>
-          <p v-else-if="!refreshError" class="muted" role="status">Download launch status…</p>
+          <p v-else-if="!refreshError" class="muted" role="status">Loading AI run status…</p>
         </section>
         <section v-if="status" class="usage">
           <header class="section-heading"><h2>Daily usage</h2><span class="muted">UTC</span></header>
           <dl class="metrics">
             <div><dt>Runs</dt><dd>{{ number(status.runs) }}</dd></div>
-            <div><dt>Tokens accounted for</dt><dd>{{ number(status.actualTokens) }}</dd></div>
+            <div><dt>Reported tokens</dt><dd>{{ number(status.actualTokens) }}</dd></div>
           </dl>
-          <p v-if="status.uncertainRuns" class="usage-warning">There’s an unspecified expense.</p>
+          <p v-if="status.uncertainRuns" class="usage-warning">Some token usage is unconfirmed.</p>
           <details class="disclosure">
-            <summary>Details of flow and queue</summary>
+            <summary>Usage and queue details</summary>
             <div class="disclosure-body">
-              <p class="small">Account for <RelativeDate :at="status.day * 86400" calendar-day/>, UTC. Values are listed in tokens.</p>
+              <p class="small">Usage for <RelativeDate :at="status.day * 86400" calendar-day/>, UTC. Values are in tokens.</p>
               <dl class="metrics">
                 <div><dt>Budget in use</dt><dd>{{ number(status.chargedTokens) }}</dd></div>
-                <div><dt>Reserved now</dt><dd>{{ number(status.reservedTokens) }}</dd></div>
-                <div><dt>Incomplete outcomes</dt><dd>{{ number(status.uncertainRuns) }}</dd></div>
+                <div><dt>Currently reserved</dt><dd>{{ number(status.reservedTokens) }}</dd></div>
+                <div><dt>Runs with unconfirmed usage</dt><dd>{{ number(status.uncertainRuns) }}</dd></div>
               </dl>
-              <p class="small">Occupied in the budget - known expense, active and unspecified reserves. Cached input tokens are also counted.</p>
-              <p class="small">One automatic launch is performed simultaneously. Replays are combined into an episode, related events of several servers into a incident group. Event collection can take up to two minutes. Errors and cancellations are not automatically repeated. A new episode of the same check waits at least 6 hours. Up to 500 tasks are allowed in the queue.</p>
+              <p class="small">The budget includes reported usage, active reservations, and reservations for unconfirmed usage. Cached input tokens also count.</p>
+              <p class="small">One automatic investigation runs at a time. Repeat findings are grouped into an episode, and related events across servers can form an incident group. Collecting events can take up to two minutes. Failed or cancelled jobs do not restart automatically. New episodes for the same check wait at least 6 hours. The queue holds up to 500 jobs.</p>
             </div>
           </details>
         </section>

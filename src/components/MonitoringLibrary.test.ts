@@ -29,7 +29,7 @@ const mountLibrary = (initial?: { definitionId: string; serverId?: string; insta
   mount(MonitoringLibrary, { props: { servers, now: 100, initial }, global: { stubs: { ServicePanel: true, PostgresqlPanel: true, CheckPanel: true } } });
 const selector = (wrapper: VueWrapper) => wrapper.get('select[aria-label="Servers"]');
 const row = (wrapper: VueWrapper, name: string) => wrapper.findAll('.row').find(item => item.get('th').text() === name)!;
-const interval = (wrapper: VueWrapper) => wrapper.get('input[aria-label="Interval of verification"]');
+const interval = (wrapper: VueWrapper) => wrapper.get('input[aria-label="Check interval"]');
 const openInterval = (wrapper: VueWrapper) => wrapper.get('.interval-button').trigger('click');
 const openTab = (wrapper: VueWrapper, name: string) => wrapper.findAll('.tabs button').find(item => item.text() === name)!.trigger('click');
 const key = (scope: MonitoringScope) => [scope.definitionId, scope.serverId ?? '', scope.instanceId ?? ''].join('/');
@@ -132,7 +132,7 @@ it('opens the CVE catalog independently and keeps all server links under a filte
       query: { search: '', serverId: null, status: null, offset: 20 },
     });
     await selector(wrapper).setValue('a');
-    await wrapper.get('select[aria-label="Status of the find"]').setValue('hidden');
+    await wrapper.get('select[aria-label="Finding status"]').setValue('hidden');
     await flushPromises();
     expect(mocks.call).toHaveBeenLastCalledWith('vulnerability_catalog', {
       query: { search: '', serverId: 'a', status: 'hidden', offset: 0 },
@@ -141,8 +141,8 @@ it('opens the CVE catalog independently and keeps all server links under a filte
     await button.trigger('click');
     await flushPromises();
     expect(button.attributes('aria-expanded')).toBe('true');
-    expect(wrapper.get('.expanded').text()).toContain('Hidden by hand');
-    expect(wrapper.get('.expanded').text()).toContain('It’s no longer detected');
+    expect(wrapper.get('.expanded').text()).toContain('Hidden manually');
+    expect(wrapper.get('.expanded').text()).toContain('No longer detected');
     const links = wrapper.findAll('.expanded .server-link');
     expect(links.map(link => link.text())).toEqual(['one.example', 'two.example']);
     await links[1].trigger('click');
@@ -160,7 +160,7 @@ it('starts at common settings and reads a selected server without per-row calls'
   await flushPromises();
   expect(selector(wrapper).get('option').text()).toBe('All servers');
   expect(selector(wrapper).element).toHaveProperty('value', '');
-  expect(wrapper.findAll('thead th').map(item => item.text())).toEqual(['Verification', 'Schedule']);
+  expect(wrapper.findAll('thead th').map(item => item.text())).toEqual(['Check', 'Schedule']);
   expect(row(wrapper, 'Redis').text()).toContain('5 min');
   expect(mocks.call.mock.calls).toEqual([['monitoring_catalog'], ['monitoring_library', { serverId: null }]]);
   await selector(wrapper).setValue('a');
@@ -169,7 +169,7 @@ it('starts at common settings and reads a selected server without per-row calls'
   expect(row(wrapper, 'Redis').text()).toContain('2 min');
   await selector(wrapper).setValue('b');
   await flushPromises();
-  expect(wrapper.text()).toContain('This server has no exceptions');
+  expect(wrapper.text()).toContain('This server uses global settings for all checks');
   expect(wrapper.find('.row').exists()).toBe(false);
   await wrapper.findAll('button').find(button => button.text() === 'Show all server checks')!.trigger('click');
   expect(row(wrapper, 'Redis').text()).toContain('5 min');
@@ -206,17 +206,17 @@ it('opens an instance-only exception and removes the row when the last override 
   await selector(wrapper).setValue('a');
   await flushPromises();
   expect(row(wrapper, 'Redis').text()).toContain('2 min');
-  expect(row(wrapper, 'Redis').text()).toContain('Elimination of connection');
+  expect(row(wrapper, 'Redis').text()).toContain('Connection override');
   await row(wrapper, 'Redis').get('button').trigger('click');
   await flushPromises();
   expect(wrapper.get('select[aria-label="Service connection"]').element).toHaveProperty('value', 'second');
-  await wrapper.findAll('button').find(button => button.text() === 'Like on a server')!.trigger('click');
+  await wrapper.findAll('button').find(button => button.text() === 'Use server settings')!.trigger('click');
   await flushPromises();
   expect(mocks.call).toHaveBeenCalledWith('configure_monitoring', {
     scope: { definitionId: 'redis', serverId: 'a', instanceId: 'second' },
     overrides: { intervalSeconds: null }, expectedRevision: 1,
   });
-  expect(wrapper.text()).toContain('This server has no exceptions');
+  expect(wrapper.text()).toContain('This server uses global settings for all checks');
   expect(wrapper.find('.row').exists()).toBe(false);
   wrapper.unmount();
 });

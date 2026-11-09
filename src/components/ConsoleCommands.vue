@@ -173,61 +173,61 @@ function toggle(row: Row) {
     void readOutput(row);
   }
 }
-const statusLabel: Record<Row['status'], string> = { queued: 'Pending', running: 'Pending', ok: 'OK', fail: 'Fail' };
+const statusLabel: Record<Row['status'], string> = { queued: 'Pending', running: 'Running', ok: 'OK', fail: 'Failed' };
 function seconds(ms: number) {
   return `${(ms / 1000).toLocaleString('en-US', { maximumFractionDigits: 1 })} s`;
 }
 </script>
 
 <template>
-  <section class="commands" aria-label="SSH teams">
+  <section class="commands" aria-label="SSH commands">
     <label class="prompt">
       <span aria-hidden="true">›</span>
-      <textarea v-model="draft" aria-label="Team SSH" rows="2" spellcheck="false"
+      <textarea v-model="draft" aria-label="SSH command" rows="2" spellcheck="false"
         placeholder="For example, df -h" :readonly="submitting || Boolean(review)" @keydown="submit"/>
     </label>
-    <p v-if="preview" class="hint">In the demo, commands are not executed.</p>
-    <p v-else-if="!ids.length || ids.length > 500" class="hint">Choose from 1 to 500 servers.</p>
-    <p v-else class="hint">Enter - send out · Shift+Enter is a new line</p>
+    <p v-if="preview" class="hint">SSH commands are disabled in the demo.</p>
+    <p v-else-if="!ids.length || ids.length > 500" class="hint">Select 1 to 500 servers.</p>
+    <p v-else class="hint">Enter to run · Shift+Enter for a new line</p>
     <p v-if="error" class="error" role="alert">{{ error }}</p>
 
     <template v-if="batch">
       <div class="result-bar">
         <code :title="batch.command" class="last-command">{{ batch.command }}</code>
-        <div class="counts" aria-label="Summary of results">
+        <div class="counts" aria-label="Command results">
           <span class="ok">{{ counts.ok }} OK</span>
-          <span class="fail">{{ counts.fail }} Fail</span>
-          <span>{{ counts.pending }} Pending</span>
+          <span class="fail">{{ counts.fail }} failed</span>
+          <span>{{ counts.pending }} pending</span>
         </div>
-        <label class="errors-only"><input v-model="errorsOnly" type="checkbox"> Only mistakes</label>
+        <label class="errors-only"><input v-model="errorsOnly" type="checkbox"> Failures only</label>
         <button v-if="batch.active" class="stop" type="button" :disabled="stopping || batch.stopping" @click="stop">
-          {{ batch.stopping ? 'It’s stopping…' : 'Stop it' }}
+          {{ batch.stopping ? 'Stopping…' : 'Stop' }}
         </button>
       </div>
       <div class="results">
         <div v-for="row in rows" :key="row.id" class="result">
           <div class="result-row" @click="toggle(row)">
-            <button type="button" class="disclosure" :aria-expanded="expanded.has(row.id)" :aria-label="`Withdrawal of team · ${serverLabel(row).host}`">
+            <button type="button" class="disclosure" :aria-expanded="expanded.has(row.id)" :aria-label="`Command output · ${serverLabel(row).host}`">
               {{ expanded.has(row.id) ? '▾' : '▸' }}
             </button>
             <ServerLink :id="row.id" :name="row.name" :address="row.address"/>
             <span class="badge" :class="row.status">{{ statusLabel[row.status] }}</span>
-            <small>{{ row.status === 'running' ? 'Implemented'
-              : row.code && row.code !== 255 ? `code ${row.code}` : row.durationMs !== null ? seconds(row.durationMs) : '' }}</small>
+            <small>{{ row.status === 'running' ? 'Running'
+              : row.code && row.code !== 255 ? `exit code ${row.code}` : row.durationMs !== null ? seconds(row.durationMs) : '' }}</small>
           </div>
           <div v-if="expanded.has(row.id)" class="details">
             <p class="hint">{{ row.address }}<template v-if="row.code !== null"> · exit code {{ row.code }}</template></p>
             <p v-if="row.reason">{{ row.reason }}</p>
-            <p v-if="row.status === 'queued' || row.status === 'running'" class="hint">Conclusion will appear after completion.</p>
+            <p v-if="row.status === 'queued' || row.status === 'running'" class="hint">Output will appear when the command finishes.</p>
             <template v-else-if="outputs[row.id]">
-              <p v-if="outputs[row.id].truncated">Conclusion truncated.</p>
-              <p v-if="!outputs[row.id].stdout && !outputs[row.id].stderr" class="hint">The team didn’t pull anything.</p>
+              <p v-if="outputs[row.id].truncated">Output was truncated.</p>
+              <p v-if="!outputs[row.id].stdout && !outputs[row.id].stderr" class="hint">The command produced no output.</p>
               <template v-if="outputs[row.id].stdout"><small>stdout</small><pre>{{ outputs[row.id].stdout }}</pre></template>
               <template v-if="outputs[row.id].stderr"><small>stderr</small><pre>{{ outputs[row.id].stderr }}</pre></template>
             </template>
           </div>
         </div>
-        <p v-if="!rows.length && errorsOnly" class="hint">No mistakes yet.</p>
+        <p v-if="!rows.length && errorsOnly" class="hint">No failures.</p>
       </div>
     </template>
 

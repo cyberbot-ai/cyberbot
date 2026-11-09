@@ -11,9 +11,9 @@ function hasPartialData(server: Server, state: Health): boolean {
 export function serverHealthLabel(server: Server, state: Health): string {
   if (server.networkOffline) return healthLabel.unknown;
   if (server.awaitingFirstCheck) {
-    return state === 'unknown' ? 'Awaiting first check' : `${healthLabel[state]} · awaits a metric survey`;
+    return state === 'unknown' ? 'Awaiting first check' : `${healthLabel[state]} · waiting for metrics`;
   }
-  if (state === 'unknown' && server.monitoring?.enabled === false) return 'Poll metrics off';
+  if (state === 'unknown' && server.monitoring?.enabled === false) return 'Metrics polling disabled';
   return hasPartialData(server, state) ? 'Incomplete data' : healthLabel[state];
 }
 
@@ -24,7 +24,7 @@ function hasCoreMetrics(o: NonNullable<Server['observation']>): boolean {
 
 export function partialHealthReason(server: Server, state: Health): string | undefined {
   if (!hasPartialData(server, state)) return undefined;
-  return 'Server responds. Part of the basic metrics are unavailable.';
+  return 'The server is reachable, but some basic metrics are unavailable.';
 }
 export function health(server: Server, now = Date.now()/1000, interval = 180): Health {
   if (server.networkOffline) return 'unknown';

@@ -31,7 +31,7 @@ impl Store {
             .map_err(err)?;
         if version > 18 {
             return Err(format!(
-                "Version database {version} newer supported; update the application"
+                "Database version {version} is newer than this app supports. Update Cyberbot."
             ));
         }
         if version < 18 {
@@ -641,9 +641,9 @@ impl Store {
                                 None
                             },
                             if check == "cpu" {
-                                "High CPU loading"
+                                "High CPU usage"
                             } else {
-                                "Little free memory"
+                                "Low available memory"
                             },
                             "warning",
                             at,
@@ -680,7 +680,7 @@ impl Store {
                         &s.id,
                         "connection",
                         Some(message),
-                        "Failed to interview the server",
+                        "Server poll failed",
                         "warning",
                         at,
                     )?;
@@ -818,9 +818,9 @@ impl Store {
             updated_at: at,
             evidence: evidence.unwrap_or_else(|| {
                 if still_open {
-                    "Reconfirmation of recovery is expected"
+                    "Awaiting confirmation of recovery"
                 } else {
-                    "The check’s back up"
+                    "Check recovered"
                 }
                 .into()
             }),

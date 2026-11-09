@@ -100,7 +100,7 @@ it('keeps the terminal after exit and replaces it on explicit reconnect', async 
   await flushPromises();
   receive({ kind: 'end', code: 7, error: null });
   await flushPromises();
-  expect(view.get('[role="status"]').text()).toBe('Session concluded · exit code 7');
+  expect(view.get('[role="status"]').text()).toBe('Session ended · exit code 7');
   expect(mocks.dispose).not.toHaveBeenCalled();
   await view.get('button').trigger('click');
   await flushPromises();

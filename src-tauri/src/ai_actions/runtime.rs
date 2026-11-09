@@ -89,7 +89,7 @@ impl Drop for Task {
         if let Ok((_, true)) = self.state.store.interrupt_action(
             &self.id,
             "cancelled",
-            "Request terminated; automatic repetition prohibited".into(),
+            "The request ended. Cyberbot will not retry it automatically.".into(),
             now(),
         ) {
             changed(&self.id);
@@ -154,7 +154,7 @@ async fn remote(
         .ok_or("SSH context is not saved")?;
     let current = crate::ssh_authorization::capture(&endpoint).await?;
     if current.digest() != stamp.digest() {
-        return Err("SSH settings or bastions changed after preparation".into());
+        return Err("SSH settings or jump hosts changed after preparation".into());
     }
     let deadline = Instant::now();
     let guard = loop {
@@ -195,14 +195,14 @@ async fn remote(
         operation == "execute" && matches!(request.artifact.spec.action, Action::Shell);
     let shell_sent = std::sync::atomic::AtomicBool::new(false);
     if serde_json::to_vec(&data).map_err(err)?.len() > 49152 {
-        return Err("The request of the performer is more than 48 KiB".into());
+        return Err("The action runner request exceeds 48 KiB".into());
     }
     let future = async {
         if matches!(operation, "prepare" | "execute") {
             state.store.action_context(&request.id, now())?;
         }
         tokio::select! {
-            _ = cancel.cancelled() => return Err("Request cancelled prior to launch of assembler".into()),
+            _ = cancel.cancelled() => return Err("The request was cancelled before the collector started".into()),
             result = crate::ssh::deploy(&endpoint, &state.collector) => result?,
         };
         if matches!(operation, "prepare" | "execute") {
@@ -221,13 +221,13 @@ async fn remote(
             .actions
             .received
             .fetch_add(raw.len() as u64, std::sync::atomic::Ordering::Relaxed);
-        serde_json::from_slice(&raw).map_err(|_| "Failed response from the performer".into())
+        serde_json::from_slice(&raw).map_err(|_| "Invalid response from the action runner".into())
     };
     let guarded = crate::ssh_authorization::guarded(stamp.clone(), future);
     let result = if shell_execute {
         guarded.await
     } else {
-        tokio::select! {_=cancel.cancelled()=>Err("Remote action interrupted; effect requires verification".into()),r=guarded=>r}
+        tokio::select! {_=cancel.cancelled()=>Err("The remote action was interrupted. Its effects are unconfirmed.".into()),r=guarded=>r}
     };
     drop(guard);
     if shell_sent.load(std::sync::atomic::Ordering::Relaxed) {
@@ -243,9 +243,11 @@ fn receipt(request: &Request, result: Value) -> Result<(String, Value)> {
         || result["action"] != serde_json::to_value(&request.artifact.spec.action).map_err(err)?
         || result["prepared"] != request.artifact.prepared
     {
-        return Err("Receipt does not match the permitted artifact".into());
+        return Err("The receipt does not match the approved action".into());
     }
-    let state = result["state"].as_str().ok_or("No, no. No, no")?;
+    let state = result["state"]
+        .as_str()
+        .ok_or("The action receipt is missing its status")?;
     if !matches!(
         state,
         "succeeded"
@@ -256,7 +258,7 @@ fn receipt(request: &Request, result: Value) -> Result<(String, Value)> {
             | "running"
             | "rollbackRunning"
     ) {
-        return Err("Unknown status receipt".into());
+        return Err("The action receipt has an unknown status".into());
     }
     if matches!(request.artifact.spec.action, Action::Shell) {
         let code = result["result"]["exitCode"].as_i64();
@@ -264,10 +266,10 @@ fn receipt(request: &Request, result: Value) -> Result<(String, Value)> {
             || code.is_none()
             || (code == Some(0)) != (state == "succeeded")
         {
-            return Err("Receipt does not confirm the script output code".into());
+            return Err("The receipt does not confirm the script’s exit code".into());
         }
     } else if state == "succeeded" && result["effect"]["verified"] != true {
-        return Err("The effect is untested".into());
+        return Err("The receipt does not verify the action’s effect".into());
     }
     Ok((
         if matches!(state, "running" | "rollbackRunning") {
@@ -289,7 +291,7 @@ async fn wait(state: &AppState, id: &str, cancel: &CancellationToken) -> Result<
                 id,
                 "expired",
                 None,
-                Some("The waiting time has expired".into()),
+                Some("The approval request expired".into()),
                 now(),
             );
         }
@@ -309,7 +311,7 @@ pub(crate) async fn submit(scope: &Scope, spec: Spec) -> Result<Value> {
     let run_id = scope
         .run_id
         .as_ref()
-        .ok_or("Actions are only available during AI startup")?;
+        .ok_or("Actions are available only while an AI run is active")?;
     if scope.authoring.is_some() || !scope.targets.contains_key(&spec.server_id) {
         return Err("Action is outside this run’s scope".into());
     }
@@ -320,7 +322,7 @@ pub(crate) async fn submit(scope: &Scope, spec: Spec) -> Result<Value> {
         .iter()
         .any(|a| a["tool"] == "get_server" && a["serverId"] == spec.server_id && a["ok"] == true)
     {
-        return Err("First, read the get_server of the selected server".into());
+        return Err("Call get_server for the selected server first".into());
     }
     let run = scope.app.investigator.get(run_id)?;
     let prepared_inputs = inputs(&scope.app, &spec)?;
@@ -331,9 +333,9 @@ pub(crate) async fn submit(scope: &Scope, spec: Spec) -> Result<Value> {
             .get_or_try_init(|| crate::ssh_authorization::frame(&run.scope_endpoints)),
     )
     .await
-    .map_err(|_| "Time has passed for fixing SSH settings")??;
+    .map_err(|_| "Timed out while capturing SSH settings")??;
     if !frame.unchanged() {
-        return Err("SSH settings have changed. Re-start.".into());
+        return Err("SSH settings changed. Start a new run.".into());
     }
     let transport = frame
         .targets
@@ -378,15 +380,15 @@ pub(crate) async fn submit(scope: &Scope, spec: Spec) -> Result<Value> {
     );
     let outcome:Result<Value>=async{
   let prepared=remote(scope.app.clone(),&request,"prepare",&cancel).await?;
-  if let Some(error)=prepared["error"].as_str(){let reason=crate::services::action_prepare_issue(error).unwrap_or_else(|| match error {"script_failed_or_isolation_unavailable"|"isolation_probe_failed"=>"The server has not confirmed Python isolation; execution is prohibited",_=>"Action or secure access not available on the server"});return Err(format!("{reason} ({})",error.chars().take(80).collect::<String>()));}
-  if prepared["rules"]!=RULES{return Err("The version of the mediator’s rules is not the same".into());}
+  if let Some(error)=prepared["error"].as_str(){let reason=crate::services::action_prepare_issue(error).unwrap_or_else(|| match error {"script_failed_or_isolation_unavailable"|"isolation_probe_failed"=>"Cyberbot could not verify Python isolation on the server and blocked execution",_=>"The action or secure access is unavailable on the server"});return Err(format!("{reason} ({})",error.chars().take(80).collect::<String>()));}
+  if prepared["rules"]!=RULES{return Err("The action broker’s policy version does not match".into());}
   request=scope.app.store.action_freeze(&request.id,prepared["prepared"].clone(),prepared["isolation"].clone(),now())?;
   changed(&request.id);crate::activity::action(&request,"script_review_started");
   let review_lock=tokio::select!{_=cancel.cancelled()=>return Err("Review cancelled".into()),guard=scope.app.actions.reviewer.lock()=>guard};
   let (child,reservation)=scope.app.store.admit_review(&request,now())?;let mut lease=ReviewLease{state:scope.app.clone(),id:child.clone(),settled:false};
   let mut review=crate::agents::review_action(&scope.app.root,&request,cancel.child_token(),reservation).await;review.id=child;
   let charged=scope.app.store.settle_review(&review.id,review.usage.clone(),review.usage_complete)?;lease.settled=true;
-  if !review.usage_complete||charged>=reservation{review.verdict.decision=Decision::Uncertain;review.verdict.explanation="Low expenditure not confirmed or reserve exhausted".into();}
+  if !review.usage_complete||charged>=reservation{review.verdict.decision=Decision::Uncertain;review.verdict.explanation="Risk review token usage is unconfirmed or its budget ran out".into();}
   request=scope.app.store.action_reviewed(&request.id,review,now())?;changed(&request.id);crate::activity::action(&request,"script_review_completed");drop(review_lock);
   if request.state=="awaitingApproval" {
     crate::activity::action(&request,"script_awaiting_approval");
@@ -399,7 +401,7 @@ pub(crate) async fn submit(scope: &Scope, spec: Spec) -> Result<Value> {
     let _pause=scope.wait_clock.pause();request=wait(&scope.app,&request.id,&cancel).await?;
   }
   if request.state!="approved"{return Ok(output(&request));}
-  if !frame.unchanged(){return Err("SSH settings have changed after permission".into());}
+  if !frame.unchanged(){return Err("SSH settings changed after approval".into());}
   scope.app.store.action_transition(&request.id,"approved","queued",now())?;
   request=scope.app.store.action_transition(&request.id,"queued","running",now())?;changed(&request.id);crate::activity::action(&request,"script_execution_started");
   let response=remote(scope.app.clone(),&request,"execute",&cancel).await?;
@@ -430,7 +432,7 @@ pub(crate) fn cached(scope: &Scope, id: &str) -> Result<Value> {
     if Some(&request.run_id) != scope.run_id.as_ref()
         || scope.targets.get(&request.server_id) != Some(&request.artifact.endpoint)
     {
-        return Err("The result relates to another launch".into());
+        return Err("This result belongs to a different AI run".into());
     }
     Ok(output(&request))
 }

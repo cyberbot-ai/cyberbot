@@ -21,7 +21,7 @@ const allowed=computed(()=>waiting.value&&!expired.value&&(verdict.value?.decisi
 const useSession=computed(()=>!requiresOneTime.value&&session.value);
 const action=computed(()=>request.value?.artifact.spec.action);
 const serviceAction = computed(() => presentServiceAction(action.value));
-const statusLabels:Record<string,string>={approved:'Permission sent',queued:'Action queued',running:'Action in progress',succeeded:'Action completed',denied:'Action denied',cancelled:'Request cancelled',expired:'The request expired',unknown:'Results require verification',failed:'Action failed',rolledBack:'Original configuration restored',rollbackUnknown:'The result of the rollback requires verification'};
+const statusLabels:Record<string,string>={approved:'Approval sent',queued:'Action queued',running:'Action in progress',succeeded:'Action completed',denied:'Action denied',cancelled:'Request cancelled',expired:'Request expired',unknown:'Result unconfirmed',failed:'Action failed',rolledBack:'Original configuration restored',rollbackUnknown:'Rollback unconfirmed'};
 let timer:ReturnType<typeof setInterval>|undefined,off:UnlistenFn|undefined,disposed=false,sequence=0;
 async function load(){const version=++sequence;try{const result=await call<ActionRequest>('action_request',{id:props.requestId});if(!disposed&&version===sequence)request.value=result;}catch(e){if(!disposed&&version===sequence)error.value=String(e).replace(/^Error: /,'');}finally{if(!disposed)loading.value=false;}}
 async function decide(decision: 'deny' | 'once' | 'session') {
@@ -49,39 +49,39 @@ onUnmounted(()=>{disposed=true;sequence++;clearInterval(timer);off?.();document.
 </script>
 <template>
 <main class="approval" aria-labelledby="approval-title">
-  <header><p class="eyebrow">AI action approval</p><h1 id="approval-title">{{waiting?'Allow action?':loading?'Loading request…':statusLabels[request?.state??'']??'Request complete'}}</h1><p v-if="request" class="server"><ServerLink :id="request.serverId" :address="capturedAddress" captured/></p></header>
+  <header><p class="eyebrow">AI action approval</p><h1 id="approval-title">{{waiting?'Allow action?':loading?'Loading request…':statusLabels[request?.state??'']??'Request closed'}}</h1><p v-if="request" class="server"><ServerLink :id="request.serverId" :address="capturedAddress" captured/></p></header>
   <div class="content">
     <p v-if="error" class="error" role="alert">{{error}}</p>
     <template v-if="request">
       <h2>{{request.artifact.spec.goal}}</h2>
-      <div class="effect" v-if="action?.kind==='diagnostic'"><strong>Calculation based on stored data</strong><p>Python will process the prepared summaries. There’s no access to files and no network. Configuration and services won’t change.</p></div>
+      <div class="effect" v-if="action?.kind==='diagnostic'"><strong>Calculation using stored data</strong><p>The Python script processes prepared summaries in isolation.</p></div>
       <div v-else-if="serviceAction" class="effect"><strong>{{serviceAction.headline}}</strong><p>{{serviceAction.approval}}</p><p v-if="serviceAction.risky" class="risk">Connections may drop.</p><div v-if="request.artifact.prepared.before" class="diff"><code>− {{request.artifact.prepared.before}}</code><code>+ {{request.artifact.prepared.after}}</code></div></div>
       <template v-else-if="action?.kind==='shell'">
         <div class="effect">
-          <strong>Shell on behalf of {{request.artifact.prepared.user}}</strong>
-          <p class="risk">The script will get that user’s rights on the server.</p>
+          <strong>Shell runs as {{request.artifact.prepared.user}}</strong>
+          <p class="risk">The script runs with this user’s permissions on the server.</p>
         </div>
         <pre aria-label="Exact script">{{request.artifact.spec.code}}</pre>
       </template>
       <template v-if="verdict && (requiresOneTime || action?.kind==='shell')">
-        <p><strong>{{requiresOneTime?'This risk requires your approval':'Review verdict'}}</strong> · {{verdict.explanation}}</p>
+        <p><strong>{{requiresOneTime?'This action requires one-time approval':'Risk review'}}</strong> · {{verdict.explanation}}</p>
         <ul v-if="verdict.effects.length"><li v-for="effect in verdict.effects" :key="effect">{{effect}}</li></ul>
       </template>
-      <p v-else-if="allowed" class="review-ok">Risk check passed</p>
-      <p v-if="expired&&waiting" class="error" role="status">The waiting time has expired. The permit is no longer valid.</p>
-      <p v-else-if="!waiting" class="result" role="status">{{statusLabels[request.state]??'The request no longer awaits a decision'}}. You can close this window.</p>
-      <details v-if="action?.kind==='shell'"><summary>Servers and execution limits</summary><p>Do {{request.artifact.isolation.wallSeconds}} c.</p><ul><li v-for="target in scope" :key="target.id"><ServerLink :id="target.id" :address="target.address" captured/></li></ul></details>
-      <details v-else><summary>Code and technical details</summary><pre>{{request.artifact.spec.code}}</pre><p>Python is limited to 4 seconds of CPU time, 8 seconds of wall time, and 96 MiB of memory. File access, networking, and process creation are blocked.</p><details><summary>Prepared inputs</summary><pre>{{JSON.stringify(request.artifact.inputs,null,2)}}</pre></details><p v-if="request.review">{{request.review.model??request.artifact.profile.low.model}} · {{request.review.tokens.toLocaleString('en-US')}} token<br>{{request.review.verdict.explanation}}</p><p v-if="serviceAction?.rollback && request.artifact.spec.rollbackPlan">{{request.artifact.spec.rollbackPlan}}</p><ul><li v-for="target in scope" :key="target.id"><ServerLink :id="target.id" :address="target.address" captured/></li></ul><p class="hash">Artifact {{request.artifactHash}}</p></details>
+      <p v-else-if="allowed" class="review-ok">Risk review passed</p>
+      <p v-if="expired&&waiting" class="error" role="status">This request expired before it was approved.</p>
+      <p v-else-if="!waiting" class="result" role="status">{{statusLabels[request.state]??'This request is closed'}}. You can close this window.</p>
+      <details v-if="action?.kind==='shell'"><summary>Servers and execution limits</summary><p>Up to {{request.artifact.isolation.wallSeconds}} s</p><ul><li v-for="target in scope" :key="target.id"><ServerLink :id="target.id" :address="target.address" captured/></li></ul></details>
+      <details v-else><summary>Code and technical details</summary><pre>{{request.artifact.spec.code}}</pre><p>Python is limited to 4 seconds of CPU time, 8 seconds of wall time, and 96 MiB of memory. File access, networking, and process creation are blocked.</p><details><summary>Prepared inputs</summary><pre>{{JSON.stringify(request.artifact.inputs,null,2)}}</pre></details><p v-if="request.review">{{request.review.model??request.artifact.profile.low.model}} · {{request.review.tokens.toLocaleString('en-US')}} tokens<br>{{request.review.verdict.explanation}}</p><p v-if="serviceAction?.rollback && request.artifact.spec.rollbackPlan">{{request.artifact.spec.rollbackPlan}}</p><ul><li v-for="target in scope" :key="target.id"><ServerLink :id="target.id" :address="target.address" captured/></li></ul><p class="hash">Artifact {{request.artifactHash}}</p></details>
     </template>
   </div>
   <footer>
     <template v-if="waiting&&!expired">
       <label v-if="!requiresOneTime" class="session"><input v-model="session" type="checkbox" :disabled="busy||!allowed">{{action?.kind==='shell'?'Allow more shell scripts in this run':'Allow more actions in this run'}}</label>
-      <p class="scope-note">{{requiresOneTime?'Permission is valid only for this action.':useSession?`On selected servers: ${scope.length}. Every new script checks for low.`:'Only this action is allowed by default.'}}</p>
+      <p class="scope-note">{{requiresOneTime?'Approval applies to this action only.':useSession?`Applies to ${scope.length} selected servers. Each new script goes through risk review.`:'By default, approval applies to this action only.'}}</p>
       <div class="buttons"><button ref="denyButton" :disabled="busy||preview||!allowed" @click="decide('deny')">Decline</button><button class="primary" :disabled="busy||preview||!allowed" @click="decide(useSession?'session':'once')">{{busy?'Submitting…':useSession?'Allow for this run':'Allow once'}}</button></div>
     </template>
     <button v-else :disabled="busy" @click="close">Close</button>
-    <p v-if="preview" class="scope-note">Preview. Actions not being carried out.</p>
+    <p v-if="preview" class="scope-note">Actions are disabled in the preview.</p>
   </footer>
 </main>
 </template>

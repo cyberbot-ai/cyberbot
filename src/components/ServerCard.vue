@@ -12,7 +12,7 @@ defineEmits<{select:[server:Server]}>();
 const status=computed(()=>health(props.server,props.now,props.interval));
 const hideMetrics=computed(()=>props.server.networkOffline || props.server.awaitingFirstCheck);
 const disk=computed(()=>props.server.observation?.disks.reduce((max,d)=>Math.max(max,d.usedPercent),0));
-const meters=computed(()=>[{label:'CPU',value:hideMetrics.value?null:props.server.observation?.cpuPercent},{label:'RAM',value:hideMetrics.value?null:props.server.observation?.memoryPercent},{label:'Disc',value:hideMetrics.value?null:disk.value}]);
+const meters=computed(()=>[{label:'CPU',value:hideMetrics.value?null:props.server.observation?.cpuPercent},{label:'RAM',value:hideMetrics.value?null:props.server.observation?.memoryPercent},{label:'Disk',value:hideMetrics.value?null:disk.value}]);
 const services=computed(()=>{
  if(props.server.networkOffline)return [];
  const list:{name:string;state:string;exact?:string;unitFailure?:string}[]=[];
@@ -31,7 +31,7 @@ const services=computed(()=>{
 });
 </script>
 <template><button class="card" :class="[status,{compact}]" :aria-label="`${server.endpoint.host}, ${serverHealthLabel(server,status)}, CPU ${percent(hideMetrics?null:server.observation?.cpuPercent)}, memory ${percent(hideMetrics?null:server.observation?.memoryPercent)}, disk ${percent(hideMetrics?null:disk)}`" @click="$emit('select',server)">
-  <div class="identity"><span class="status-dot" :title="partialHealthReason(server, status) ?? serverHealthLabel(server, status)"></span><div><strong :title="serverHint(server)">{{server.endpoint.host}}</strong><span v-if="compact" class="narrow-status health">{{serverHealthLabel(server,status)}}</span></div><RelativeDate v-if="!compact && !server.networkOffline" class="freshness" :at="server.observation?.at" empty="untested"/></div>
+  <div class="identity"><span class="status-dot" :title="partialHealthReason(server, status) ?? serverHealthLabel(server, status)"></span><div><strong :title="serverHint(server)">{{server.endpoint.host}}</strong><span v-if="compact" class="narrow-status health">{{serverHealthLabel(server,status)}}</span></div><RelativeDate v-if="!compact && !server.networkOffline" class="freshness" :at="server.observation?.at" empty="Not checked yet"/></div>
   <div class="meters"><div v-for="meter in meters" :key="meter.label" class="meter"><span>{{meter.label}}</span><b :class="{hot:(meter.value??0)>=90}"><MetricValue :value="meter.value" :precision="0" unit="%"/></b><span v-if="!compact" class="track"><i :class="{hot:(meter.value??0)>=90}" :style="{width:`${Math.max(0,Math.min(100,Number.isFinite(meter.value)?meter.value??0:0))}%`}"></i></span></div></div>
   <div class="card-bottom"><span class="health">{{serverHealthLabel(server,status)}}</span><span class="services"><span v-for="(s,index) in services.slice(0,2)" :key="index" :class="s.state" :title="[`${s.name}: ${s.state}`, s.exact, s.unitFailure].filter(Boolean).join(' · ')">{{s.name}}</span><span v-if="services.length>2" :title="services.slice(2).map(s=>s.name).join(', ')">+{{services.length-2}}</span></span></div>
 </button></template>

@@ -67,9 +67,9 @@ async fn installed() -> Vec<AgentStatus> {
             version,
             ready,
             reason: if ready {
-                "The protocol and system isolation are being checked before launch."
+                "Cyberbot checks the CLI protocol and isolation before starting a run."
             } else {
-                "CLI is missing or version is not verified; launch is prohibited."
+                "The CLI is missing or its version could not be verified. AI runs are unavailable."
             }
             .into(),
         });
@@ -84,8 +84,8 @@ pub async fn detect() -> Vec<AgentStatus> {
             let probe = probe_codex(Path::new(agent.path.as_deref().unwrap())).await;
             agent.ready = probe.is_ok();
             agent.reason = match probe {
-                Ok(()) => "App Server and limitations verified. Model and MCP validated before each launch.".into(),
-                Err(error) => format!("Codex: compatibility check not passed: {error}"),
+                Ok(()) => "The App Server and isolation checks passed. Cyberbot verifies the model and MCP before each run.".into(),
+                Err(error) => format!("Codex compatibility check failed: {error}"),
             };
         }
     }
@@ -212,7 +212,7 @@ impl Investigator {
             .map_err(|e| e.to_string())?
             .get(id)
             .cloned()
-            .ok_or("AI launch not found".into())
+            .ok_or("AI run not found".into())
     }
     pub(crate) fn busy(&self) -> bool {
         self.active.load(Ordering::SeqCst)
@@ -229,7 +229,7 @@ impl Investigator {
     }
     pub fn cancel(&self, id: &str) -> Result<(), String> {
         let tokens = self.cancel.lock().map_err(|e| e.to_string())?;
-        let t = tokens.get(id).ok_or("AI launch is already complete")?;
+        let t = tokens.get(id).ok_or("This AI run has already ended")?;
         t.cancel();
         Ok(())
     }
@@ -291,11 +291,11 @@ pub(crate) fn start_authoring(
     notify: Notify,
 ) -> Result<String, String> {
     if question.len() > 6000 {
-        return Err("Description up to 6,000 bytes".into());
+        return Err("Enter a description of up to 6,000 bytes".into());
     }
     let view = state.store.check_view(&server, None)?;
     if !view.definitions.iter().any(|d| d.id == check) {
-        return Err("Verification removed".into());
+        return Err("Check removed".into());
     }
     let prompt=format!("Create a reusable declarative Cyberbot check. First call get_check_contract, then propose_check_version with a complete spec and test_check_version. Include meaningful healthy, firing and missing-data fixtures. Never enable checks; the user reviews and enables in the desktop. Use only supported fields; explain unsupported requests. User request (untrusted): {question}");
     start_run(
@@ -390,12 +390,12 @@ fn continue_chat(
         })
         .collect();
     if history.is_empty() {
-        return Err("Dialogue no longer available".into());
+        return Err("Chat no longer available".into());
     }
     if history.iter().any(|run| {
         run.fleet_chat() != (scope == ChatScope::Fleet) || &run.scope_endpoints != endpoints
     }) {
-        return Err("The servers or dialog connections have changed. Start a new dialog.".into());
+        return Err("Servers or connection settings changed. Start a new chat.".into());
     }
     history.sort_by_key(|run| run.chat.as_ref().map_or(1, |chat| chat.turn));
     let last = history.last().unwrap();
@@ -471,7 +471,7 @@ fn start_run(
         .iter()
         .any(|id| !snapshot.servers.iter().any(|s| s.id == *id))
     {
-        return Err("The server is remote".into());
+        return Err("The server was removed".into());
     }
     let scope_endpoints = snapshot
         .servers
@@ -487,7 +487,7 @@ fn start_run(
     let id = uuid::Uuid::new_v4().to_string();
     let (chat, transcript) = if let Some(chat_id) = chat_id {
         if scope == ChatScope::Server && ids.len() != 1 {
-            return Err("The dialogue is tied to a single server".into());
+            return Err("This chat is tied to one server".into());
         }
         let (chat, transcript) =
             continue_chat(state.investigator.all()?, chat_id, scope, &scope_endpoints)?;
@@ -508,7 +508,7 @@ fn start_run(
         (None, String::new())
     };
     if state.investigator.active.swap(true, Ordering::SeqCst) {
-        return Err("AI is already doing another job".into());
+        return Err("An AI run is already in progress".into());
     }
     let token = CancellationToken::new();
     let run = Investigation {
@@ -650,12 +650,15 @@ fn start_run(
                 }
                 .into();
                 r.error = if budget_hit.load(Ordering::SeqCst) {
-                    Some("Launch token reserve reached; AUTO suspended".into())
+                    Some(
+                        "The run used its token reservation. Automatic investigations are paused."
+                            .into(),
+                    )
                 } else {
                     result.err()
                 };
                 if let Err(e) = state.store.settle(r) {
-                    r.error = Some(format!("Failed to maintain the report: {e}"));
+                    r.error = Some(format!("Could not save the report: {e}"));
                     r.status = "failed".into();
                 }
             }
@@ -716,12 +719,12 @@ async fn execute(
         .await
         .into_iter()
         .find(|a| a.name == run.agent && a.ready)
-        .ok_or("CLI not installed or available for isolated launch")?;
+        .ok_or("The CLI is missing or cannot run in isolation")?;
     let exe = PathBuf::from(info.path.ok_or("No CLI")?);
     let home = PathBuf::from(std::env::var_os("HOME").ok_or("No Home")?);
     let work = isolation::prepare(&state.root)?;
     let result=async{
-  isolation::preflight(&work,&home).await?;let mcp=McpServer::start_run(state,run).await?;if !run.scope_endpoints.is_empty() && (run.scope_endpoints.len()!=mcp.scope.targets.len() || run.scope_endpoints.iter().any(|(id,ep)|mcp.scope.targets.get(id)!=Some(ep))){return Err("Connections changed before agent launch".into());}let mut proxy=Egress::start(&run.agent).await?;
+  isolation::preflight(&work,&home).await?;let mcp=McpServer::start_run(state,run).await?;if !run.scope_endpoints.is_empty() && (run.scope_endpoints.len()!=mcp.scope.targets.len() || run.scope_endpoints.iter().any(|(id,ep)|mcp.scope.targets.get(id)!=Some(ep))){return Err("Connection settings changed before the AI run started".into());}let mut proxy=Egress::start(&run.agent).await?;
   let profile=work.join("agent.sb");std::fs::write(&profile,isolation::profile(&exe,&work,&home,&[mcp.scope.port,proxy.port],&run.agent)?).map_err(|e|e.to_string())?;
   let selected=if run.group_id.is_some() || run.fleet_chat(){format!("{} frozen authorized servers; use paginated MCP",run.server_ids.len())}else{serde_json::to_string(&run.server_ids).unwrap()};
   let history = if transcript.is_empty() { String::new() } else {
@@ -742,11 +745,11 @@ async fn execute(
   let system = format!("{SYSTEM} {reply_language}");
   let mut future=Box::pin(async{if run.agent=="codex"{codex(Launch{exe:&exe,work:&work,profile:&profile,proxy:&proxy},Some(&mcp),&prompt,&system,run.model_profile.as_ref(),&mut progress).await}else{claude(Launch{exe:&exe,work:&work,profile:&profile,proxy:&proxy},Some(&mcp),&prompt,&system,run.model_profile.as_ref(),&mut progress).await}});
   let started=Instant::now();
-  let result=loop{tokio::select!{_=cancel.cancelled()=>break Err("AI launch cancelled".into()),r=&mut future=>break r,_=tokio::time::sleep(Duration::from_millis(100))=>{if now().saturating_sub(run.started_at)>=900 || started.elapsed().saturating_sub(mcp.scope.wait_clock.elapsed())>=Duration::from_secs(300){break Err("Exceeded the limit of 5 minutes of work (waiting for permission is considered separately, up to 10 minutes)".into());}}}};
+  let result=loop{tokio::select!{_=cancel.cancelled()=>break Err("AI run cancelled".into()),r=&mut future=>break r,_=tokio::time::sleep(Duration::from_millis(100))=>{if now().saturating_sub(run.started_at)>=900 || started.elapsed().saturating_sub(mcp.scope.wait_clock.elapsed())>=Duration::from_secs(300){break Err("The AI run exceeded its 5-minute limit. Waiting for approval has a separate 10-minute limit.".into());}}}};
   drop(future);
   mcp.scope.cancel.cancel();
   proxy.close().await;
-  let audit=mcp.scope.audit.lock().map_err(|e|e.to_string())?.clone();let evidence=has_evidence(&audit,run.authoring_id.is_some(),run.fleet_chat());progress(Progress::Audit(audit));result?;if !evidence{return Err("Agent terminates without reading evidence via MCP".into());}Ok(())
+  let audit=mcp.scope.audit.lock().map_err(|e|e.to_string())?.clone();let evidence=has_evidence(&audit,run.authoring_id.is_some(),run.fleet_chat());progress(Progress::Audit(audit));result?;if !evidence{return Err("The agent finished without reading evidence through MCP".into());}Ok(())
  }.await;
     let _ = std::fs::remove_dir_all(work);
     result
@@ -901,14 +904,14 @@ impl Session {
         self.bytes += n;
         if n == 0 {
             return Err(
-                "CLI ended before the end of the protocol; check for App Server support and CLI authorization".into(),
+                "The CLI exited before completing the protocol. Check App Server support and CLI authentication.".into(),
             );
         }
         if n > 262144 || self.bytes > 4 * 1024 * 1024 {
-            return Err("CLI withdrawal limit exceeded".into());
+            return Err("CLI output limit exceeded".into());
         }
         serde_json::from_slice(&line)
-            .map_err(|_| "CLI has returned an incompatible protocol".into())
+            .map_err(|_| "The CLI returned an incompatible protocol response".into())
     }
     async fn rpc(&mut self, id: u64, method: &str, params: Value) -> Result<Value, String> {
         self.send(json!({"id":id,"method":method,"params":params}))
@@ -923,7 +926,7 @@ impl Session {
             }
             if v.get("id").is_some() && v.get("method").is_some() {
                 self.deny(&v).await?;
-                return Err("CLI asks for banned permission".into());
+                return Err("The CLI requested a blocked permission".into());
             }
         }
     }
@@ -1034,10 +1037,10 @@ fn verify_codex_config(c: &Value, with_mcp: bool) -> Result<(), String> {
             || m.iter()
                 .any(|(name, cfg)| (!with_mcp || name != "cyberbot") && cfg["enabled"] != false)
     }) {
-        return Err("Codex retains third-party MCPs; launch prohibited".into());
+        return Err("Codex kept third-party MCP servers enabled. Cyberbot blocked the run.".into());
     }
     if with_mcp && c["mcp_servers"]["cyberbot"]["enabled"] == false {
-        return Err("Codex shuts down MCP Cyberbot".into());
+        return Err("Codex disabled the Cyberbot MCP server".into());
     }
     Ok(())
 }
@@ -1058,7 +1061,7 @@ async fn codex_catalog(s: &mut Session) -> Result<Vec<crate::ai_models::ModelInf
             return Ok(result);
         }
     }
-    Err("The catalog of models exceeds the limit".into())
+    Err("The model catalog exceeded the size limit".into())
 }
 // This accepts entry to our broker only. The MCP still performs low review and
 // waits for the immutable artifact's desktop approval; no native escalation is granted.
@@ -1196,7 +1199,7 @@ async fn codex(
             tokio::time::sleep(Duration::from_millis(300)).await;
         }
         if !ready {
-            return Err("Codex does not connect a secure MCP".into());
+            return Err("Codex did not connect to the Cyberbot MCP server securely".into());
         }
     }
     progress(Progress::Launched);
@@ -1247,7 +1250,7 @@ async fn codex(
             }
             Some("item/completed") if v["params"]["item"]["type"] == "webSearch" => {
                 if !s.live_web {
-                    return Err("Codex Used Search Outside of Manual Run".into());
+                    return Err("Codex used web search outside a manual run".into());
                 }
                 if !search_audited {
                     if let Some(mcp) = mcp {
@@ -1399,7 +1402,7 @@ async fn claude(
             Some("system") if v["subtype"] == "init" => {
                 let tools = v["tools"]
                     .as_array()
-                    .ok_or("Claude did not disclose the instruments")?;
+                    .ok_or("Claude did not report its available tools")?;
                 let reported = tools
                     .iter()
                     .filter_map(Value::as_str)
@@ -1410,7 +1413,7 @@ async fn claude(
                         .iter()
                         .all(|name| claude_tool(name) && expected_tools.contains(*name))
                 {
-                    return Err(format!("Claude includes banned tools: {}", v["tools"]));
+                    return Err(format!("Claude enabled blocked tools: {}", v["tools"]));
                 }
                 let servers = v["mcp_servers"].as_array().ok_or("No MCP list")?;
                 if mcp.is_some()
@@ -1419,11 +1422,11 @@ async fn claude(
                         || servers[0]["status"] != "connected")
                     || mcp.is_none() && !servers.is_empty()
                 {
-                    return Err("Claude has not confirmed the MCP area".into());
+                    return Err("Claude did not confirm the MCP scope".into());
                 }
                 let actual = v["model"]
                     .as_str()
-                    .ok_or("Claude did not disclose the model")?;
+                    .ok_or("Claude did not report the model")?;
                 crate::ai_models::validate_claude_actual(&expected_model, actual)?;
                 progress(Progress::Model(actual.into()));
                 initialized = true;
@@ -1433,7 +1436,7 @@ async fn claude(
             }
             Some("stream_event") => {
                 if !initialized {
-                    return Err("Claude begins work before testing tools".into());
+                    return Err("Claude started before Cyberbot could verify its tools".into());
                 }
                 if let Some(total) = usage.stream(&v["event"]) {
                     progress(Progress::Usage(total));
@@ -1445,7 +1448,7 @@ async fn claude(
             }
             Some("assistant") => {
                 if !initialized {
-                    return Err("No initialization of Claude".into());
+                    return Err("Claude did not initialize".into());
                 }
                 if let Some(actual) = v["message"]["model"].as_str() {
                     crate::ai_models::validate_claude_actual(&expected_model, actual)?;
@@ -1461,7 +1464,7 @@ async fn claude(
                                 .as_str()
                                 .is_some_and(|name| expected_tools.contains(name))
                         {
-                            return Err("Prohibited Claude Instrument".into());
+                            return Err("Claude used a blocked tool".into());
                         }
                         if !streamed && b["type"] == "text" {
                             progress(Progress::Text(b["text"].as_str().unwrap_or("").into()));
@@ -1480,7 +1483,7 @@ async fn claude(
                 progress(Progress::UsageComplete);
                 progress(Progress::Usage(v["usage"].clone()));
                 if !initialized {
-                    return Err("Claude did not pass the initialization".into());
+                    return Err("Claude initialization failed".into());
                 }
                 if v["is_error"] == true {
                     return Err(format!(
@@ -1503,12 +1506,12 @@ async fn claude_initialize(s: &mut Session) -> Result<Vec<crate::ai_models::Mode
         let v = s.next().await?;
         if v["type"] == "control_response" && v["response"]["request_id"] == "catalog" {
             if v["response"]["subtype"] != "success" {
-                return Err("Claude: catalog not available".into());
+                return Err("Claude model catalog unavailable".into());
             }
             return crate::ai_models::claude_models(&v["response"]["response"]);
         }
         if v["type"] == "control_request" {
-            return Err("Claude asks for permission to read the catalog".into());
+            return Err("Claude requested permission while listing models".into());
         }
     }
 }
@@ -1563,7 +1566,7 @@ async fn read_model_catalog(
         result
     })
     .await
-    .unwrap_or_else(|_| Err("It’s time to read the catalog of models".into()));
+    .unwrap_or_else(|_| Err("Timed out while loading the model catalog".into()));
     let _ = std::fs::remove_dir_all(work);
     result
 }
@@ -1615,15 +1618,15 @@ pub(crate) async fn review_action(
     let work = isolation::prepare(root);
     let outcome = if let Ok(work) = work.as_ref() {
         let result=tokio::time::timeout(Duration::from_secs(90),async{
-   let info=installed().await.into_iter().find(|a|a.name==request.artifact.provider&&a.ready).ok_or("CLI reviewer incompatible")?;
+   let info=installed().await.into_iter().find(|a|a.name==request.artifact.provider&&a.ready).ok_or("The CLI is incompatible with risk review")?;
    let exe=PathBuf::from(info.path.ok_or("No CLI")?);let home=PathBuf::from(std::env::var_os("HOME").ok_or("No Home")?);isolation::preflight(work,&home).await?;
    let mut proxy=Egress::start(&request.artifact.provider).await?;let profile=work.join("review.sb");std::fs::write(&profile,isolation::profile(&exe,work,&home,&[proxy.port],&request.artifact.provider)?).map_err(|e|e.to_string())?;
    let selection=crate::ai_models::Selection{revision:request.artifact.profile.revision,alias:"low".into(),primary:request.artifact.profile.low.clone(),low:request.artifact.profile.low.clone()};
    let endpoint:crate::model::Endpoint=serde_json::from_str(&request.artifact.endpoint).map_err(|_|"Improper endpoint")?;
    let prompt=json!({"requestData":{"artifactHash":request.artifact_hash,"rules":request.artifact.rules,"target":{"serverId":request.server_id,"user":endpoint.user,"host":endpoint.host,"port":endpoint.port},"spec":request.artifact.spec,"inputs":request.artifact.inputs,"prepared":request.artifact.prepared,"isolation":request.artifact.isolation}}).to_string();
    let future=async{if request.artifact.provider=="codex"{codex(Launch{exe:&exe,work,profile:&profile,proxy:&proxy},None,&prompt,REVIEW_SYSTEM,Some(&selection),&mut progress).await}else{claude(Launch{exe:&exe,work,profile:&profile,proxy:&proxy},None,&prompt,REVIEW_SYSTEM,Some(&selection),&mut progress).await}};
-   let result=tokio::select!{_=cancel.cancelled()=>Err("Low-review cancelled or depleted reserve".into()),r=future=>r};proxy.close().await;result
-  }).await.unwrap_or_else(|_|Err("Low-review: timeout 90 seconds".into()));
+   let result=tokio::select!{_=cancel.cancelled()=>Err("The risk review was cancelled or used up its token budget".into()),r=future=>r};proxy.close().await;result
+  }).await.unwrap_or_else(|_|Err("Risk review timed out after 90 seconds".into()));
         let _ = std::fs::remove_dir_all(work);
         result
     } else {
@@ -1639,10 +1642,10 @@ pub(crate) async fn review_action(
     let verdict = outcome
         .and_then(|_| {
             if !complete || actual.is_none() || tokens >= reservation {
-                return Err("Low did not confirm the model/spending or ran out of reserve".into());
+                return Err("Risk review could not confirm its model or token usage, or it ran out of budget".into());
             }
             serde_json::from_str::<crate::ai_actions::Verdict>(&text)
-                .map_err(|_| "Low returns malfunctioning JSON; performance closed".into())
+                .map_err(|_| "The risk review returned invalid JSON. Cyberbot blocked the action.".into())
         })
         .unwrap_or_else(|e| crate::ai_actions::Verdict {
             decision: crate::ai_actions::Decision::Uncertain,

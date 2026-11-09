@@ -25,7 +25,7 @@ beforeEach(() => {
 
 it('selects 30 matches, toggles a range with Shift and keeps explicit empty separate from all', async () => {
   const wrapper = mount(FleetConsole, { props: { servers, modelValue: null, 'onUpdate:modelValue': value => wrapper.setProps({ modelValue: value }) } });
-  await wrapper.get('[aria-label="Selection of servers"]').trigger('click');
+  await wrapper.get('[aria-label="Server selection"]').trigger('click');
   await wrapper.get('input[role=combobox]').setValue('db');
   expect(wrapper.findAll('[role=option]')).toHaveLength(30);
   const options = wrapper.findAll('[role=option]');
@@ -35,7 +35,7 @@ it('selects 30 matches, toggles a range with Shift and keeps explicit empty sepa
   await wrapper.get('input[role=combobox]').trigger('keydown', { key: 'ArrowDown' });
   await wrapper.get('input[role=combobox]').trigger('keydown', { key: ' ' });
   expect(wrapper.props('modelValue')).toContain('5');
-  await wrapper.findAll('button').find(button => button.text() === 'Select found · 30')!.trigger('click');
+  await wrapper.findAll('button').find(button => button.text() === 'Select matching servers · 30')!.trigger('click');
   expect(wrapper.props('modelValue')).toHaveLength(30);
   expect(wrapper.text()).toContain('+27');
   await wrapper.setProps({ servers: servers.slice(30) });

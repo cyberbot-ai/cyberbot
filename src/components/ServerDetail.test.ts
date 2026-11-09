@@ -78,7 +78,7 @@ it('opens only the requested diagnostic module and preserves drafts between tabs
 });
 it('shows unsupported distro capabilities without implying vulnerability coverage',async()=>{
  const observation={at:100,cpuPercent:1,memoryPercent:2,swapPercent:0,load:0,uptime:100,disks:[],services:[],missing:['services_adapter_unsupported'],bytesReceived:600,durationMs:200,platform:{version:1,distro:'alpine',release:'unknown',versionId:'3.21',idLike:[],family:'alpine',architecture:'aarch64',kernel:'6.1',procfs:true,initSystem:'openrc',serviceAdapter:'unsupported',journalAvailable:false,packageManager:'apk',packageAdapter:'unsupported',advisoryProvider:'unsupported'}};
- const w=mount(ServerDetail,{props:{server:{...server,observation},now:100,interval:180}});await flushPromises();expect(w.text()).toContain('alpine 3.21');expect(w.text()).toContain('the adapter is not yet supported');expect(w.text()).toContain('package vulnerability testing is not yet supported');w.unmount();
+ const w=mount(ServerDetail,{props:{server:{...server,observation},now:100,interval:180}});await flushPromises();expect(w.text()).toContain('alpine 3.21');expect(w.text()).toContain('the adapter is not yet supported');expect(w.text()).toContain('Package vulnerability checks are unavailable');w.unmount();
 });
 it('marks tabs and metrics that need attention without adding an overview problem list',async()=>{
  const observation={at:100,cpuPercent:1,memoryPercent:2,swapPercent:0,load:0,uptime:100,disks:[{mount:'/data',usedPercent:98,inodePercent:3}],services:[],missing:[],bytesReceived:100,durationMs:10};

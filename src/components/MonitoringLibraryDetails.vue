@@ -49,11 +49,11 @@ const scope = computed<MonitoringScope>(() => ({
 }));
 const minInterval = props.definition.runner === 'metrics' ? 30 : 60;
 const scopeOrigin: Record<string, string> = {
-  factory: 'Factory importance', global: 'From the general settings', server: 'From the server settings', instance: 'Set to connect',
+  factory: 'Factory default', global: 'From global settings', server: 'From server settings', instance: 'Connection override',
 };
-const resetLabel = computed(() => instance.value ? 'Like on a server' : props.server ? 'Like in general settings' : 'By default');
-const triggers: Record<string, string> = { schedule: 'On schedule', manual: 'User', ai: 'Requesting AI' };
-const phases: Record<string, string> = { completed: 'Finished', failed: 'Mistake', cancelled: 'Cancelled', interrupted: 'Interrupted', info: 'Event' };
+const resetLabel = computed(() => instance.value ? 'Use server settings' : props.server ? 'Use global settings' : 'Use factory defaults');
+const triggers: Record<string, string> = { schedule: 'On schedule', manual: 'Manual', ai: 'AI request' };
+const phases: Record<string, string> = { completed: 'Finished', failed: 'Failed', cancelled: 'Cancelled', interrupted: 'Interrupted', info: 'Event' };
 const message = (value: unknown) => String(value).replace(/^Error: /, '');
 const hasOverride = (field: keyof MonitoringValues) => policy.value?.overrides[field] != null;
 
@@ -131,7 +131,7 @@ async function setPeers(event: Event) {
   const input = event.target as HTMLInputElement;
   const count = input.valueAsNumber;
   if (!Number.isSafeInteger(count) || count < 0 || count > 64) {
-    error.value = 'The number of replicas should be an integer from 0 to 64.';
+    error.value = 'Enter a whole number of replicas from 0 to 64.';
   } else if (count === policy.value?.values.expectedPeers || await change('expectedPeers', count)) {
     return;
   }
@@ -236,66 +236,66 @@ onBeforeUnmount(() => {
         <option v-for="item in instances" :key="item.id" :value="item.id">{{ item.name }}{{ instanceOverrides?.includes(item.id) ? ' · settings' : '' }}</option>
       </UiSelect>
     </label>
-    <p v-if="instanceError" class="problem" role="alert">{{ instanceError }} <RefreshButton @click="loadInstances">Download the connections</RefreshButton></p>
-    <p v-if="error" class="problem" role="alert">{{ error }} <RefreshButton :disabled="saving" @click="refreshPolicy">Update values</RefreshButton></p>
-    <p v-if="loading" class="hint" role="status">Download the settings…</p>
+    <p v-if="instanceError" class="problem" role="alert">{{ instanceError }} <RefreshButton @click="loadInstances">Reload connections</RefreshButton></p>
+    <p v-if="error" class="problem" role="alert">{{ error }} <RefreshButton :disabled="saving" @click="refreshPolicy">Refresh settings</RefreshButton></p>
+    <p v-if="loading" class="hint" role="status">Loading settings…</p>
     <template v-else-if="policy">
       <div v-if="definition.intervalEditable" class="interval">
-        <span>Interview interval</span>
+        <span>Check interval</span>
         <div class="interval-value">
           <template v-if="editing">
             <UiInput
               ref="intervalField" v-model="intervalText" compact class="interval-input" type="text"
-              aria-label="Interval of verification" :aria-invalid="!!intervalError" :disabled="saving"
+              aria-label="Check interval" :aria-invalid="!!intervalError" :disabled="saving"
               @input="intervalError = ''" @keydown.enter.prevent="saveInterval" @keydown.esc.stop.prevent="closeInterval"
             />
-            <button type="button" class="icon-button" aria-label="Apply the interval" :disabled="saving" @click="saveInterval"><UiIcon name="check" :size="14"/></button>
+            <button type="button" class="icon-button" aria-label="Apply interval" :disabled="saving" @click="saveInterval"><UiIcon name="check" :size="14"/></button>
             <button type="button" class="icon-button" aria-label="Cancel interval change" :disabled="saving" @click="closeInterval"><UiIcon name="close" :size="14"/></button>
           </template>
-          <button v-else ref="intervalButton" type="button" class="link interval-button" :disabled="saving || preview" :aria-label="`Change the interval, now ${monitoringInterval(policy.values.intervalSeconds)}`" @click="openInterval">
+          <button v-else ref="intervalButton" type="button" class="link interval-button" :disabled="saving || preview" :aria-label="`Change check interval. Current interval ${monitoringInterval(policy.values.intervalSeconds)}`" @click="openInterval">
             {{ monitoringInterval(policy.values.intervalSeconds) }}
           </button>
-          <small>{{ server && hasOverride('intervalSeconds') ? (instance ? 'Set to connect' : 'Designed for the server') : scopeOrigin[policy.origins.intervalSeconds] }}</small>
+          <small>{{ server && hasOverride('intervalSeconds') ? (instance ? 'Connection override' : 'Server override') : scopeOrigin[policy.origins.intervalSeconds] }}</small>
           <button v-if="hasOverride('intervalSeconds') && !editing" type="button" class="link" :disabled="saving || preview" @click="resetInterval">{{ resetLabel }}</button>
         </div>
       </div>
       <p v-if="intervalError" class="problem" role="alert">{{ intervalError }}</p>
       <div class="toggle">
-        <label><input type="checkbox" :checked="policy.values.enabled" :disabled="saving || preview" @change="toggle('enabled', $event)"> Perform a check</label>
+        <label><input type="checkbox" :checked="policy.values.enabled" :disabled="saving || preview" @change="toggle('enabled', $event)"> Enable check</label>
         <button v-if="hasOverride('enabled')" type="button" class="link" :disabled="saving || preview" @click="change('enabled', null)">{{ resetLabel }}</button>
       </div>
       <div v-if="definition.diagnostics" class="toggle">
         <label><input type="checkbox" :checked="policy.values.diagnosticEnabled" :disabled="saving || preview" @change="toggle('diagnosticEnabled', $event)"> Collect metrics</label>
         <button v-if="hasOverride('diagnosticEnabled')" type="button" class="link" :disabled="saving || preview" @click="change('diagnosticEnabled', null)">{{ resetLabel }}</button>
       </div>
-      <p v-if="!policy.values.enabled" class="hint">Check off. Incidents persist.</p>
-      <p v-else-if="definition.diagnostics && !policy.values.diagnosticEnabled" class="hint">Cyberbot searches for service once every 6 hours.</p>
+      <p v-if="!policy.values.enabled" class="hint">Check disabled. Existing incidents stay open.</p>
+      <p v-else-if="definition.diagnostics && !policy.values.diagnosticEnabled" class="hint">Cyberbot checks whether the service is present every 6 hours.</p>
       <details v-if="definition.replication">
         <summary>Replication</summary>
         <div class="toggle">
-          <label>Expected replicas/participants <UiInput compact type="number" :value="policy.values.expectedPeers" min="0" max="64" step="1" :disabled="saving || preview" @change="setPeers"/></label>
+          <label>Expected replicas or members <UiInput compact type="number" :value="policy.values.expectedPeers" min="0" max="64" step="1" :disabled="saving || preview" @change="setPeers"/></label>
           <button v-if="hasOverride('expectedPeers')" type="button" class="link" :disabled="saving || preview" @click="change('expectedPeers', null)">{{ resetLabel }}</button>
         </div>
-        <label class="connection">Connecting the replica to the main server
+        <label class="connection">Replica connection to primary
           <UiSelect compact :value="policy.overrides.expectReplica?.toString() ?? ''" :disabled="saving || preview" @change="setReplica">
-            <option value="">{{ resetLabel }} · {{ (policy.inherited?.expectReplica ?? policy.values.expectReplica) ? 'expected' : 'flat-out' }}</option>
-            <option value="true">Expected</option><option value="false">Not given</option>
+            <option value="">{{ resetLabel }} · {{ (policy.inherited?.expectReplica ?? policy.values.expectReplica) ? 'expected' : 'not expected' }}</option>
+            <option value="true">Expected</option><option value="false">Not expected</option>
           </UiSelect>
         </label>
       </details>
     </template>
     <details>
-      <summary>Data and rights</summary>
+      <summary>Data and permissions</summary>
       <dl class="contract">
-        <div><dt>Where it’s done</dt><dd>{{ definition.place }}</dd></div>
-        <div><dt>Reading</dt><dd>{{ definition.reads }}</dd></div>
-        <div><dt>Teams/SQL</dt><dd>{{ definition.commands }}</dd></div>
-        <div><dt>Recording</dt><dd>{{ definition.writes }}</dd></div>
-        <div><dt>Rights</dt><dd>{{ definition.rights }}</dd></div>
+        <div><dt>Runs on</dt><dd>{{ definition.place }}</dd></div>
+        <div><dt>Reads</dt><dd>{{ definition.reads }}</dd></div>
+        <div><dt>Commands and SQL</dt><dd>{{ definition.commands }}</dd></div>
+        <div><dt>Writes</dt><dd>{{ definition.writes }}</dd></div>
+        <div><dt>Permissions</dt><dd>{{ definition.rights }}</dd></div>
         <div><dt>Schedule</dt><dd>{{ definition.schedule }}</dd></div>
-        <div><dt>Restrictions</dt><dd>{{ definition.limits }}</dd></div>
+        <div><dt>Limits</dt><dd>{{ definition.limits }}</dd></div>
       </dl>
-      <p class="hint">Built-in thresholds and algorithms are available for viewing.</p>
+      <p class="hint">View the source for built-in thresholds and algorithms.</p>
       <details @toggle="showSources">
         <summary>Sources and version {{ definition.version.slice(0, 12) }}</summary>
         <p v-if="loadingSources" class="hint">Loading sources…</p>
@@ -304,12 +304,12 @@ onBeforeUnmount(() => {
       </details>
     </details>
     <details @toggle="showHistory">
-      <summary>Recent actions</summary>
+      <summary>Recent runs</summary>
       <p v-if="historyError" class="problem" role="alert">{{ historyError }}</p>
-      <p v-else-if="loadingHistory" class="hint">Download the records…</p>
-      <p v-else-if="!recent?.length" class="hint">There are no records of this inspection yet.</p>
+      <p v-else-if="loadingHistory" class="hint">Loading recent runs…</p>
+      <p v-else-if="!recent?.length" class="hint">This check has no recorded runs yet.</p>
       <table v-else class="history">
-        <thead><tr><th>Time</th><th>Server</th><th>Launch</th><th>The result</th></tr></thead>
+        <thead><tr><th>Time</th><th>Server</th><th>Trigger</th><th>Result</th></tr></thead>
         <tbody>
           <tr v-for="record in recent" :key="record.id">
             <td><RelativeDate :at="record.at" unit="milliseconds"/></td>
@@ -321,7 +321,7 @@ onBeforeUnmount(() => {
       </table>
     </details>
     <details v-if="server && instance && service" :key="instance" @toggle="endpointOpen = ($event.target as HTMLDetailsElement).open">
-      <summary>Connection address and access to metrics</summary>
+      <summary>Connection settings and metric access</summary>
       <KeepAlive>
         <component v-if="endpointOpen" :is="servicePanel(definition.id)" :server-id="server" :kind="definition.id" :instance-id="instance" :display-name="instances.find(item => item.id === instance)?.name" :now="now" @updated="endpointUpdated"/>
       </KeepAlive>

@@ -73,16 +73,16 @@ function retry() {
 
 <template>
   <section class="dependencies" :aria-busy="editor?.loading || editor?.saving">
-    <p class="description">Select the servers on which this node depends.</p>
+    <p class="description">Select the servers this server depends on.</p>
     <p v-if="editor?.loading" role="status">Loading servers…</p>
     <div v-else-if="editor?.loadError" class="error" role="alert">
-      <p>Couldn’t download the link: {{ editor.loadError }}</p>
+      <p>Could not load dependencies: {{ editor.loadError }}</p>
       <button type="button" @click="load(serverId)">Retry</button>
     </div>
     <template v-else-if="editor">
       <template v-if="editor.available.length">
-        <UiInput v-model="search" class="search" type="search" aria-label="Find a Linked Server" placeholder="Find the server" maxlength="200"/>
-        <div class="server-list" role="group" aria-label="The servers on which this node depends">
+        <UiInput v-model="search" class="search" type="search" aria-label="Find a server" placeholder="Find the server" maxlength="200"/>
+        <div class="server-list" role="group" aria-label="Servers this server depends on">
           <label v-for="server in visible" :key="server.id" class="server-option" :class="{ selected: editor.dependsOn.includes(server.id) }">
             <input type="checkbox" :value="server.id" :checked="editor.dependsOn.includes(server.id)"
               :disabled="preview || (!editor.dependsOn.includes(server.id) && editor.dependsOn.length >= 64)"
@@ -91,14 +91,14 @@ function retry() {
           </label>
           <p v-if="!visible.length" class="empty">No servers found.</p>
         </div>
-        <p v-if="editor.dependsOn.length >= 64" class="limit">You can select no more than 64 servers. Remove the mark to choose another one.</p>
+        <p v-if="editor.dependsOn.length >= 64" class="limit">Select up to 64 servers. Deselect one to add another.</p>
         <div v-if="editor.saveError" class="error" role="alert">
-          <p>Links not maintained: {{ editor.saveError }}</p>
-          <button type="button" @click="retry">Repeat</button>
+          <p>Unsaved dependencies: {{ editor.saveError }}</p>
+          <button type="button" @click="retry">Retry</button>
         </div>
-        <p v-else class="status" role="status">{{ preview ? 'Preview: editing available in the appendix.' : editor.saving ? 'Saving…' : editor.storedRevision > 0 ? 'Save' : 'Changes are saved automatically.' }}</p>
+        <p v-else class="status" role="status">{{ preview ? 'Edit dependencies in the desktop app.' : editor.saving ? 'Saving…' : editor.storedRevision > 0 ? 'Save' : 'Changes are saved automatically.' }}</p>
       </template>
-      <p v-else class="empty">Add another server to set up connections.</p>
+      <p v-else class="empty">Add another server to configure dependencies.</p>
     </template>
   </section>
 </template>

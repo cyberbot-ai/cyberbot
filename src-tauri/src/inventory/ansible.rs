@@ -43,7 +43,7 @@ fn read_vars(value: &Value) -> Result<Vars, String> {
     }
     let map = value
         .as_object()
-        .ok_or("Inventory variables must be subject to")?;
+        .ok_or("Inventory variables must be a mapping")?;
     let mut vars = Vars::new();
     for (key, value) in map {
         if matches!(
@@ -51,22 +51,19 @@ fn read_vars(value: &Value) -> Result<Vars, String> {
             "ansible_ssh_common_args" | "ansible_ssh_extra_args" | "ansible_ssh_executable"
         ) {
             return Err(
-                "SSH commands from inventory are not supported. Set up a connection to SSH config"
+                "Configure SSH commands in your SSH config. Cyberbot reads only connection parameters from inventory."
                     .into(),
             );
         }
         let Some(name) = canonical(key) else { continue };
         let literal = value
             .as_str()
-            .ok_or("SSH parameters must be ordinary strings or numbers")?;
+            .ok_or("SSH parameters must be plain strings or numbers")?;
         if literal.len() > 4096 || literal.contains(['\n', '\r', '\0']) {
-            return Err("Too long or incorrect SSH parameter".into());
+            return Err("An SSH parameter is invalid or too long".into());
         }
         if ["{{", "{%", "{#"].iter().any(|s| literal.contains(s)) {
-            return Err(
-                "Templates in SSH parameters are not supported: specify ready values in the inventory"
-                    .into(),
-            );
+            return Err("Enter literal SSH parameter values in the inventory".into());
         }
         if key == name || !vars.contains_key(name) {
             vars.insert(name.into(), literal.into());
@@ -83,7 +80,7 @@ impl Inventory {
                 .bytes()
                 .all(|c| c.is_ascii_alphanumeric() || b"_.-".contains(&c))
         {
-            return Err("Incorrect group name inventory".into());
+            return Err("Invalid inventory group name".into());
         }
         if !self.groups.contains_key(name) && self.groups.len() >= MAX_GROUPS {
             return Err("No more than 1024 groups in inventory".into());
@@ -144,15 +141,12 @@ impl Inventory {
         }
         let map = value
             .as_object()
-            .ok_or("The group inventory should be the object")?;
+            .ok_or("An inventory group must be a mapping")?;
         if map
             .keys()
             .any(|k| !matches!(k.as_str(), "vars" | "hosts" | "children"))
         {
-            return Err(
-                "Expect static inventory with hosts, vars and children.Plugins not supported"
-                    .into(),
-            );
+            return Err("Use static inventory with hosts, vars, and children".into());
         }
         if let Some(vars) = map.get("vars") {
             self.group(name)?.vars.extend(read_vars(vars)?);
@@ -168,7 +162,7 @@ impl Inventory {
                 for host in hosts {
                     self.host(
                         name,
-                        host.as_str().ok_or("The server name is expected")?,
+                        host.as_str().ok_or("Expected a server name")?,
                         Vars::new(),
                     )?;
                 }
@@ -185,13 +179,10 @@ impl Inventory {
             }
             Some(Value::Array(children)) => {
                 for child in children {
-                    self.child(
-                        name,
-                        child.as_str().ok_or("The name of the group is expected")?,
-                    )?;
+                    self.child(name, child.as_str().ok_or("Expected a group name")?)?;
                 }
             }
-            _ => return Err("children must maintain groups".into()),
+            _ => return Err("children must contain groups".into()),
         }
         Ok(())
     }
@@ -266,7 +257,7 @@ impl Inventory {
                     .get("ansible_connection")
                     .is_some_and(|v| v != "ssh" && v != "smart")
                 {
-                    return Err("Only SSH connection is supported".into());
+                    return Err("Cyberbot supports SSH connections only".into());
                 }
                 let user = vars
                     .get("ansible_user")
@@ -274,8 +265,7 @@ impl Inventory {
                     .unwrap_or("root");
                 if user.is_empty() {
                     return Err(
-                        "ansible_user doesn’t have to be empty; delete it to use root by default"
-                            .into(),
+                        "Enter a value for ansible_user or remove it to use root by default".into(),
                     );
                 }
                 let endpoint = Endpoint {
@@ -312,17 +302,17 @@ fn depth(
         return Ok(*d);
     }
     if !visiting.insert(name.into()) {
-        return Err("Cyclical hierarchy of inventory groups".into());
+        return Err("Inventory groups contain a cycle".into());
     }
     if visiting.len() > 32 {
-        return Err("Hierarchy of inventory groups deeper than 32 levels".into());
+        return Err("Inventory groups exceed 32 levels of nesting".into());
     }
     let mut result = usize::from(name != "all");
     for parent in &parents[name] {
         result = result.max(depth(parent, parents, visiting, memo)? + 1);
     }
     if result > 32 || (name == "all" && result != 0) {
-        return Err("Incorrect Hierarchy of Inventory Groups".into());
+        return Err("Invalid inventory group hierarchy".into());
     }
     visiting.remove(name);
     memo.insert(name.into(), result);
@@ -393,12 +383,10 @@ fn expand_hosts(input: &str) -> Result<Vec<String>, String> {
             let end = start + host[start..].find(']').ok_or("Incorrect server range")?;
             let parts: Vec<_> = host[start + 1..end].split(':').collect();
             if !(2..=3).contains(&parts.len()) {
-                return Err("Expected range [beginning:ending:step]".into());
+                return Err("Expected a range in [start:end:step] format".into());
             }
             let step = if parts.len() == 3 {
-                parts[2]
-                    .parse::<u32>()
-                    .map_err(|_| "Incorrect step of range")?
+                parts[2].parse::<u32>().map_err(|_| "Invalid range step")?
             } else {
                 1
             };
@@ -410,12 +398,8 @@ fn expand_hosts(input: &str) -> Result<Vec<String>, String> {
                 (parts[0].as_bytes()[0] as u32, parts[1].as_bytes()[0] as u32)
             } else {
                 (
-                    parts[0]
-                        .parse::<u32>()
-                        .map_err(|_| "Incorrect beginning of the range")?,
-                    parts[1]
-                        .parse::<u32>()
-                        .map_err(|_| "Incorrect end of range")?,
+                    parts[0].parse::<u32>().map_err(|_| "Invalid range start")?,
+                    parts[1].parse::<u32>().map_err(|_| "Invalid range end")?,
                 )
             };
             if step == 0
@@ -439,7 +423,7 @@ fn expand_hosts(input: &str) -> Result<Vec<String>, String> {
                 };
                 next.push(format!("{}{}{}", &host[..start], value, &host[end + 1..]));
                 if next.len() > MAX_HOSTS {
-                    return Err("No more than 5,000 servers in a single band".into());
+                    return Err("A range can contain up to 5,000 servers".into());
                 }
             }
         }
@@ -448,7 +432,7 @@ fn expand_hosts(input: &str) -> Result<Vec<String>, String> {
             return Ok(hosts);
         }
     }
-    Err("Too many bands in the server name".into())
+    Err("Too many ranges in the server name".into())
 }
 
 /// Quote handling only; no substitution, evaluation or shell invocation.
@@ -486,7 +470,7 @@ fn words(line: &str) -> Result<Vec<String>, String> {
         }
     }
     if quote.is_some() || escape {
-        return Err("Unclosed quotation marks or transfer to INI inventory".into());
+        return Err("Unterminated quote or escape in INI inventory".into());
     }
     if !word.is_empty() {
         result.push(word);
@@ -524,11 +508,11 @@ fn ini(input: &str) -> Result<Inventory, String> {
                 *section = group.into();
                 inventory.group(group)?;
             } else if *kind == "vars" {
-                let (key, value) = line.split_once('=').ok_or("Expected name=significance")?;
+                let (key, value) = line.split_once('=').ok_or("Expected name=value")?;
                 let value = if value.trim().starts_with(['\'', '"']) {
                     let tokens = words(value.trim())?;
                     if tokens.len() != 1 {
-                        return Err("The incorrect value of the INI variable".into());
+                        return Err("Invalid INI variable value".into());
                     }
                     tokens[0].clone()
                 } else {
@@ -555,7 +539,7 @@ fn ini(input: &str) -> Result<Inventory, String> {
                     for token in &tokens[1..] {
                         let (key, value) = token
                             .split_once('=')
-                            .ok_or("Expected parameter name=meaning after the server name")?;
+                            .ok_or("Expected a name=value parameter after the server name")?;
                         map.insert(key.into(), Value::String(value.into()));
                     }
                     inventory.host(section, first, read_vars(&Value::Object(map))?)?;

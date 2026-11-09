@@ -154,7 +154,7 @@ impl Journal {
             };
             let meta = std::fs::symlink_metadata(entry.path()).map_err(err)?;
             if !meta.is_file() {
-                return Err("Inadmissible action log file".into());
+                return Err("Invalid activity log file".into());
             }
             if meta.len() > limit / 3 {
                 std::fs::remove_file(entry.path()).map_err(err)?;
@@ -261,7 +261,7 @@ impl Journal {
                 bytes: 0,
                 limit_bytes: self.segment_limit * 3,
                 dropped: LOST.load(Ordering::Relaxed),
-                error: Some("Action log unavailable".into()),
+                error: Some("Activity log unavailable".into()),
             },
         }
     }
@@ -269,7 +269,7 @@ impl Journal {
         self.enrich(&mut event);
         let mut w = self.writer.lock().map_err(err)?;
         if w.error.is_some() {
-            return Err("Log entry suspended after error; restart app".into());
+            return Err("Activity logging paused after an error. Restart Cyberbot.".into());
         }
         let result = (|| {
             if w.segments
@@ -337,8 +337,7 @@ impl Journal {
             Ok(())
         })();
         if result.is_err() {
-            w.error =
-                Some("Failed to write down the action log; some of the events are missed".into());
+            w.error = Some("Could not write to the activity log. Some events were skipped.".into());
         }
         result
     }
@@ -347,7 +346,7 @@ impl Journal {
             crate::monitoring::definition(id)?;
         }
         if query.search.as_ref().is_some_and(|s| s.len() > 200) {
-            return Err("Search - up to 200 bytes".into());
+            return Err("Enter a search term of up to 200 bytes".into());
         }
         if query
             .category
@@ -511,7 +510,7 @@ pub fn status() -> Status {
             bytes: 0,
             limit_bytes: LIMIT,
             dropped: LOST.load(Ordering::Relaxed),
-            error: Some("Action log is not available for recording".into()),
+            error: Some("Could not write to the activity log".into()),
         },
         None => Status {
             bytes: 0,
@@ -524,7 +523,7 @@ pub fn status() -> Status {
 pub fn page(query: Query) -> Result<Page, String> {
     GLOBAL
         .get()
-        .ok_or("Journal not running")?
+        .ok_or("Activity logging is inactive")?
         .as_ref()
         .map_err(Clone::clone)?
         .page(query)

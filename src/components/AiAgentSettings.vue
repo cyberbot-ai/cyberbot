@@ -8,12 +8,12 @@ const {draft,saving,error,edited,flush}=useSettingsAutosave(()=>props.settings,[
 </script>
 <template>
 <section class="agent-choice">
-  <h2>Executive</h2>
+  <h2>Agent provider</h2>
   <div class="agent-choice-row">
     <label>AI agent<UiSelect v-model="draft.autoAgent" aria-label="AI agent" @change="edited('autoAgent')" @blur="flush"><option value="codex">Codex</option><option value="claude">Claude Code</option></UiSelect></label>
-    <p>Used for dialogue, automatic investigations, establishing checks and risk assessment, the task already begun will be completed by the former agent.</p>
+    <p>The selected agent handles chats, automatic investigations, check authoring, and risk reviews. Runs already in progress continue with their current agent.</p>
   </div>
-  <p v-if="saving" role="status">Save it…</p><p v-if="error" class="error" role="alert">{{error}}</p>
+  <p v-if="saving" role="status">Saving…</p><p v-if="error" class="error" role="alert">{{error}}</p>
 </section>
 </template>
 <style scoped>

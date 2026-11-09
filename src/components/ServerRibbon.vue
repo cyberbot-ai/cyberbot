@@ -18,7 +18,7 @@ const metrics = computed(() => {
   const list = [
     metric('cpu', 'CPU', 'CPU usage', o?.cpuPercent, resourceState(o?.cpuPercent)),
     // Load has no percentage threshold: the collector does not supply a CPU count.
-    metric('load', 'LA', 'Load average per minute', o?.load, o?.load == null ? 'unknown' : 'healthy', '', 1),
+    metric('load', 'LA', '1-minute load average', o?.load, o?.load == null ? 'unknown' : 'healthy', '', 1),
     metric('ram', 'RAM', 'Memory usage', o?.memoryPercent, resourceState(o?.memoryPercent)),
   ];
   if (o?.swapPercent != null) list.push(metric('swap', 'SWP', 'Swap usage', o.swapPercent));
@@ -76,7 +76,7 @@ const description = computed(() => {
     <span class="indicators">
       <span v-for="m in metrics" :key="m.key" class="metric indicator" :class="m.state" :data-metric="m.key" :title="`${m.help}: ${m.exact}`" :aria-label="`${m.help}: ${m.exact}`"><span class="code">{{ m.label }}</span><b>{{ m.value }}</b></span>
       <span v-for="(s, index) in services" :key="s.key" class="service indicator" :class="[s.state, { 'first-service': index === 0, 'with-value': s.value!=null }]" :data-service="s.key" :title="[`${s.name}: ${stateLabel(s.state)}`, s.exact, s.unitFailure].filter(Boolean).join(' · ')"><span>{{ s.name }}</span><b v-if="s.value">{{ s.value }}</b></span>
-      <span v-if="status === 'unknown' && server.observation?.missing.length && !unavailable" class="coverage" :title="'Unavailable: ' + server.observation.missing.join(', ')" aria-label="Incomplete inspection">?</span>
+      <span v-if="status === 'unknown' && server.observation?.missing.length && !unavailable" class="coverage" :title="'Unavailable: ' + server.observation.missing.join(', ')" aria-label="Incomplete check">?</span>
     </span>
   </button>
 </template>

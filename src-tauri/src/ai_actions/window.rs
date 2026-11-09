@@ -22,7 +22,7 @@ pub(crate) fn open_approval(app: &tauri::AppHandle, id: &str) -> Result<()> {
         label,
         tauri::WebviewUrl::App(format!("index.html?approval={id}").into()),
     )
-    .title("Cyberbot · Allowing AI")
+    .title("Cyberbot · AI action approval")
     .inner_size(660.0, 600.0)
     .min_inner_size(540.0, 460.0)
     .center()

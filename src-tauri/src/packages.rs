@@ -253,10 +253,9 @@ impl Store {
         at: i64,
     ) -> Result<State> {
         if bytes.len() > 32768 {
-            return Err("Package response greater than 32 KiB".into());
+            return Err("Package response exceeds 32 KiB".into());
         }
-        let reply: Reply =
-            serde_json::from_slice(bytes).map_err(|_| "Incorrect response of packages")?;
+        let reply: Reply = serde_json::from_slice(bytes).map_err(|_| "Invalid package response")?;
         if reply.version != 1
             || !hash(&reply.root)
             || reply.count > 20000
@@ -279,7 +278,7 @@ impl Store {
             || !reply.candidates.is_empty()
             || reply.cache_at.is_some()
         {
-            return Err("Incompatible package shot".into());
+            return Err("Incompatible package snapshot".into());
         }
         let mut db = self.0.lock().map_err(err)?;
         crate::storage::admit(&db)?;
@@ -307,7 +306,7 @@ impl Store {
             .map_err(err)?;
         let mut state: State = serde_json::from_str(&raw).map_err(err)?;
         if state.revision != expected.revision || state.token != expected.token {
-            return Err("The position of the packages has already changed".into());
+            return Err("The package collection position has changed".into());
         }
         let old_root = state.root.clone();
         let mut complete = false;
@@ -317,7 +316,7 @@ impl Store {
                     || state.metadata.as_ref() != Some(&reply.metadata)
                     || state.stage.is_some()
                 {
-                    return Err("Misconfirmation of the image".into());
+                    return Err("The package snapshot did not match".into());
                 }
                 complete = true;
             }
@@ -327,7 +326,7 @@ impl Store {
                     || digest(&json!({"metadata":reply.metadata,"hashes":reply.hashes}))
                         != reply.root
                 {
-                    return Err("Wrong manifesto".into());
+                    return Err("Invalid package manifest".into());
                 }
                 tx.execute(
                     "DELETE FROM package_buckets WHERE server_id=?1 AND root NOT IN (?2,?3)",
@@ -359,13 +358,16 @@ impl Store {
                 state.stage_at = at;
             }
             "page" => {
-                let stage = state.stage.as_ref().ok_or("No package transfer")?;
+                let stage = state
+                    .stage
+                    .as_ref()
+                    .ok_or("No package transfer in progress")?;
                 if stage.root != reply.root
                     || stage.metadata != reply.metadata
                     || stage.count != reply.count
                     || reply.groups.is_empty()
                 {
-                    return Err("The picture changed during the broadcast".into());
+                    return Err("The package snapshot changed during transfer".into());
                 }
                 for (index, g) in reply.groups.iter().enumerate() {
                     if state.pending.first() != Some(&g.bucket)
@@ -374,7 +376,7 @@ impl Store {
                             .iter()
                             .any(|p| !valid_package(p) || bucket(p) != g.bucket)
                     {
-                        return Err("Wrong package page".into());
+                        return Err("Invalid package page".into());
                     }
                     let previous:Option<String>=tx.query_row("SELECT payload FROM package_buckets WHERE server_id=?1 AND root=?2 AND bucket=?3",params![server.id,stage.root,g.bucket],|r|r.get(0)).optional().map_err(err)?;
                     let mut rows: Vec<Package> = previous
@@ -382,7 +384,7 @@ impl Store {
                         .transpose()?
                         .unwrap_or_default();
                     if rows.len() != g.offset {
-                        return Err("Shifting packages has changed".into());
+                        return Err("The package page offset changed".into());
                     }
                     rows.extend(g.rows.clone());
                     if rows.len() > 512
@@ -390,7 +392,7 @@ impl Store {
                             .windows(2)
                             .any(|w| (&w[0].name, &w[0].arch) >= (&w[1].name, &w[1].arch))
                     {
-                        return Err("Limit or duplicate packages".into());
+                        return Err("Package limit exceeded or duplicate packages found".into());
                     }
                     let h = digest(&rows);
                     if g.complete && h != stage.hashes[g.bucket as usize] {
@@ -412,7 +414,7 @@ impl Store {
                         state.offset = 0;
                     } else {
                         if index + 1 != reply.groups.len() {
-                            return Err("Incomplete intermediate group".into());
+                            return Err("Incomplete package group".into());
                         }
                         state.offset = rows.len();
                     }
@@ -420,7 +422,7 @@ impl Store {
                 match reply.next {
                     Some(p) if p.buckets == state.pending && p.offset == state.offset => {}
                     None if state.pending.is_empty() => {}
-                    _ => return Err("Incorrect continuation of packages".into()),
+                    _ => return Err("Invalid continuation of package collection".into()),
                 }
             }
             "changed" => {
@@ -428,13 +430,13 @@ impl Store {
                 state.pending.clear();
                 state.offset = 0;
                 state.failures = state.failures.saturating_add(1);
-                state.error = Some("Packages changed during transmission; repeat later".into());
+                state.error = Some("Packages changed during transfer. Try again later.".into());
             }
-            _ => return Err("Unexpected response of packages".into()),
+            _ => return Err("Unexpected package response".into()),
         }
         let staged_bytes:u64=tx.query_row("SELECT coalesce(sum(length(payload)),0) FROM package_buckets WHERE server_id=?1 AND root=?2",params![server.id,state.stage.as_ref().map(|s|&s.root)],|r|r.get(0)).map_err(err)?;
         if staged_bytes > 8 * 1024 * 1024 {
-            return Err("Package image exceeds 8 MiB".into());
+            return Err("Package snapshot exceeds 8 MiB".into());
         }
         if state.stage.is_some() && state.pending.is_empty() {
             let stage = state.stage.take().unwrap();
@@ -501,8 +503,10 @@ impl Store {
             if s.revision == expected.revision && s.token == expected.token {
                 s.failures = s.failures.saturating_add(1);
                 s.next_check = now() + (60 * 2i64.pow(s.failures.min(6))).min(3600);
-                s.error =
-                    Some("Package composition unconfirmed; last successful snapshot saved".into());
+                s.error = Some(
+                    "Current packages are unconfirmed. Showing the last successful snapshot."
+                        .into(),
+                );
                 if now() - s.stage_at > 3600 {
                     s.stage = None;
                     s.pending.clear();
@@ -536,7 +540,7 @@ pub(crate) async fn rescan(state: Arc<AppState>, id: String) -> Result<State> {
     .await
 }
 const ENDPOINT_CHANGED: &str = "Connection has changed";
-const PAUSED: &str = "Monitoring on pause";
+const PAUSED: &str = "Monitoring paused";
 const STORAGE_BLOCKED: &str = "Storage is full";
 
 pub(crate) async fn refresh_after_ssh(state: Arc<AppState>, id: String, job: package_refresh::Job) {
@@ -728,7 +732,7 @@ async fn collect_apt_inner(app: Arc<AppState>, id: String) -> Result<()> {
         .ok_or("The server is remote")?;
     let expected = app.store.package_state(&id)?;
     if expected.stage.is_some() {
-        return Err("Wait until the list of installed packages is completed.".into());
+        return Err("Wait for the installed package scan to finish.".into());
     }
     if expected.root.is_none() {
         return Err("First, rescan the list of installed packages.".into());
@@ -746,7 +750,7 @@ async fn collect_apt_inner(app: Arc<AppState>, id: String) -> Result<()> {
     .await?;
     let reply: Reply = serde_json::from_slice(&bytes).map_err(err)?;
     if reply.kind == "changed" {
-        return Err("The package composition on the server has changed. First, scan the list of packages installed.".into());
+        return Err("Installed packages changed on the server. Rescan them before checking for updates.".into());
     }
     if reply.kind != "apt"
         || reply.version != 1
@@ -790,7 +794,7 @@ async fn collect_apt_inner(app: Arc<AppState>, id: String) -> Result<()> {
         .map_err(err)?;
     let current: State = serde_json::from_str(&raw).map_err(err)?;
     if current.token != expected.token || current.revision != expected.revision {
-        return Err("Picture replaced".into());
+        return Err("Package snapshot replaced".into());
     }
     for name in targets {
         let candidate = candidates.remove(&name).unwrap_or(Candidate {

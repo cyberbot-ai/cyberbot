@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.3
+
+- Correct English labels, statuses, and errors across the app, including SSH commands, AI approvals, monitoring checks, and service metrics.
+
 ## 0.2.2
 
 - Label the SSH console button Disconnect to clarify that it ends the session.

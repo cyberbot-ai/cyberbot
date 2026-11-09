@@ -71,40 +71,39 @@ fn build_catalog() -> Vec<Definition> {
     let version = format!("{:x}", digest.finalize())[..24].to_owned();
     let mut out = Vec::new();
     for (id,name,category,runner,interval,purpose,reads,commands,rights,limits,schedule) in [
-      ("metrics","Resources and services of LOs","System system",Runner::Metrics,180,"CPU, memory, drives, uptime, and state of selected services","/proc (including limited information about PIDs and listening sockets), /sys, /etc/os-release, mount points; fixed list of services","python3 -I <collector>; systemctl show (fixed-services only)","Reading system information by an SSH user","Answer up to 8 KiB; transport 25 s","Every 3 minutes"),
-      ("logs","System and SSH logs","Logs",Runner::Logs,600,"Local aggregation and detection of significant events; ordinary SSH noise does not create incidents","journal or /var/log/{auth.log,syslog,kern.log,fail2ban.log}; positioning","python3 -I <collector>; journalctl --output=json by cursor; files are read on the server","Reading selected logs; lack of rights is clearly indicated","Read up to 2 MiB; answer up to 32 KiB; 10 cleared examples; 15c; CPU 8c, Python 96 MiB","Every 10 minutes"),
+      ("metrics","System resources and services","Operating system",Runner::Metrics,180,"CPU, memory, drives, uptime, and state of selected services","/proc (including limited information about PIDs and listening sockets), /sys, /etc/os-release, mount points; fixed list of services","python3 -I <collector>; systemctl show (fixed-services only)","Reading system information by an SSH user","Answer up to 8 KiB; transport 25 s","Every 3 minutes"),
+      ("logs","System and SSH logs","Logs",Runner::Logs,600,"Aggregates logs on the server and detects significant events. Routine SSH activity does not create incidents.","journal or /var/log/{auth.log,syslog,kern.log,fail2ban.log}, with saved read positions","python3 -I <collector>; journalctl --output=json by cursor; files are read on the server","Read access to selected logs. Missing permissions are reported.","Reads up to 2 MiB and returns up to 32 KiB with 10 redacted examples. Limits include 15 s elapsed time, 8 s CPU time, and 96 MiB of Python memory.","Every 10 minutes"),
 
-      ("packages","Composition of OS packages","Vulnerabilities",Runner::Packages,21600,"package composition deltas to match critical vulnerabilities","os-release and dpkg base; package composition and versions","python3 -I <collector>; dpkg-query (page-by-page)","Read the package database, without apt update and installation","Answer to 32 KiB; changed bucket only; stage persists","Every 6 hours; Delta pages more often"),
-      ("apt","Available APT fixes","Vulnerabilities",Runner::Apt,21600,"Check the available version of only affected packages","The existing local APT cache","python3 -I <collector>; apt-cache policy for a verified list of packages","Reading cache; cache not updated","Limited package and answer up to 32 KiB","On explicit request"),
+      ("packages","Installed OS packages","Vulnerabilities",Runner::Packages,21600,"Track changes to installed packages and match them against critical advisories","OS release information and installed packages and versions from the dpkg database","python3 -I <collector>; dpkg-query (page-by-page)","Read access to the installed package database","Response limited to 32 KiB. Sends only changed groups and saves progress between checks.","Every 6 hours, with follow-up pages collected sooner"),
+      ("apt","Available APT fixes","Vulnerabilities",Runner::Apt,21600,"Check available versions for affected packages","The existing local APT cache","python3 -I <collector>; apt-cache policy for a verified list of packages","Read access to the existing APT cache","Bounded package count and a 32 KiB response limit","On demand"),
 
-      ("custom","User checks","Checks",Runner::Custom,0,"Reusable analyzers with viewing, tests, versions and rollbacks","Only allowed saved metrics, without SSH and reading arbitrary files","Isolated check-runner, declarative specification","Verified and explicitly included version; model not required for regular execution","DSL and check-runner restrictions; versions and tests in existing editor","Schedule for each included version"),
-      ("advisories","Vulnerability data","Official",Runner::Local,21600,"Conditional update of Ubuntu/Debian data and CVSS estimates","Official distribution data saved by affected CVEs","HTTPS with conditional requests; local version matching with backport fixes","No SSH and model","Limited network/cache and storage of critical records; full CVE index is not saved","Sources every 6 hours; CVSS once a day, in packages"),
-      ("inventory","Updating server lists","Official",Runner::Local,300,"Re-read selected Ansible inventory and save the last successful list","Only selected static YAML/INI inventory","Built-in parser, without ansible-inventory, plugins and code execution","Access to the selected file","Size, depth, and number of hosts are limited; the source file does not change","Every 5 minutes"),
-      ("storage","Cleaning up local storage","Official",Runner::Local,60,"Limit the growth of DB, evidence, cache, queues and journal","Local SQLite, cache, activity log","Fixed DELETE/WAL checkpoint; JSONL rotation","Access only to application data","SQLite up to 1 GiB; action log up to 30 MiB; storage rules in settings","Once a minute"),
-      ("transport","SSH and assembler delivery","Official",Runner::Local,0,"Host key, limited pool, hash verification and immutable version delivery","SSH config, keys and known_hosts are available only to a trusted intermediary","OpenSSH; test -f; sha256sum; mkdir; rsync --checksum; python3 -I","SSH Authorization: No arbitrary exec in MCP","Pool 32; keepalive 60s, idle 15 min; strict host key check; timeouts/limits required","Before the authorized verification, the unchanged file is not transmitted"),
+      ("custom","Custom checks","Checks",Runner::Custom,0,"Reusable rules with previews, tests, versions, and rollback","Saved metrics from the allowed fields","Declarative rules run in the isolated check runner","The user enables a reviewed version. Scheduled runs require no model.","The check editor shows language limits, versions, and tests.","Each enabled version follows its own schedule"),
+      ("advisories","Vulnerability data","Official",Runner::Local,21600,"Refresh Ubuntu and Debian advisories and CVSS scores","Official distribution advisories and CVSS scores for relevant CVEs","HTTPS with conditional requests; local version matching with backport fixes","Network access to public advisory sources","Network and cache limits apply. The app stores critical records only.","Refresh advisories every 6 hours and CVSS scores in daily batches"),
+      ("inventory","Updating server lists","Official",Runner::Local,300,"Re-read the selected Ansible inventory and keep the last successfully loaded list","Selected static Ansible inventory","Built-in parser for static inventory files","Access to the selected file","Limits apply to file size, nesting depth, and host count. Reads the source file without modifying it.","Every 5 minutes"),
+      ("storage","Cleaning up local storage","Official",Runner::Local,60,"Limit the size of the database, evidence, cache, queues, and activity log","Local SQLite, cache, activity log","Fixed SQL cleanup, WAL checkpointing, and JSONL log rotation","Access only to application data","SQLite up to 1 GiB; action log up to 30 MiB; storage rules in settings","Once a minute"),
+      ("transport","SSH and collector deployment","Official",Runner::Local,0,"Verify host keys and deploy immutable collector versions by hash over a bounded SSH connection pool","The SSH process uses local configuration, keys, and known_hosts","OpenSSH; test -f; sha256sum; mkdir; rsync --checksum; python3 -I","Uses the configured SSH user and host-key checks","Pool 32; keepalive 60s, idle 15 min; strict host key check; timeouts/limits required","Before an authorized check, Cyberbot transfers the collector only if the required version is missing or changed"),
     ] {
-      out.push(Definition{id:id.into(),name:name.into(),category:category.into(),runner,place:if matches!(runner,Runner::Custom|Runner::Local){"On the computer"}else{"On the server; incident rules – locally"}.into(),purpose:purpose.into(),reads:reads.into(),commands:commands.into(),writes:if matches!(runner,Runner::Custom|Runner::Local){"Limited local state of the application"}else{"Only a catalog ~/.cache/cyberbot for builder versions; OS and software settings do not change"}.into(),rights:rights.into(),limits:limits.into(),schedule:schedule.into(),configurable:!matches!(runner,Runner::Custom|Runner::Local),interval_editable:matches!(runner,Runner::Metrics|Runner::Logs),diagnostics:false,replication:false,factory_interval:interval,version:version.clone()});
+      out.push(Definition{id:id.into(),name:name.into(),category:category.into(),runner,place:if matches!(runner,Runner::Custom|Runner::Local){"On the computer"}else{"Data collection on the server, incident rules on this computer"}.into(),purpose:purpose.into(),reads:reads.into(),commands:commands.into(),writes:if matches!(runner,Runner::Custom|Runner::Local){"Limited application state on this computer"}else{"Versioned collector files under ~/.cache/cyberbot"}.into(),rights:rights.into(),limits:limits.into(),schedule:schedule.into(),configurable:!matches!(runner,Runner::Custom|Runner::Local),interval_editable:matches!(runner,Runner::Metrics|Runner::Logs),diagnostics:false,replication:false,factory_interval:interval,version:version.clone()});
     }
     for (id, spec) in catalog {
         let description = spec.monitoring.unwrap_or_else(|| services::ServiceDescription {
             purpose: spec.metrics.iter().map(|m| m.label.as_str()).collect::<Vec<_>>().join(", "),
-            reads: "Only available local status and service statistics".into(),
+            reads: "Available local service status and statistics".into(),
             commands: format!("python3 -I <collector>; connector: {}.", spec.actions.join(", ")),
             rights: spec.rights,
-            limits: "Answer up to 32 KiB; fixed requests, local endpoint, and timeouts".into(),
-            schedule: "Diagnosis every 3 minutes; when the connection is turned off, detection every 6 hours".into(),
+            limits: "Fixed requests to a local endpoint, with timeouts and a 32 KiB response limit".into(),
+            schedule: "Collect diagnostics every 3 minutes. With diagnostics disabled, check whether the service is present every 6 hours.".into(),
         });
         out.push(Definition {
             id,
             name: spec.name,
             category: "Services".into(),
             runner: Runner::Service,
-            place: "On the server; incident rules – locally".into(),
+            place: "Data collection on the server, incident rules on this computer".into(),
             purpose: description.purpose,
             reads: description.reads,
             commands: description.commands,
-            writes: "Only the delivery of the version in ~/.cache/cyberbot; service settings do not change"
-                .into(),
+            writes: "Versioned collector files under ~/.cache/cyberbot".into(),
             rights: description.rights,
             limits: description.limits,
             schedule: description.schedule,
@@ -122,7 +121,7 @@ pub fn definition(id: &str) -> Result<&'static Definition> {
     REGISTRY
         .iter()
         .find(|d| d.id == id)
-        .ok_or("Unknown inspection".into())
+        .ok_or("Unknown check".into())
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
@@ -317,11 +316,11 @@ fn validate_scope(db: &Connection, s: &Scope) -> Result<&'static Definition> {
     if let Some(i) = &s.instance_id {
         let server = s.server_id.as_deref().ok_or("Select the server first")?;
         if !services::descriptor(&d.id).is_some_and(|spec| spec.scope_instances) {
-            return Err("The inspection does not have separate copies".into());
+            return Err("This check does not support separate instances".into());
         }
         instances::validate(i)?;
         if i != instances::DEFAULT {
-            if !db.query_row("SELECT EXISTS(SELECT 1 FROM service_instances WHERE server_id=?1 AND kind=?2 AND id=?3)",params![server,d.id,i],|r|r.get::<_,bool>(0)).map_err(err)? {return Err("Copy removed".into());}
+            if !db.query_row("SELECT EXISTS(SELECT 1 FROM service_instances WHERE server_id=?1 AND kind=?2 AND id=?3)",params![server,d.id,i],|r|r.get::<_,bool>(0)).map_err(err)? {return Err("Service connection removed".into());}
         }
     }
     Ok(d)
@@ -448,7 +447,10 @@ impl Store {
         crate::storage::admit(&tx)?;
         let d = validate_scope(&tx, s)?;
         if !d.configurable {
-            return Err("Management is available in the version editor or operation is mandatory for the application to work".into());
+            return Err(
+                "Edit custom checks in the version editor. Required app tasks cannot be disabled."
+                    .into(),
+            );
         }
         if (!d.interval_editable && o.interval_seconds.is_some())
             || o.interval_seconds
@@ -457,11 +459,11 @@ impl Store {
             || (!d.replication && (o.expected_peers.is_some() || o.expect_replica.is_some()))
             || o.expected_peers.is_some_and(|n| n > 64)
         {
-            return Err("Inadmissible verification parameters".into());
+            return Err("Invalid check settings".into());
         }
         let book = Book::load(&tx)?;
         if book.revision != expected_revision {
-            return Err("Settings changed in another window. Update the values and repeat.".into());
+            return Err("Settings changed in another window. Reload them and try again.".into());
         }
         if book.resolve(s)?.overrides != o {
             put(&tx, s, &o)?;
@@ -724,7 +726,7 @@ pub fn sources(id: &str) -> Result<Vec<Source>> {
     let mut out = vec![];
     if !matches!(d.runner, Runner::Custom | Runner::Local) {
         out.push(Source {
-            name: "Deliverable Python Collector (including SQL and modules)".into(),
+            name: "Python collector bundle (including SQL and modules)".into(),
             text: ssh::COLLECTOR.into(),
         });
     }
@@ -754,12 +756,12 @@ pub fn sources(id: &str) -> Result<Vec<Source>> {
     if d.runner == Runner::Service {
         if let Some(adapter) = services::backend(id) {
             out.push(Source {
-                name: "Implementation of diagnostics".into(),
+                name: "Diagnostics implementation".into(),
                 text: adapter.source.into(),
             });
         }
         out.push(Source {
-            name: "Register of metrics and thresholds".into(),
+            name: "Metrics and thresholds".into(),
             text: serde_json::to_string_pretty(&services::catalog().get(id)).map_err(err)?,
         });
     }

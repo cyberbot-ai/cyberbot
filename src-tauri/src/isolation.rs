@@ -228,7 +228,7 @@ pub async fn preflight(workspace: &Path, home: &Path) -> Result<(), String> {
                 .map_err(|e| e.to_string())?;
             let value: serde_json::Value = serde_json::from_slice(&out).map_err(|_| {
                 format!(
-                    "Sandbox fails self-test ({status}); AI launch banned: {}",
+                    "Sandbox self-test failed ({status}). AI runs are blocked: {}",
                     String::from_utf8_lossy(&error)
                 )
             })?;
@@ -241,7 +241,7 @@ pub async fn preflight(workspace: &Path, home: &Path) -> Result<(), String> {
             }
         })
         .await
-        .map_err(|_| "Timeout of sandbox checks".to_string())
+        .map_err(|_| "Sandbox check timed out".to_string())
         .and_then(|v| v);
         let _ = std::fs::remove_file(private);
         let _ = std::fs::remove_file(socket);

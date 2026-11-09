@@ -79,7 +79,7 @@ fn reason(db: &Connection) -> Result<Option<String>> {
 fn budget_reservation(db: &Connection, s: &Settings, at: i64) -> Result<Result<u64>> {
     let (runs, _, charged, _, _) = totals(db, at.div_euclid(86400))?;
     if s.daily_runs_cap().is_some_and(|n| runs >= u64::from(n)) {
-        return Ok(Err("Reached the daily limit of launches (UTC)".into()));
+        return Ok(Err("Daily AI run limit reached (UTC)".into()));
     }
     let Some(daily) = s.daily_tokens_cap() else {
         return Ok(Ok(s.run_token_limit));
@@ -92,7 +92,7 @@ fn budget_reservation(db: &Connection, s: &Settings, at: i64) -> Result<Result<u
     };
     if reservation == 0 || reservation > remaining {
         return Ok(Err(
-            "Insufficient daily budget for launch reserve (UTC)".into()
+            "Not enough tokens left in the daily budget for this run (UTC)".into(),
         ));
     }
     Ok(Ok(reservation))
@@ -353,7 +353,7 @@ impl Store {
             .map_err(err)?
             > 0
         {
-            return Err("AI is already doing another job".into());
+            return Err("An AI run is already in progress".into());
         }
         let reservation = budget_reservation(&tx, &s, run.started_at)??;
         if !run.scope_endpoints.is_empty() {
@@ -367,12 +367,14 @@ impl Store {
                     })
                 })
             {
-                return Err("Connections changed before reservations".into());
+                return Err(
+                    "Connection settings changed before the run could reserve tokens".into(),
+                );
             }
         }
         if let Some(id) = job_id {
             if s.mode != "auto" || s.paused {
-                return Err("AUTO suspended".into());
+                return Err("Automatic investigations paused".into());
             }
             if let Some(r) = reason(&tx)? {
                 return Err(r);
@@ -392,7 +394,7 @@ impl Store {
                 || !job_eligible(&tx, &incidents, &job, &s, run.started_at)?
             {
                 return Err(
-                    "Event has already been processed, recovered or data is outdated".into(),
+                    "The incident was already processed or resolved, or its data is stale".into(),
                 );
             }
             if let Some(group) = &job.group_id {
@@ -455,9 +457,9 @@ impl Store {
                 )
                 .map_err(err)?;
                 if !exact || reserved != 0 && charged >= reserved {
-                    tx.execute("UPDATE ai_control SET reason=?1 WHERE id=1",[if !exact {"Check CLI before resuming the vehicle."} else {"The launch token reserve has been reached. Check the budget before the auto resumption."}]).map_err(err)?;
+                    tx.execute("UPDATE ai_control SET reason=?1 WHERE id=1",[if !exact {"Check the CLI before resuming automatic investigations."} else {"The run reached its token reservation. Review the budget before resuming automatic investigations."}]).map_err(err)?;
                 } else if run.origin == "auto" && run.status != "completed" {
-                    tx.execute("UPDATE ai_control SET reason='Auto launch incomplete. Check the error before restarting.' WHERE id=1",[]).map_err(err)?;
+                    tx.execute("UPDATE ai_control SET reason='An automatic investigation did not finish. Review its error before resuming.' WHERE id=1",[]).map_err(err)?;
                 }
             }
         }

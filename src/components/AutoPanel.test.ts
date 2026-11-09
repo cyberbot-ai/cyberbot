@@ -54,7 +54,7 @@ describe('AI tabs', () => {
     mocks.call.mockResolvedValueOnce({ ...status, waitingReason: 'Exhausted the launch limit' });
     const w = mount(AutoPanel, { props: { settings }, attachTo: document.body });
     await flushPromises();
-    await w.findAll('button').find(button => button.text() === 'Modify restrictions')!.trigger('click');
+    await w.findAll('button').find(button => button.text() === 'Edit limits')!.trigger('click');
     await flushPromises();
     expect(w.get('#ai-settings-tab').attributes('aria-selected')).toBe('true');
     const limits = w.get<HTMLDetailsElement>('#ai-settings-panel details');
@@ -96,7 +96,7 @@ describe('AI tabs', () => {
     await flushPromises();
     expect(w.get('[role="status"]').text()).toContain('Expenditure unknown');
     expect(mocks.call).not.toHaveBeenCalledWith('resume_auto');
-    await w.findAll('button').find(button => button.text().includes('Expenditure verified'))!.trigger('click');
+    await w.findAll('button').find(button => button.text().includes('Confirm usage and resume'))!.trigger('click');
     await flushPromises();
     expect(mocks.call).toHaveBeenCalledWith('resume_auto', undefined);
     expect(mocks.call.mock.calls.some(([command]) => command === 'update_settings')).toBe(false);
@@ -138,10 +138,10 @@ describe('AI tabs', () => {
     mocks.call.mockResolvedValue({ ...status, queued: 1, jobs: [{ ...job, state: 'queued' }, { ...job, id: 'active', state: 'running', runId: 'run' }] });
     const w = mount(AutoPanel, { props: { settings } });
     await flushPromises();
-    await w.findAll('button').find(button => button.text() === 'Let it pass')!.trigger('click');
+    await w.findAll('button').find(button => button.text() === 'Skip')!.trigger('click');
     await flushPromises();
     expect(mocks.call).toHaveBeenCalledWith('dismiss_auto_job', { id: 'episode' });
-    await w.findAll('button').find(button => button.text() === 'Stop it')!.trigger('click');
+    await w.findAll('button').find(button => button.text() === 'Stop')!.trigger('click');
     expect(mocks.call).toHaveBeenCalledWith('cancel_investigation', { id: 'run' });
     w.unmount();
   });

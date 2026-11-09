@@ -132,7 +132,7 @@ fn version(db: &Connection, id: &str) -> Result<Version> {
     };
     check_engine::validate(&v.spec)?;
     if digest(&json!({"check":v.check_id,"spec":v.spec})) != v.id {
-        return Err("Hash version of the check didn’t match".into());
+        return Err("Check version hash mismatch".into());
     }
     Ok(v)
 }
@@ -278,11 +278,11 @@ impl Store {
             .query_row("SELECT count(*) FROM check_definitions", [], |r| r.get(0))
             .map_err(err)?;
         if count >= 50 {
-            return Err("Limit 50 checks; remove unused".into());
+            return Err("You can save up to 50 checks. Delete an unused check first.".into());
         }
         let id = uuid::Uuid::new_v4().to_string();
         db.execute(
-            "INSERT INTO check_definitions VALUES(?1,?2,'New verification')",
+            "INSERT INTO check_definitions VALUES(?1,?2,'New check')",
             params![id, now()],
         )
         .map_err(err)?;
@@ -309,7 +309,7 @@ impl Store {
             )
             .map_err(err)?;
         if !exists {
-            return Err("Verification removed".into());
+            return Err("Check removed".into());
         }
         if tx
             .query_row(
@@ -329,7 +329,7 @@ impl Store {
             )
             .map_err(err)?;
         if count >= 20 {
-            return Err("Limit 20 versions; remove unused draft".into());
+            return Err("You can save up to 20 versions. Delete an unused draft first.".into());
         }
         tx.execute(
             "INSERT INTO check_versions VALUES(?1,?2,?3,?4,NULL,?5,NULL)",
@@ -410,7 +410,7 @@ impl Store {
     fn save_test(&self, id: &str, response: &Response) -> Result<Tested> {
         let report = response.report.clone().ok_or("No test results")?;
         if report.engine != ENGINE {
-            return Err("Obsolete performer".into());
+            return Err("The check runner is out of date".into());
         }
         let tested = Tested {
             engine: ENGINE,
@@ -436,7 +436,7 @@ impl Store {
         let tx = db.transaction().map_err(err)?;
         let current = input(&tx, server, &version.spec)?;
         if current.id != original.id {
-            return Err("Data changed during the test; repeat".into());
+            return Err("Data changed during testing. Run the tests again.".into());
         }
         let b = binding(&tx, server, &version.check_id)?;
         let before = b
@@ -460,7 +460,7 @@ impl Store {
             .query_row("SELECT count(*) FROM check_reviews", [], |r| r.get(0))
             .map_err(err)?;
         if count >= 1000 {
-            return Err("Limit views; wait for the old ones to expire".into());
+            return Err("Too many active previews. Wait for an earlier preview to expire.".into());
         }
         tx.execute("INSERT INTO check_reviews VALUES(?1,?2,?3,?4) ON CONFLICT(server_id,version_id) DO UPDATE SET at=excluded.at,payload=excluded.payload",params![server,version.id,preview.at,serde_json::to_string(&preview).map_err(err)?]).map_err(err)?;
         tx.commit().map_err(err)?;
@@ -485,7 +485,7 @@ impl Store {
                 params![server, id],
                 |r| r.get(0),
             )
-            .map_err(|_| "First, watch the trial run")?;
+            .map_err(|_| "Preview this version first")?;
         let p: Preview = serde_json::from_str(&raw).map_err(err)?;
         let current = input(&tx, server, &v.spec)?;
         let old = binding(&tx, server, &v.check_id)?;
@@ -501,13 +501,13 @@ impl Store {
                 .as_ref()
                 .is_some_and(|r| r.passed && r.engine == ENGINE)
         {
-            return Err("View outdated; perform a sample and check the changes again".into());
+            return Err("The preview is out of date. Run it again and review the changes.".into());
         }
         let count: i64 = tx
             .query_row("SELECT count(*) FROM check_bindings", [], |r| r.get(0))
             .map_err(err)?;
         if old.is_none() && count >= 1000 {
-            return Err("Limit of 1000 connection checks".into());
+            return Err("The limit of 1,000 check assignments has been reached".into());
         }
         let rollback = old
             .as_ref()
@@ -551,7 +551,8 @@ impl Store {
     pub(crate) fn disable_check(&self, server: &str, check: &str) -> Result<()> {
         let mut db = self.0.lock().map_err(err)?;
         let tx = db.transaction().map_err(err)?;
-        let mut b = binding(&tx, server, check)?.ok_or("Check’s not connected")?;
+        let mut b =
+            binding(&tx, server, check)?.ok_or("This check is not assigned to the server")?;
         b.enabled = false;
         b.revision += 1;
         b.bad_streak = 0;
@@ -580,7 +581,7 @@ impl Store {
             return Err("Evidence of the incident persists; deletion not yet available".into());
         }
         if active {
-            return Err("First, disable verification on all servers".into());
+            return Err("Disable this check on all servers first".into());
         }
         tx.execute("UPDATE incidents SET payload=json_set(payload,'$.autoEligible',json('false'),'$.freshUntil',0) WHERE json_extract(payload,'$.check')=?1",[format!("custom:{id}")]).map_err(err)?;
         tx.execute("DELETE FROM check_definitions WHERE id=?1", [id])
@@ -730,7 +731,7 @@ impl Store {
                 check_engine::Status::Healthy | check_engine::Status::Unknown
             ) && response.status != p.version.spec.severity
         {
-            return Err("Incorrect result of the performer".into());
+            return Err("Invalid check runner result".into());
         }
         let run = Run {
             id: uuid::Uuid::new_v4().to_string(),

@@ -160,7 +160,7 @@ export async function call<T>(command: string, args?: Record<string,unknown>): P
   }
   if (command === 'vulnerability_catalog_detail') {
     const entry = previewVulnerabilityCatalog(previewSnapshot().servers).find(({ row }) => row.cve === args?.cve);
-    if (!entry) throw new Error('The recording is no longer available.');
+    if (!entry) throw new Error('This record is no longer available.');
     return entry.detail as T;
   }
   if (command==='snapshot') return previewSnapshot() as T;
@@ -169,5 +169,5 @@ export async function call<T>(command: string, args?: Record<string,unknown>): P
   if (command==='log_summary') return {shortCheck:false,lastIncomplete:null,summary:null,lastSuccess:null,nextCheck:0,error:null,fresh:false} as T;
   if (command==='history') return [] as T;
   if (command==='detect_agents') return [] as T;
-  throw new Error('This is a demonstration of the interface. Run the desktop through the npm run desktop.');
+  throw new Error('This feature is available in the desktop app. Run npm run desktop to open it.');
 }

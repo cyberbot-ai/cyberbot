@@ -128,7 +128,7 @@ it('shows the setup screen as the only available action for an unavailable agent
   expect(w.find('textarea').exists()).toBe(false);
   expect(w.find('.chat-list').exists()).toBe(false);
   expect(w.findAll('button')).toHaveLength(1);
-  expect(w.get('button').text()).toBe('Go to the AI settings');
+  expect(w.get('button').text()).toBe('Open AI settings');
   await w.get('button').trigger('click');
   expect(w.emitted('aiSettings')).toHaveLength(1);
   w.unmount();
@@ -146,7 +146,7 @@ it('cancels an active reply and keeps a question from another tab as a draft', a
   expect(w.get('[type="submit"]').attributes('disabled')).toBeDefined();
   expect(mocks.call.mock.calls.some(([command]) => command === 'start_investigation')).toBe(false);
   history = [{ ...run, status: 'cancelled' }];
-  await w.findAll('button').find(item => item.text() === 'Stop the current task')!.trigger('click');
+  await w.findAll('button').find(item => item.text() === 'Stop current task')!.trigger('click');
   await flushPromises();
   expect(mocks.call.mock.calls.filter(([command]) => command === 'cancel_investigation'))
     .toEqual(Array(2).fill(['cancel_investigation', { id: 'run-1' }]));
@@ -204,7 +204,7 @@ it('keeps the draft after a rejected send and offers no setup shortcut when the 
   await flushPromises();
   expect(w.get('[role="alert"]').text()).toContain('Isolation not available');
   expect(w.get('textarea').element.value).toBe('Check the network');
-  expect(w.text()).not.toContain('Go to the AI settings');
+  expect(w.text()).not.toContain('Open AI settings');
   expect(mocks.call.mock.calls.filter(([command]) => command === 'start_investigation')).toHaveLength(1);
   w.unmount();
 });
@@ -221,7 +221,7 @@ it('keeps fleet chats separate and resumes only with the original selected serve
   expect(w.text()).toContain('Compare the discs');
   expect(w.text()).not.toContain('Check the CPU');
   expect(w.get('textarea').element.disabled).toBe(true);
-  await w.findAll('button').find(button => button.text() === 'Use dialogue servers')!.trigger('click');
+  await w.findAll('button').find(button => button.text() === 'Use servers from this chat')!.trigger('click');
   expect(w.emitted('useServers')).toEqual([[['db-1', 'db-2']]]);
   await w.setProps({ fleetServerIds: ['db-2', 'db-1'] });
   await w.get('textarea').setValue('What’s next?');
@@ -230,7 +230,7 @@ it('keeps fleet chats separate and resumes only with the original selected serve
   expect(mocks.call).toHaveBeenCalledWith('start_console_chat', {
     serverIds: ['db-2', 'db-1'], question: 'What’s next?', modelAlias: 'medium', chatId: 'fleet-chat',
   });
-  await w.findAll('button').find(button => button.text() === 'New dialogue')!.trigger('click');
+  await w.findAll('button').find(button => button.text() === 'New chat')!.trigger('click');
   await w.setProps({ fleetServerIds: ['db-3'] });
   await w.get('textarea').setValue('Check the db-3');
   await w.get('form').trigger('submit');

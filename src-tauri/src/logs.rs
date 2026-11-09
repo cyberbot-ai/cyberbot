@@ -9,13 +9,13 @@ fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
 const RULES: &[(&str, &str, &str)] = &[
-    ("oom", "Lack of memory in the system log", "critical"),
+    ("oom", "Out-of-memory events in system logs", "critical"),
     ("disk_io", "Disk or file system errors", "critical"),
     ("service_crash", "Process or service failure", "warning"),
     ("protection_failure", "Fail2ban Error", "warning"),
     (
         "ssh_suspicious_success",
-        "Suspicious SSH entry after failed attempts",
+        "Suspicious SSH login after failed attempts",
         "warning",
     ),
     (
@@ -290,7 +290,7 @@ fn validate(w: &WireSummary) -> Result<()> {
         || serde_json::to_vec(&w.next_state).map_or(true, |b| b.len() > 12000)
         || !w.next_state.is_object()
     {
-        return Err("Incorrect or exceeding the limits of the log summary".into());
+        return Err("Invalid or oversized log summary".into());
     }
     Ok(())
 }
@@ -553,10 +553,10 @@ impl Store {
         at: i64,
     ) -> Result<LogSummary> {
         if bytes.len() > 32768 {
-            return Err("Response logs greater than 32 KiB".into());
+            return Err("Log summary exceeds 32 KiB".into());
         }
         let mut wire: WireSummary = serde_json::from_slice(bytes)
-            .map_err(|_| "The incompatible answer of the log collector")?;
+            .map_err(|_| "Incompatible response from the log collector")?;
         validate(&wire)?;
         wire.ssh_correlation_limited |= wire.coverage.take_legacy_ssh_limit();
         let mut db = self.0.lock().map_err(err)?;
@@ -585,7 +585,7 @@ impl Store {
             .map_err(err)?;
         let mut state: LogState = serde_json::from_str(&stored).map_err(err)?;
         if state.revision != expected.revision || state.salt != expected.salt {
-            return Err("A summary has been applied or the position has changed".into());
+            return Err("The summary was already applied or the log position changed".into());
         }
         let interval = crate::monitoring::effective(&tx, "logs", &server.id, "")?
             .values
@@ -747,7 +747,7 @@ impl Store {
             if state.revision == expected.revision && state.salt == expected.salt {
                 state.failures = state.failures.saturating_add(1);
                 state.error = Some(
-                    "Log collection incomplete. Position retained; extended interval repetition."
+                    "Log collection is incomplete. Cyberbot kept the saved position and will retry after a longer interval."
                         .into(),
                 );
                 state.next_check = now()
@@ -791,7 +791,7 @@ async fn collect_inner(state: Arc<AppState>, id: String) -> Result<LogSummary> {
     let checkpoint = state.store.log_state(&id)?;
     let result=async{ssh::deploy(&server.endpoint,&state.collector).await?;
         let request=json!({"kind":"logs","state":checkpoint.cursor,"salt":checkpoint.salt,"interval":interval});
-        if request.to_string().len()>16384{return Err("The status of the logs exceeds the request limit".into());}
+        if request.to_string().len()>16384{return Err("Log state exceeds the request size limit".into());}
         let bytes=ssh::run_collector(&server.endpoint,&request,32768).await?;
         state.store.record_logs(&server,&checkpoint,&bytes,now())
     }.await;

@@ -204,8 +204,8 @@ describe('fleet ribbon integration', () => {
     expect(app.get('button.ribbon.healthy').text()).toContain('Logs');
     await app.findAll('.detail-dialog .detail-tabs button').find(button => button.text() === 'Logs')!.trigger('click');
     await flushPromises();
-    expect(app.get('.detail-dialog .logs .meta .tag.ok').text()).toBe('No problem found');
-    expect(app.get('.detail-dialog .logs').text()).toContain('Journal unavailable');
+    expect(app.get('.detail-dialog .logs .meta .tag.ok').text()).toBe('No issues found');
+    expect(app.get('.detail-dialog .logs').text()).toContain('Log source unavailable');
     await app.get('[aria-label="Close server"]').trigger('click');
     await app.findAll('.fleet-filters button').find(button => button.text().startsWith('Healthy'))!.trigger('click');
     await app.get('[aria-label="Grid view"]').trigger('click');
@@ -264,7 +264,7 @@ describe('fleet ribbon integration', () => {
     expect(monitoring.find('input[type="checkbox"]').exists()).toBe(false);
     expect(monitoring.find('button').exists()).toBe(false);
     await monitoring.findAll('label').find(l=>l.text().startsWith('Poll servers every'))!.get('input').setValue('600');
-    await app.get('[aria-label="Suspend monitoring"]').trigger('click');await flushPromises();
+    await app.get('[aria-label="Pause monitoring"]').trigger('click');await flushPromises();
     await vi.advanceTimersByTimeAsync(250);await flushPromises();
     expect(snapshot.settings).toEqual({...settings,mode:'auto',pollSeconds:600,paused:true});
     await app.get('[aria-label="Resume monitoring"]').trigger('click');await flushPromises();
@@ -326,7 +326,7 @@ describe('fleet ribbon integration', () => {
     });
     const app=mount(App);await flushPromises();
     expect(app.get('.monitor-full').text()).toBe('Polling every 30 s');
-    await app.get('[aria-label="Suspend monitoring"]').trigger('click');await flushPromises();
+    await app.get('[aria-label="Pause monitoring"]').trigger('click');await flushPromises();
     expect(snapshot.settings).toEqual({...settings,paused:true});
     expect(app.get('.monitor-full').text()).toBe('Monitoring paused');
     await app.findAll('nav button').find(b=>b.text()==='Settings')!.trigger('click');
@@ -344,13 +344,13 @@ describe('fleet ribbon integration', () => {
       return {};
     });
     const app=mount(App);await flushPromises();
-    const pause=app.get('[aria-label="Suspend monitoring"]');
+    const pause=app.get('[aria-label="Pause monitoring"]');
     await pause.trigger('click');await pause.trigger('click');
     expect(vi.mocked(call).mock.calls.filter(c=>c[0]==='update_settings')).toHaveLength(1);
     expect(pause.attributes('disabled')).toBeDefined();
     fail(new Error('The recording failed'));await flushPromises();
     expect(app.get('.monitor-full').text()).toBe('Polling every 3 min');
-    expect(app.get('[aria-label="Suspend monitoring"]').attributes('disabled')).toBeUndefined();
+    expect(app.get('[aria-label="Pause monitoring"]').attributes('disabled')).toBeUndefined();
     expect(app.get('[role="alert"]').text()).toContain('The recording failed');
     app.unmount();
   });
@@ -440,7 +440,7 @@ describe('fleet ribbon integration', () => {
     window.dispatchEvent(new Event('focus'));
     await flushPromises();
     expect(app.get('#ai-actions-tab').text()).toContain('2');
-    expect(app.get('nav button[title="AI"]').attributes('aria-label')).toBe('AI, confirmation requests 2');
+    expect(app.get('nav button[title="AI"]').attributes('aria-label')).toBe('AI, 2 requests awaiting approval');
     expect(active()).toBe('ai-sessions-tab');
     app.unmount();
 
@@ -488,7 +488,7 @@ describe('fleet ribbon integration', () => {
     target = { open: true, incidentIds: [], openActions: true };
     await send('notification-open');
     expect(app.get('#ai-actions-tab').attributes('aria-selected')).toBe('true');
-    expect(app.get('.pause-notice').text()).toContain('Automatic tasks are not started');
+    expect(app.get('.pause-notice').text()).toContain('new automatic investigations are on hold');
     await send('ai-settings-open');
     expect(app.get('#ai-settings-tab').attributes('aria-selected')).toBe('true');
     target = { ...target, actionRequestId: 'request-id' };
@@ -594,7 +594,7 @@ it('removes manually resolved incidents from the active page and keeps them in r
  const server:Server={id:'s',name:'web',sourceId:'src',endpoint:{host:'host',user:'root',port:22,identityFile:null,jumpHost:null},observation:null,lastError:null,lastAttempt:null,nextCheck:0,failures:0};
  let incident={id:'i',episode:'ep',serverId:'s',check:'cpu',title:'CPU',severity:'warning',status:'open',openedAt:100,updatedAt:100,evidence:'95%',resolvedByUserAt:null as number|null};
  vi.mocked(call).mockImplementation(async(command)=>{if(command==='resolve_incident'){incident={...incident,status:'resolved',resolvedByUserAt:101};return;}if(command==='snapshot')return {servers:[server],incidents:[{...incident}],sources:[],services:{},nginx:{},logStatus:{},settings:{mode:'manual',pollSeconds:180,logPollSeconds:600,concurrency:4,paused:true,dailyRunLimit:null,dailyTokenLimit:null,runTokenLimit:50000,autoAgent:'codex'},collectedAt:102};if(command==='incident_groups')return {groups:[],total:0};return {};});
- const w=mount(App);await flushPromises();await w.findAll('.sidebar nav button').find(b=>b.text().startsWith('Incidents'))!.trigger('click');await flushPromises();expect(w.findAll('.incident-row')).toHaveLength(1);await w.get('[aria-label="Marking it up: CPU"]').trigger('click');await flushPromises();expect(w.find('.incident-row').exists()).toBe(false);await w.get('input[type="checkbox"]').setValue(true);await flushPromises();expect(w.text()).toContain('Manually resolved');expect(w.find('.resolve').exists()).toBe(false);w.unmount();apiState.preview=true;
+ const w=mount(App);await flushPromises();await w.findAll('.sidebar nav button').find(b=>b.text().startsWith('Incidents'))!.trigger('click');await flushPromises();expect(w.findAll('.incident-row')).toHaveLength(1);await w.get('[aria-label="Mark resolved: CPU"]').trigger('click');await flushPromises();expect(w.find('.incident-row').exists()).toBe(false);await w.get('input[type="checkbox"]').setValue(true);await flushPromises();expect(w.text()).toContain('Manually resolved');expect(w.find('.resolve').exists()).toBe(false);w.unmount();apiState.preview=true;
 });
 
 it.each([false,true])('marks the open incidents in the current scope (from notification: %s)',async(fromNotification)=>{
@@ -703,7 +703,7 @@ it('opens the correct server sidebar from an old UUID in Library history', async
     expect(app.findAll('select[aria-label="Servers"] option').map(option => option.text())).toEqual(['All servers', 'db.example.net', 'db.example.net']);
     await app.get('.row-button').trigger('click');
     await flushPromises();
-    const details = app.findAll('details').find(item => item.get('summary').text() === 'Recent actions')!;
+    const details = app.findAll('details').find(item => item.get('summary').text() === 'Recent runs')!;
     (details.element as HTMLDetailsElement).open = true;
     await details.trigger('toggle');
     await flushPromises();

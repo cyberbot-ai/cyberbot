@@ -143,7 +143,7 @@ impl Validation {
     fn enter(&mut self, depth: usize) -> Result<(), String> {
         self.nodes += 1;
         if depth > 8 || self.nodes > 64 {
-            return Err("No more than 64 knots and 8 levels of expression".into());
+            return Err("Expressions are limited to 64 nodes and 8 levels of nesting".into());
         }
         Ok(())
     }
@@ -152,7 +152,7 @@ impl Validation {
         match n {
             Number::Field { name } => {
                 if !fields().contains(name) {
-                    return Err(format!("Inaccessible entrance: {name}"));
+                    return Err(format!("Input is unavailable: {name}"));
                 }
                 self.fields.insert(name.clone());
             }
@@ -205,7 +205,7 @@ pub fn validate(s: &Spec) -> Result<(), String> {
         || !(1..=8).contains(&s.inputs.len())
         || !matches!(s.severity, Status::Warning | Status::Critical)
     {
-        return Err("Incorrect format or verification limits".into());
+        return Err("Invalid check format or limits".into());
     }
     let mut v = Validation {
         nodes: 0,
@@ -214,10 +214,12 @@ pub fn validate(s: &Spec) -> Result<(), String> {
     v.condition(&s.condition, 0)?;
     let declared = s.inputs.iter().cloned().collect::<BTreeSet<_>>();
     if declared.len() != s.inputs.len() || declared != v.fields {
-        return Err("The inputs must coincide exactly with the fields of expression".into());
+        return Err("Declared inputs must match the fields used in the expression".into());
     }
     if !(3..=16).contains(&s.tests.len()) {
-        return Err("We need 3-16 tests: operation, normality and lack of data".into());
+        return Err(
+            "Provide 3 to 16 tests covering triggered, healthy, and missing-data results".into(),
+        );
     }
     let mut names = BTreeSet::new();
     for t in &s.tests {
@@ -226,12 +228,12 @@ pub fn validate(s: &Spec) -> Result<(), String> {
             || t.values.keys().any(|k| !declared.contains(k))
             || t.values.values().flatten().any(|v| !bounded(*v))
         {
-            return Err("Wrong test set".into());
+            return Err("Invalid test fixtures".into());
         }
     }
     for expected in [&Status::Healthy, &Status::Unknown, &s.severity] {
         if !s.tests.iter().any(|t| &t.expected == expected) {
-            return Err("Tests should include norm, response and unknown result".into());
+            return Err("Tests must cover healthy, triggered, and unknown results".into());
         }
     }
     Ok(())
@@ -309,7 +311,7 @@ pub fn execute(request: Request) -> Result<Response, String> {
             .any(|k| !request.spec.inputs.contains(k))
         || request.values.values().flatten().any(|v| !bounded(*v))
     {
-        return Err("Inadmissible entry".into());
+        return Err("Invalid input".into());
     }
     let status = evaluate(&request.spec, &request.values);
     let report = if request.test {
@@ -332,7 +334,7 @@ pub fn execute(request: Request) -> Result<Response, String> {
             values.remove(field);
             let actual = evaluate(&request.spec, &values);
             cases.push(CaseResult {
-                name: format!("Mandatory entrance: {field}"),
+                name: format!("Required input: {field}"),
                 expected: Status::Unknown,
                 passed: actual == Status::Unknown,
                 actual,
@@ -356,7 +358,7 @@ pub fn example() -> Spec {
     Spec {
         format: ENGINE,
         name: "Memory above 90%".into(),
-        description: "Two fresh observations of high memory load; omissions don’t mean normal."
+        description: "Triggers on two fresh observations of high memory usage. Missing observations are unknown."
             .into(),
         interval_seconds: 180,
         bad_windows: 2,

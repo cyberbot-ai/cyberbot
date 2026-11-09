@@ -19,7 +19,7 @@ async function act(action:'add'|'remove'){if(busy.value)return;busy.value=true;e
 </script>
 <template><section class="instances">
 <template v-if="!current">
-  <ServerTabBar :title="catalog[kind]?.name ?? kind" disabled><span>Downloading…</span></ServerTabBar>
+  <ServerTabBar :title="catalog[kind]?.name ?? kind" disabled><span>Loading…</span></ServerTabBar>
   <slot name="before-content"/>
   <p v-if="error" role="alert" class="error">{{error}}</p>
 </template>
@@ -27,7 +27,7 @@ async function act(action:'add'|'remove'){if(busy.value)return;busy.value=true;e
 <nav v-if="items.length>1&&!hideSelector" class="connections" aria-label="Service connections"><button v-for="i in items" :key="i.id" :aria-pressed="selected===i.id" :class="{selected:selected===i.id}" :disabled="busy" @click="selected=i.id">{{i.name}}</button></nav>
 <p v-if="error" role="alert" class="error">{{error}}</p>
 <form v-if="adding" class="add" @submit.prevent="act('add')"><label>port<UiInput v-model.number="port" type="number" min="1" max="65535" required/></label><button :disabled="busy||preview">Add connection</button><button type="button" :disabled="busy" @click="adding=false">Cancel</button></form>
-<div v-if="removing" class="confirmation"><p>Delete {{current?.name}} from monitoring, along with history and incidents.</p><button :disabled="busy||preview" @click="act('remove')">Delete along with the story</button><button :disabled="busy" @click="removing=false">Cancel</button></div>
+<div v-if="removing" class="confirmation"><p>Delete {{current?.name}} from monitoring, along with history and incidents.</p><button :disabled="busy||preview" @click="act('remove')">Remove connection and history</button><button :disabled="busy" @click="removing=false">Cancel</button></div>
 </template></component></KeepAlive>
 </section></template>
 <style scoped>

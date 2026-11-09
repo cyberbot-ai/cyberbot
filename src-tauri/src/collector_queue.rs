@@ -2,7 +2,7 @@ use crate::{monitoring, store::Store};
 use std::{collections::HashMap, sync::Mutex};
 use tokio::sync::Notify;
 
-pub(crate) const BUSY: &str = "The collector’s busy";
+pub(crate) const BUSY: &str = "The collector is busy";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Lane {
