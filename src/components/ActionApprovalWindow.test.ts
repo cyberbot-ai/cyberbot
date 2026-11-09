@@ -71,8 +71,13 @@ it('offers only one-time approval for a package upgrade with operational risk',a
   request.artifact.spec.code='apt-get install --only-upgrade --no-remove python3.11';
   request.review!.verdict={decision:'confirm',explanation:'Update may restart services.',effects:['Python packages will change']};
   const w=mount(ActionApprovalWindow,{props:{requestId:request.id}});await flushPromises();
-  expect(w.get('.content').text()).toContain('Update may restart services.');
+  const warning=w.get('.risk-warning');
+  expect(warning.get('strong').text()).toBe('One-time approval required');
+  expect(warning.get('p').text()).toBe('Update may restart services.');
+  expect(warning.get('li').text()).toBe('Python packages will change');
+  expect(warning.element.compareDocumentPosition(w.get('pre[aria-label="Exact script"]').element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(w.find('input[type=checkbox]').exists()).toBe(false);
+  expect(w.findAll('footer button').map(button=>button.text())).toEqual(['Decline','Allow once']);
   await w.get('button.primary').trigger('click');
   expect(mock.call).toHaveBeenCalledWith('decide_action',{id:request.id,artifactHash:request.artifactHash,decision:'once'});
   w.unmount();

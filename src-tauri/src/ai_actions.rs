@@ -1235,6 +1235,7 @@ mod tests {
         assert!(db
             .action_decide(&update.id, &update.artifact_hash, "session", 104)
             .is_err());
+        assert!(db.action_decide(&update.id, "wrong", "once", 104).is_err());
         assert!(db
             .action_transition(&update.id, "awaitingApproval", "queued", 104)
             .is_err());
@@ -1246,10 +1247,20 @@ mod tests {
             .unwrap();
         db.action_transition(&update.id, "queued", "running", 106)
             .unwrap();
-        assert_eq!(
-            review(&db, &shell("rm /srv/app.db"), Decision::Deny).state,
-            "denied"
-        );
+        for (code, decision) in [
+            ("rm /srv/app.db", Decision::Deny),
+            ("ufw allow from any to any port 5432", Decision::Deny),
+            ("sh /tmp/uninspected-script", Decision::Uncertain),
+        ] {
+            let blocked = review(&db, &shell(code), decision);
+            assert_eq!(blocked.state, "denied");
+            assert!(db
+                .action_decide(&blocked.id, &blocked.artifact_hash, "once", 104)
+                .is_err());
+            assert!(db
+                .action_transition(&blocked.id, "approved", "queued", 105)
+                .is_err());
+        }
     }
 
     #[test]

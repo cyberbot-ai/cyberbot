@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.3
+
+- Ask for one-time approval before reversible repairs to security configuration and show the risk and recovery limits in a red warning.
+
 ## 0.7.2
 
 - Keep AI action approvals valid when unrelated files appear in local SSH directories, and recheck the full SSH scope before running approved commands.

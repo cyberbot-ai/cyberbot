@@ -7,6 +7,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { call, preview } from '../api';
 import { formatTimeRange } from '../dateTime';
 import type { ActionCard, ActionRequest } from '../types';
+import ActionRiskWarning from './ActionRiskWarning.vue';
 import RelativeDate from './RelativeDate.vue';
 import UiIcon from './UiIcon.vue';
 
@@ -40,6 +41,10 @@ const groups = computed(() => [
 const selectedCard = computed(() => cards.value.find(r => r.id === selected.value));
 const proposedAction = computed(() => current.value?.artifact.spec.action);
 const waiting = computed(() => current.value?.state === 'awaitingApproval');
+const pendingRisk = computed(() => {
+  const verdict = current.value?.review?.verdict;
+  return waiting.value && verdict?.decision === 'confirm' ? verdict : undefined;
+});
 const planning = computed(() => current.value && activeStates.has(current.value.state) && current.value.state !== 'rollbackRunning');
 const scope = computed(() => capturedActionServers(current.value));
 const requestServer = computed(() => actionRequestReference(current.value));
@@ -270,11 +275,12 @@ onUnmounted(() => {
 
       <section class="impact">
         <h3>{{ planning ? proposedAction?.kind === 'diagnostic' ? 'What Cyberbot will calculate' : 'What will change' : 'What happened' }}</h3>
+        <ActionRiskWarning v-if="pendingRisk" :verdict="pendingRisk"/>
         <template v-if="planning">
           <p v-if="proposedAction?.kind === 'diagnostic'">Cyberbot will calculate the result from the prepared data. The script runs without file access, networking, or process creation.</p>
           <p v-else-if="serviceAction">{{ serviceAction.impact }}</p>
           <p v-else-if="!current.review?.verdict.effects.length">Cyberbot will run the commands below on the specified server.</p>
-          <ul v-if="current.review?.verdict.effects.length" class="effect-list">
+          <ul v-if="!pendingRisk && current.review?.verdict.effects.length" class="effect-list">
             <li v-for="(effect, index) in current.review.verdict.effects" :key="index">{{ effect }}</li>
           </ul>
           <div v-if="current.artifact.prepared.before" class="diff" aria-label="Configuration change">
@@ -315,7 +321,7 @@ onUnmounted(() => {
           <summary>Risk review and parameters</summary>
           <template v-if="current.review">
             <p><strong>{{ reviewLabels[current.review.verdict.decision] }}</strong> · {{ current.review.model ?? current.artifact.profile.low.model }} · {{ current.review.tokens.toLocaleString('en-US') }} tokens</p>
-            <p>{{ current.review.verdict.explanation }}</p>
+            <p v-if="!pendingRisk">{{ current.review.verdict.explanation }}</p>
             <ul v-if="!planning && current.review.verdict.effects.length" class="effect-list">
               <li v-for="(effect, index) in current.review.verdict.effects" :key="index">{{ effect }}</li>
             </ul>

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { presentServiceAction } from '../serviceActions';
+import ActionRiskWarning from './ActionRiskWarning.vue';
 import ServerLink from './ServerLink.vue';
 import { actionRequestReference, capturedActionServers } from '../serverDirectory';
 import {computed,nextTick,onMounted,onUnmounted,ref} from 'vue';
@@ -17,6 +18,7 @@ const waiting=computed(()=>request.value?.state==='awaitingApproval');
 const expired=computed(()=>Boolean(request.value&&request.value.expiresAt<=now.value));
 const verdict=computed(()=>request.value?.review?.verdict);
 const requiresOneTime=computed(()=>verdict.value?.decision==='confirm');
+const pendingRisk=computed(()=>waiting.value&&!expired.value&&requiresOneTime.value?verdict.value:undefined);
 const allowed=computed(()=>waiting.value&&!expired.value&&(verdict.value?.decision==='allow'||requiresOneTime.value));
 const useSession=computed(()=>!requiresOneTime.value&&session.value);
 const action=computed(()=>request.value?.artifact.spec.action);
@@ -54,6 +56,7 @@ onUnmounted(()=>{disposed=true;sequence++;clearInterval(timer);off?.();document.
     <p v-if="error" class="error" role="alert">{{error}}</p>
     <template v-if="request">
       <h2>{{request.artifact.spec.goal}}</h2>
+      <ActionRiskWarning v-if="pendingRisk" class="approval-risk" :verdict="pendingRisk"/>
       <div class="effect" v-if="action?.kind==='diagnostic'"><strong>Calculation using stored data</strong><p>The Python script processes prepared summaries in isolation.</p></div>
       <div v-else-if="serviceAction" class="effect"><strong>{{serviceAction.headline}}</strong><p>{{serviceAction.approval}}</p><p v-if="serviceAction.risky" class="risk">Connections may drop.</p><div v-if="request.artifact.prepared.before" class="diff"><code>− {{request.artifact.prepared.before}}</code><code>+ {{request.artifact.prepared.after}}</code></div></div>
       <template v-else-if="action?.kind==='shell'">
@@ -63,11 +66,11 @@ onUnmounted(()=>{disposed=true;sequence++;clearInterval(timer);off?.();document.
         </div>
         <pre aria-label="Exact script">{{request.artifact.spec.code}}</pre>
       </template>
-      <template v-if="verdict && (requiresOneTime || action?.kind==='shell')">
-        <p><strong>{{requiresOneTime?'This action requires one-time approval':'Risk review'}}</strong> · {{verdict.explanation}}</p>
+      <template v-if="verdict && action?.kind==='shell' && !pendingRisk">
+        <p><strong>Risk review</strong> · {{verdict.explanation}}</p>
         <ul v-if="verdict.effects.length"><li v-for="effect in verdict.effects" :key="effect">{{effect}}</li></ul>
       </template>
-      <p v-else-if="allowed" class="review-ok">Risk review passed</p>
+      <p v-else-if="allowed && !requiresOneTime" class="review-ok">Risk review passed</p>
       <p v-if="expired&&waiting" class="error" role="status">This request expired before it was approved.</p>
       <p v-else-if="!waiting" class="result" role="status">{{statusLabels[request.state]??'This request is closed'}}. You can close this window.</p>
       <details v-if="action?.kind==='shell'"><summary>Servers and execution limits</summary><p>Up to {{request.artifact.isolation.wallSeconds}} s</p><ul><li v-for="target in scope" :key="target.id"><ServerLink v-bind="target" captured/></li></ul></details>
@@ -86,5 +89,6 @@ onUnmounted(()=>{disposed=true;sequence++;clearInterval(timer);off?.();document.
 </main>
 </template>
 <style scoped>
+.approval-risk { margin-bottom: 14px; }
 .approval{height:100%;width:100%;display:flex;flex-direction:column;min-height:0;background:var(--canvas);color:var(--text);box-sizing:border-box}header{flex:none;padding:26px 28px 18px;border-bottom:1px solid var(--line)}.eyebrow{font-size:11px;font-weight:600;letter-spacing:.04em;color:var(--muted);margin:0 0 7px}h1{font-size:23px;line-height:1.25;font-weight:600;margin:0}.server{font-size:12px;color:var(--muted);overflow-wrap:anywhere;margin:10px 0 0;max-height:3em;overflow:auto}.content{flex:1;min-height:0;overflow:auto;padding:22px 28px}h2{font-size:15px;line-height:1.5;font-weight:500;overflow-wrap:anywhere;margin:0 0 18px}.effect{background:var(--surface);border-radius:9px;padding:15px 17px}.effect strong{font-size:13px;font-weight:600}p,li{font-size:12px;line-height:1.6;overflow-wrap:anywhere}.effect p{margin:7px 0 0;color:var(--muted)}.effect .risk{color:var(--warning)}.diff{display:flex;flex-direction:column;gap:4px;margin-top:12px;font-size:11px;overflow-wrap:anywhere}.diff code:first-child{color:var(--danger)}.diff code:last-child{color:var(--success)}.review-ok{color:var(--success);margin:13px 0 18px}.error{color:var(--danger)}.result{color:var(--muted)}details{margin-top:14px;color:var(--muted);font-size:12px}summary{cursor:pointer;font-size:12px;color:var(--text)}pre{font:11px/1.7 ui-monospace,monospace;white-space:pre-wrap;overflow-wrap:anywhere;max-height:220px;overflow:auto;padding:12px;background:var(--surface);border:1px solid var(--line);border-radius:7px;color:var(--text)}.hash{font:10px/1.7 ui-monospace,monospace;overflow-wrap:anywhere}footer{flex:none;padding:16px 28px 22px;border-top:1px solid var(--line);background:var(--canvas)}.session{display:flex;align-items:center;gap:8px;font-size:12px;line-height:1.5;cursor:pointer}.session input{accent-color:var(--accent);margin:0;flex:none}.scope-note{font-size:11px;color:var(--muted);margin:5px 0 14px}.buttons{display:flex;justify-content:space-between;gap:12px}button{font:inherit;font-size:12px;padding:10px 15px;min-height:38px;border:1px solid var(--line);border-radius:7px;background:var(--surface);color:var(--text);cursor:pointer}button.primary{background:var(--accent);color:var(--on-accent);border-color:var(--accent);font-weight:500}button:disabled{opacity:.5;cursor:default}button:focus-visible,input:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:3px}@media(max-width:550px){header{padding:20px 20px 14px}.content{padding:18px 20px}footer{padding:14px 20px 18px}.buttons{gap:8px}.buttons button{font-size:11px;padding:9px 11px}h1{font-size:21px}}
 </style>
