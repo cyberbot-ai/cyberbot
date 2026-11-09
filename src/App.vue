@@ -28,7 +28,7 @@ import UiInput from './components/UiInput.vue';
 import MonitoringSettings from './components/MonitoringSettings.vue';
 import MonitoringLibrary from './components/MonitoringLibrary.vue';
 import { monitoringInterval } from './monitoring';
-import { serverDirectory, serverDirectoryKey, type ServerIdentity, type ServerSection } from './serverDirectory';
+import { serverAddress, serverDirectory, serverDirectoryKey, type ServerIdentity, type ServerSection } from './serverDirectory';
 import type {MonitoringTarget} from './types';
 const monitoringTarget=ref<MonitoringTarget>();
 function openMonitoring(target:MonitoringTarget){monitoringTarget.value=target;page.value='monitoring';}
@@ -132,13 +132,31 @@ async function openSidebar(id: string, section?: ServerSection) {
   if (!directory.value.byId.has(id)) await reload();
   if (!stopped && directory.value.byId.has(id)) openServer(id, section);
 }
-const groupCount=ref(0),showIndividual=ref(true);
+const groupCount=ref<number|null>(null),showIndividual=ref(true);
+const incidentSearch = ref('');
+const incidentQuery = computed(() => incidentSearch.value.trim());
 const incidents=computed(()=>data.value?.incidents.filter(i=>i.status==='open')??[]);
 const notificationIds=ref<Set<string>|null>(null);
 const incidentVersion=computed(()=>(data.value?.incidents??[]).map(i=>`${i.id}:${i.episode}:${i.status}`).join('|'));
 const incidentRows=computed(()=>[...(data.value?.incidents??[])].reverse().filter(i=>notificationIds.value?notificationIds.value.has(i.id)&&(showResolved.value||!i.resolvedByUserAt):showResolved.value||i.status==='open'));
+const matchingIncidentRows = computed(() => {
+  if (!incidentQuery.value) return incidentRows.value;
+  const words = incidentQuery.value.toLowerCase().split(/\s+/);
+  return incidentRows.value.filter(incident => {
+    const server = directory.value.byId.get(incident.serverId);
+    const status = incident.status === 'resolved'
+      ? (incident.resolvedByUserAt ? 'manually resolved' : 'restored')
+      : '';
+    const fields = [
+      incident.title, incident.check, incident.evidence, incident.severity, incident.status, status,
+      incident.id, incident.episode, incident.serverId, server?.name,
+      server && serverAddress(server.endpoint),
+    ].join('\n').toLowerCase();
+    return words.every(word => fields.includes(word));
+  });
+});
 let offNotifications:UnlistenFn|undefined,offAiSettings:UnlistenFn|undefined,offServerSidebar:UnlistenFn|undefined;
-async function openNotification(){try{const target=await call<{open:boolean;incidentIds:string[];openActions?:boolean;actionRequestId?:string}>('take_notification_target');if(stopped||!target?.open)return;selectedId.value='';if(target.openActions){if(target.actionRequestId){await call('open_action_approval',{id:target.actionRequestId});return;}await showAiTab('actions');return;}notificationIds.value=target.incidentIds.length?new Set(target.incidentIds):null;groupCount.value=0;showIndividual.value=true;page.value='incidents';await reload();}catch(e){if(!stopped)report(e);}}
+async function openNotification(){try{const target=await call<{open:boolean;incidentIds:string[];openActions?:boolean;actionRequestId?:string}>('take_notification_target');if(stopped||!target?.open)return;selectedId.value='';if(target.openActions){if(target.actionRequestId){await call('open_action_approval',{id:target.actionRequestId});return;}await showAiTab('actions');return;}notificationIds.value=target.incidentIds.length?new Set(target.incidentIds):null;incidentSearch.value='';showIndividual.value=true;page.value='incidents';await reload();}catch(e){if(!stopped)report(e);}}
 const selected=computed(()=>servers.value.find(s=>s.id===selectedId.value));
 const healthy=computed(()=>servers.value.filter(s=>health(s,now.value,settings.value.pollSeconds)==='healthy').length);
 const problems=computed(()=>servers.value.filter(s=>['critical','warning','unreachable','stale'].includes(health(s,now.value,settings.value.pollSeconds))).length);
@@ -284,20 +302,28 @@ async function closeDetails(){if(standalone&&!preview){try{await getCurrentWindo
       <div class="incident-content">
         <p v-if="notificationIds" class="notification-selection">Incidents from notification <button @click="notificationIds=null">All incidents</button></p>
         <div class="incident-toolbar">
-          <p>{{notificationIds?incidentRows.length:incidents.length}} {{notificationIds?'notice':'open'}}</p>
+          <div class="incident-query">
+            <UiInput v-model="incidentSearch" class="incident-search" type="search"
+              aria-label="Search incidents" placeholder="Search incidents" autocomplete="off"
+              maxlength="256" @keydown.esc.stop.prevent="incidentSearch=''" />
+            <p role="status">{{incidentQuery ? `${matchingIncidentRows.length} matching individual incidents` : notificationIds ? `${incidentRows.length} notice` : `${incidents.length} open`}}</p>
+          </div>
           <div class="incident-actions">
             <label class="checkbox"><input v-model="showResolved" type="checkbox">Show resolved</label>
-            <ResolveAllIncidentsButton :incidents="notificationIds ? incidentRows : incidents"
+            <ResolveAllIncidentsButton v-if="!incidentQuery" :incidents="notificationIds ? incidentRows : incidents"
               :title="notificationIds ? 'Mark open incidents from the notification' : 'Mark open incidents on all servers'"
               @updated="reload" @error="report"/>
           </div>
         </div>
-        <IncidentGroups v-if="!notificationIds" :refresh-key="incidentVersion" :now="now" :show-resolved="showResolved"
+        <IncidentGroups v-if="!notificationIds" :refresh-key="incidentVersion" :now="now" :show-resolved="showResolved" :search="incidentQuery"
           @ai-settings="openAiSettings" @updated="reload" @count="groupCount=$event"/>
-        <label v-if="groupCount" class="checkbox"><input v-model="showIndividual" type="checkbox">Show individual incidents</label>
-        <IncidentList v-if="!groupCount||showIndividual" :incidents="incidentRows" show-server
+        <label v-if="groupCount&&!incidentQuery" class="checkbox"><input v-model="showIndividual" type="checkbox">Show individual incidents</label>
+        <IncidentList v-if="matchingIncidentRows.length&&(!groupCount||showIndividual||incidentQuery)" :incidents="matchingIncidentRows" show-server
           @open="openServer($event.serverId,'incidents')" @updated="reload" @error="report"/>
-        <div v-if="!groupCount&&!incidentRows.length" class="empty"><UiIcon name="check" :size="32"/><h2>No open incidents</h2><p>Issues detected by monitoring will appear here.<br>Use the Insufficient data filter to find servers without enough data.</p></div>
+        <div v-if="(notificationIds||groupCount===0)&&!matchingIncidentRows.length" class="empty">
+          <template v-if="incidentQuery"><UiIcon name="search" :size="32"/><h2>No matching incidents</h2></template>
+          <template v-else><UiIcon name="check" :size="32"/><h2>No open incidents</h2><p>Issues detected by monitoring will appear here.<br>Use the Insufficient data filter to find servers without enough data.</p></template>
+        </div>
       </div>
     </section>
     <section v-else-if="page==='console'" class="scroll-content"><FleetConsole v-if="data" v-model="consoleSelection" :servers="servers" :ai-agent="settings.autoAgent" @ai-settings="openAiSettings"/></section>
@@ -414,6 +440,8 @@ button,input,select,textarea{font:inherit;color:inherit}button{cursor:pointer;di
   color: var(--muted);
 }
 .incident-toolbar p, .incident-actions .checkbox { margin: 0; }
+.incident-query { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; min-width: 0; }
+.incident-search { --field-width: 240px; }
 .incident-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
 .main.fleet-page .page-head{height:60px}
 .scroll-content{flex:1;min-height:0;overflow:auto;padding-bottom:30px;scrollbar-color:var(--line-strong) transparent}.empty{flex:1;min-height:260px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:32px;color:var(--muted)}.empty h2{font-size:20px;color:var(--text);font-weight:550;margin:18px 0 0}.empty p{line-height:1.7;max-width:60ch;margin-bottom:22px}.loading{height:200px;display:grid;place-items:center;color:var(--muted)}.page-intro{color:var(--muted);margin:0 0 24px}.source-row{display:flex;align-items:center;gap:18px;border-bottom:1px solid var(--line);padding:24px 0}.source-row>svg{color:var(--muted)}.source-description{flex:1;min-width:0}.source-description h3{font-size:14px;margin:0;font-weight:600}.source-description h3 span{font-size:11px;color:var(--muted);font-weight:400;margin-left:8px}.source-description p{color:var(--muted);margin:6px 0;font-size:12px}.source-description code{font-size:12px;overflow-wrap:anywhere;color:var(--muted)}.row-actions{display:flex;gap:8px;flex-wrap:wrap}.danger,.text-error{color:var(--danger)}

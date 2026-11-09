@@ -1060,14 +1060,22 @@ async fn resolve_incidents(
 }
 
 #[tauri::command]
-fn incident_groups(
+async fn incident_groups(
     state: State<'_, Arc<AppState>>,
     include_closed: Option<bool>,
     offset: Option<usize>,
+    search: Option<String>,
 ) -> Result<correlation::Overview, String> {
-    state
-        .store
-        .incident_groups(include_closed.unwrap_or(false), offset.unwrap_or(0))
+    let app = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        app.store.incident_groups(
+            include_closed.unwrap_or(false),
+            offset.unwrap_or(0),
+            search.as_deref().unwrap_or_default(),
+        )
+    })
+    .await
+    .map_err(err_string)?
 }
 #[tauri::command]
 fn incident_group(

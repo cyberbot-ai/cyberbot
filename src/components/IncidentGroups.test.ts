@@ -6,6 +6,34 @@ const group={id:'group:g',key:'k',title:'General failure',reason:'Common ProxyJu
 const member={incident:{id:'incident',episode:'ep',serverId:'s1',check:'connection',title:'SSH',severity:'warning',status:'open',openedAt:100,updatedAt:150,evidence:'limited evidence'},serverName:'db-01',joinedAt:100,truncated:false};
 const view={group,members:[member],offset:0,total:500,nextOffset:1,fresh:400,open:500,outsideScope:0};
 beforeEach(()=>{vi.clearAllMocks();vi.mocked(call).mockImplementation(async(command,args)=>command==='incident_groups'?{groups:[group],total:1}:command==='incident_group'?{...view,offset:args?.offset}:command==='group_investigations'?[]:'run');});
+it('debounces group search, resets pagination, and discards stale results', async () => {
+  vi.useFakeTimers();
+  let completePreviousPage!: (result: { groups: typeof group[]; total: number }) => void;
+  vi.mocked(call).mockImplementation(async (_, args) => {
+    if (args?.offset === 50) {
+      return new Promise(resolve => { completePreviousPage = resolve; });
+    }
+    if (args?.search) return { groups: [{ ...group, title: 'Matching group' }], total: 1 };
+    return { groups: [group], total: 51 };
+  });
+  const wrapper = mount(IncidentGroups, { props: { now: 150, showResolved: false } });
+  try {
+    await flushPromises();
+    await wrapper.findAll('button').find(button => button.text() === 'Next incident groups')!.trigger('click');
+    await wrapper.setProps({ search: 'gate' });
+    await wrapper.setProps({ search: 'gateway' });
+    await vi.advanceTimersByTimeAsync(200);
+    expect(call).toHaveBeenCalledTimes(3);
+    expect(call).toHaveBeenLastCalledWith('incident_groups', { includeClosed: false, offset: 0, search: 'gateway' });
+    completePreviousPage({ groups: [group], total: 51 });
+    await flushPromises();
+    expect(wrapper.get('.heading').text()).toContain('Matching group');
+    expect(wrapper.text()).not.toContain('Next incident groups');
+  } finally {
+    wrapper.unmount();
+    vi.useRealTimers();
+  }
+});
 it('loads grouping without launching a model and keeps hypotheses explicit',async()=>{const open=vi.fn();const directory=serverDirectory([{id:'s1',name:'db-01',endpoint:{host:'db.example.net',user:'ops',port:22,jumpHost:null}}]);const w=mount(IncidentGroups,{props:{now:150,showResolved:false},global:{provide:{[serverDirectoryKey as symbol]:{current:()=>directory,open}}}});await flushPromises();expect(w.text()).toContain('500 servers');expect(w.text()).toContain('A shared cause has not been confirmed');expect(call).not.toHaveBeenCalledWith('start_group_investigation',expect.anything());await w.get('.heading').trigger('click');await flushPromises();expect(w.text()).toContain('limited evidence');expect(w.get('.timeline .server-link').text()).toBe('db.example.net');await w.get('.timeline .server-link').trigger('click');expect(open).toHaveBeenCalledWith('s1','incidents');w.unmount();});
 it('uses bounded backend pagination without skipping shortened pages',async()=>{const w=mount(IncidentGroups,{props:{now:150,showResolved:false}});await flushPromises();await w.get('.heading').trigger('click');await flushPromises();await w.findAll('button').find(b=>b.text()==='Next events')!.trigger('click');await flushPromises();expect(call).toHaveBeenCalledWith('incident_group',{id:'group:g',offset:1});w.unmount();});
 it('starts exactly one explicitly requested group investigation',async()=>{const w=mount(IncidentGroups,{props:{now:150,showResolved:false}});await flushPromises();await w.get('.heading').trigger('click');await flushPromises();expect(w.find('select').exists()).toBe(false);await w.findAll('button').find(b=>b.text()==='Investigate incident group')!.trigger('click');await flushPromises();expect(call).toHaveBeenCalledWith('start_group_investigation',{id:'group:g'});expect(vi.mocked(call).mock.calls.filter(([cmd])=>cmd==='start_group_investigation')).toHaveLength(1);expect(w.text()).toContain('at the time it starts');w.unmount();});

@@ -107,9 +107,9 @@ mod tests {
             event(&db, s, true, at);
         }
         db.reconcile_auto(at).unwrap();
-        assert_eq!(db.incident_groups(false, 0).unwrap().total, 1);
+        assert_eq!(db.incident_groups(false, 0, "").unwrap().total, 1);
         let incidents = db.snapshot().unwrap().incidents;
-        let g = db.incident_groups(false, 0).unwrap().groups.remove(0);
+        let g = db.incident_groups(false, 0, "").unwrap().groups.remove(0);
         db.resolve_incident(&incidents[0].id, &incidents[0].episode, at + 1)
             .unwrap();
         assert_eq!(db.incident_group(&g.id, 0, None).unwrap().open, 2);
@@ -122,7 +122,7 @@ mod tests {
             })
             .collect();
         db.resolve_incidents(&episodes, at + 2).unwrap();
-        assert_eq!(db.incident_groups(false, 0).unwrap().total, 0);
+        assert_eq!(db.incident_groups(false, 0, "").unwrap().total, 0);
         assert_eq!(db.auto_status(at + 2).unwrap().queued, 0);
         assert_eq!(db.notification_settings().unwrap().queued, 0);
         assert!(db.next_auto(at + 1000).unwrap().is_none());

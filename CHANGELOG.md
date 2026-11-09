@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.0
+
+- Search individual incidents and incident groups by title, evidence, check, server name or address, status, severity, or identifier.
+
 ## 0.6.2
 
 - Center the Incidents page, restore padding inside incident group rows, and keep actions and statuses clear of the scrollbar.

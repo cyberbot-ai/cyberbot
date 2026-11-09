@@ -5,13 +5,34 @@ import ResolveIncidentButton from './ResolveIncidentButton.vue';
 import {ref,watch,onMounted,onUnmounted} from 'vue';
 import {call,preview} from '../api';
 import type {IncidentGroup,GroupView,Investigation} from '../types';
-const props=defineProps<{now:number;showResolved:boolean;refreshKey?:string}>();
-const emit=defineEmits<{count:[n:number];updated:[];aiSettings:[]}>();
+const props=defineProps<{now:number;showResolved:boolean;refreshKey?:string;search?:string}>();
+const emit=defineEmits<{count:[n:number|null];updated:[];aiSettings:[]}>();
 const groups=ref<IncidentGroup[]>([]),total=ref(0),offset=ref(0),selected=ref(''),view=ref<GroupView>(),page=ref(0),runs=ref<Investigation[]>([]),busy=ref(false),error=ref('');
+const listError = ref('');
 let revision=0,detailRevision=0,timer:ReturnType<typeof setInterval>|undefined;
+let searchTimer: ReturnType<typeof setTimeout> | undefined;
 const states:Record<string,string>={open:'Open',resolved:'Resolved',withdrawn:'Completed with incomplete data'};
 const autoStates:Record<string,string>={running:'Investigation in progress',completed:'Investigation completed',failed:'Investigation failed',cancelled:'Investigation cancelled',interrupted:'Investigation interrupted',dismissed:'Skipped',budget_exceeded:'Budget exhausted'};
-async function refresh(){const r=++revision;try{const result=await call<{groups:IncidentGroup[];total:number}>('incident_groups',{includeClosed:props.showResolved,offset:offset.value});if(r!==revision)return;groups.value=result.groups;total.value=result.total;emit('count',result.total);}catch(e){if(r===revision)error.value=String(e);}}
+async function refresh() {
+  if (searchTimer !== undefined) return;
+  const request = ++revision;
+  try {
+    const result = await call<{groups:IncidentGroup[];total:number}>('incident_groups', {
+      includeClosed: props.showResolved, offset: offset.value, search: props.search ?? '',
+    });
+    if (request !== revision) return;
+    groups.value = result.groups;
+    total.value = result.total;
+    listError.value = '';
+    emit('count', result.total);
+  } catch (failure) {
+    if (request === revision) listError.value = String(failure).replace(/^Error: /, '');
+  }
+}
+function moveGroups(nextOffset: number) {
+  offset.value = nextOffset;
+  void refresh();
+}
 async function detail(){if(!selected.value)return;const r=++detailRevision;const id=selected.value;try{const [v,history]=await Promise.all([call<GroupView>('incident_group',{id,offset:page.value}),call<Investigation[]>('group_investigations',{id})]);if(r!==detailRevision||id!==selected.value)return;view.value=v;runs.value=history;}catch(e){if(r===detailRevision)error.value=String(e);}}
 async function resolved(){await refresh();await detail();emit('updated');}
 function choose(id:string){selected.value=selected.value===id?'':id;page.value=0;view.value=undefined;runs.value=[];detailRevision++;if(selected.value)void detail();}
@@ -19,13 +40,29 @@ async function start(){busy.value=true;error.value='';try{await call('start_grou
 async function cancel(id:string){try{await call('cancel_investigation',{id});await detail();}catch(e){error.value=String(e);}}
 function next(){page.value=view.value?.nextOffset??page.value;void detail();}
 function first(){page.value=0;void detail();}
-watch(()=>props.showResolved,()=>{offset.value=0;void refresh();});
+watch([()=>props.showResolved,()=>props.search], ([,search],[,previousSearch]) => {
+  clearTimeout(searchTimer);
+  searchTimer = undefined;
+  revision++;
+  groups.value = [];
+  total.value = 0;
+  offset.value = 0;
+  listError.value = '';
+  emit('count', null);
+  if (search !== previousSearch && selected.value) choose(selected.value);
+  if (search && search !== previousSearch) {
+    searchTimer = setTimeout(() => {
+      searchTimer = undefined;
+      void refresh();
+    }, 200);
+  } else void refresh();
+});
 watch(()=>props.refreshKey,()=>{void refresh();void detail();});
-watch(offset,()=>{void refresh();});
-onMounted(()=>{void refresh();timer=setInterval(()=>{if(!document.hidden){void refresh();void detail();}},15000);});
-onUnmounted(()=>{revision++;detailRevision++;clearInterval(timer);});
+onMounted(()=>{emit('count',null);void refresh();timer=setInterval(()=>{if(!document.hidden){void refresh();void detail();}},15000);});
+onUnmounted(()=>{revision++;detailRevision++;clearInterval(timer);clearTimeout(searchTimer);});
 </script>
-<template><section v-show="total || error" class="groups" aria-label="Incident groups">
+<template><section v-show="total || error || listError" class="groups" aria-label="Incident groups">
+<p v-if="listError" role="alert" class="error">Could not load incident groups. {{listError}}</p>
 <p v-if="error" role="alert" class="error">{{error}} <button @click="emit('aiSettings')">AI settings</button></p>
 <template v-if="total">
 <h2>Incident groups <small>{{total}}</small></h2>
@@ -40,7 +77,7 @@ onUnmounted(()=>{revision++;detailRevision++;clearInterval(timer);});
 <details v-for="run in runs" :key="run.id" class="report" :open="run.status==='running'"><summary><RelativeDate :at="run.startedAt"/> · {{run.agent}} · {{run.origin==='auto'?'Automatic':'Manual'}} · {{run.status}}</summary><p>Scope: {{run.serverIds.length}} servers</p><button v-if="run.status==='running'" @click="cancel(run.id)">Stop</button><p v-if="run.error" class="error">{{run.error}} <button @click="emit('aiSettings')">AI settings</button></p><pre>{{run.text||'Starting the AI agent…'}}</pre></details>
 </div></article>
 </div>
-<div v-if="offset || offset+groups.length<total" class="actions"><button v-if="offset" @click="offset=Math.max(0,offset-50)">Previous incident groups</button><button v-if="offset+groups.length<total" @click="offset+=50">Next incident groups</button></div>
+<div v-if="offset || offset+groups.length<total" class="actions"><button v-if="offset" @click="moveGroups(Math.max(0,offset-50))">Previous incident groups</button><button v-if="offset+groups.length<total" @click="moveGroups(offset+50)">Next incident groups</button></div>
 </template></section></template>
 <style scoped>
 .groups { margin-bottom: 24px; }

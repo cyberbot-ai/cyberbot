@@ -605,11 +605,105 @@ pub(crate) fn trim(db: &Connection, at: i64) -> Result<()> {
     db.execute("DELETE FROM incident_groups WHERE id IN (SELECT g.id FROM incident_groups g WHERE g.status!='open' AND g.updated_at<?1 AND NOT EXISTS(SELECT 1 FROM incident_group_members m JOIN incidents i ON i.id=m.incident_id WHERE m.group_id=g.id AND json_extract(i.payload,'$.status')='open' AND m.episode=coalesce(nullif(json_extract(i.payload,'$.episode'),''),i.id||':'||json_extract(i.payload,'$.openedAt'))) LIMIT 100)",[at-30*86400]).map_err(err)?;
     Ok(())
 }
+
+fn search_groups(db: &Connection, groups: Vec<Group>, words: &[&str]) -> Result<Vec<Group>> {
+    let servers: Vec<Server> = Store::list(db, "servers")?;
+    let servers: BTreeMap<_, _> = servers
+        .into_iter()
+        .map(|s| (s.id, (s.name, crate::ssh::target(&s.endpoint))))
+        .collect();
+    let names = crate::instances::Names::load(db, None)?;
+    let mut matches = Vec::new();
+    for group in groups {
+        let status = if group.status == "withdrawn" {
+            "completed with incomplete data"
+        } else {
+            &group.status
+        };
+        let auto_state = group
+            .auto_state
+            .as_deref()
+            .unwrap_or_default()
+            .replace('_', " ");
+        let group_fields = [
+            group.title.as_str(),
+            &group.reason,
+            &group.basis,
+            &group.id,
+            &group.key,
+            &group.status,
+            status,
+            &group.severity,
+            &auto_state,
+            group.run_id.as_deref().unwrap_or_default(),
+        ]
+        .join("\n")
+        .to_lowercase();
+        let remaining: Vec<_> = words
+            .iter()
+            .copied()
+            .filter(|&word| !group_fields.contains(word))
+            .collect();
+        if remaining.is_empty()
+            || members(db, &group.id)?.into_iter().any(|member| {
+                let i = member.incident;
+                let (name, address) = servers
+                    .get(&i.server_id)
+                    .map(|(name, address)| (name.as_str(), address.as_str()))
+                    .unwrap_or_default();
+                let resolution = match (i.status.as_str(), i.resolved_by_user_at) {
+                    ("resolved", Some(_)) => "manually resolved",
+                    ("resolved", None) => "restored",
+                    _ => "",
+                };
+                let title = names.incident_title(&i.server_id, &i.check, &i.title);
+                let fields = [
+                    i.title.as_str(),
+                    &title,
+                    &i.check,
+                    &i.evidence,
+                    &i.status,
+                    resolution,
+                    &i.severity,
+                    &i.id,
+                    &i.episode,
+                    &i.server_id,
+                    &member.server_name,
+                    member.server_address.as_deref().unwrap_or_default(),
+                    name,
+                    address,
+                ]
+                .join("\n")
+                .to_lowercase();
+                remaining.iter().all(|&word| fields.contains(word))
+            })
+        {
+            matches.push(group);
+        }
+    }
+    Ok(matches)
+}
+
 impl Store {
-    pub(crate) fn incident_groups(&self, include_closed: bool, offset: usize) -> Result<Overview> {
+    pub(crate) fn incident_groups(
+        &self,
+        include_closed: bool,
+        offset: usize,
+        search: &str,
+    ) -> Result<Overview> {
         let db = self.0.lock().map_err(err)?;
         let mut groups: Vec<Group> = Self::list(&db, "incident_groups")?;
         groups.retain(|g| include_closed || g.status == "open");
+        let search = search
+            .trim()
+            .chars()
+            .take(256)
+            .collect::<String>()
+            .to_lowercase();
+        let words: Vec<_> = search.split_whitespace().collect();
+        if !words.is_empty() {
+            groups = search_groups(&db, groups, &words)?;
+        }
         groups.sort_by_key(|g| {
             (
                 g.status != "open",
@@ -798,6 +892,46 @@ mod tests {
         let servers = populate(&db, n);
         (db, servers)
     }
+
+    #[test]
+    fn searches_group_metadata_and_member_evidence_before_paginating() {
+        let (db, servers) = fixture(2);
+        for server in &servers {
+            event(&db, server, "cpu", AT, true);
+        }
+        db.reconcile_auto(AT).unwrap();
+        let original = db.incident_groups(false, 0, "").unwrap().groups.remove(0);
+        {
+            let conn = db.0.lock().unwrap();
+            for i in 1..=50 {
+                let mut later = original.clone();
+                later.id = format!("group:later-{i}");
+                later.opened_at += i;
+                write(&conn, &later).unwrap();
+            }
+        }
+        let unfiltered = db.incident_groups(false, 0, "").unwrap();
+        assert_eq!(unfiltered.total, 51);
+        assert!(unfiltered.groups.iter().all(|g| g.id != original.id));
+        let query = format!(" CPU   {} DIAGNOSTIC ", servers[0].endpoint.host);
+        let found = db.incident_groups(false, 0, &query).unwrap();
+        assert_eq!(found.total, 1);
+        assert_eq!(found.groups[0].id, original.id);
+        assert_eq!(
+            db.incident_groups(false, 0, "CPU missing").unwrap().total,
+            0
+        );
+        let mut closed = original;
+        closed.status = "withdrawn".into();
+        write(&db.0.lock().unwrap(), &closed).unwrap();
+        assert_eq!(db.incident_groups(false, 0, &query).unwrap().total, 0);
+        assert_eq!(
+            db.incident_groups(true, 0, "incomplete diagnostic")
+                .unwrap()
+                .total,
+            1
+        );
+    }
     #[test]
     fn v11_labels_are_removed_without_losing_servers_or_replaying_a_group() {
         let root = tempfile::tempdir().unwrap();
@@ -873,7 +1007,7 @@ mod tests {
         }
         event(&db, &servers[2], "cpu", AT + 150, true);
         db.reconcile_auto(AT + 150).unwrap();
-        let groups = db.incident_groups(false, 0).unwrap();
+        let groups = db.incident_groups(false, 0, "").unwrap();
         assert_eq!(groups.total, 1);
         assert_eq!(groups.groups[0].id, group);
         assert_eq!(groups.groups[0].member_count, 3);
@@ -890,7 +1024,7 @@ mod tests {
             event(&db, server, "cpu", AT, true);
         }
         db.reconcile_auto(AT).unwrap();
-        let original = db.incident_groups(false, 0).unwrap().groups.remove(0);
+        let original = db.incident_groups(false, 0, "").unwrap().groups.remove(0);
         let source = Source {
             id: "other".into(),
             name: "other inventory".into(),
@@ -930,7 +1064,7 @@ mod tests {
         }
         event(&db, &servers[2], "cpu", AT + 60, true);
         db.reconcile_auto(AT + 60).unwrap();
-        let groups = db.incident_groups(false, 0).unwrap();
+        let groups = db.incident_groups(false, 0, "").unwrap();
         assert_eq!(groups.total, 1);
         assert_eq!(groups.groups[0].id, original.id);
         assert_eq!(groups.groups[0].member_count, 2);
@@ -1017,7 +1151,7 @@ mod tests {
         }
         db.reconcile_auto(AT + 30).unwrap();
         assert_eq!(db.snapshot().unwrap().incidents.len(), 500);
-        assert_eq!(db.incident_groups(false, 0).unwrap().total, 1);
+        assert_eq!(db.incident_groups(false, 0, "").unwrap().total, 1);
         assert_eq!(db.auto_status(AT + 30).unwrap().queued, 1);
         assert!(db.next_auto(AT + 119).unwrap().is_none());
         let job = db.next_auto(AT + 150).unwrap().unwrap();
@@ -1059,11 +1193,11 @@ mod tests {
         event(&db, &s[2], "logs:ssh_suspicious_success", AT, true);
         event(&db, &s[3], "logs:ssh_suspicious_success", AT, true);
         db.reconcile_auto(AT).unwrap();
-        assert_eq!(db.incident_groups(false, 0).unwrap().total, 0);
+        assert_eq!(db.incident_groups(false, 0, "").unwrap().total, 0);
         assert_eq!(db.auto_status(AT).unwrap().queued, 4);
         event(&db, &s[1], "cpu", AT + WINDOW + 1, true);
         db.reconcile_auto(AT + WINDOW + 1).unwrap();
-        assert_eq!(db.incident_groups(false, 0).unwrap().total, 0);
+        assert_eq!(db.incident_groups(false, 0, "").unwrap().total, 0);
     }
     #[test]
     fn separate_sources_do_not_merge_without_a_signal_but_allow_dependencies() {
@@ -1094,7 +1228,7 @@ mod tests {
             event(&db, server, "cpu", AT, true);
         }
         db.reconcile_auto(AT).unwrap();
-        assert_eq!(db.incident_groups(false, 0).unwrap().total, 0);
+        assert_eq!(db.incident_groups(false, 0, "").unwrap().total, 0);
         assert!(db
             .server_dependencies(&s[0].id)
             .unwrap()
@@ -1104,7 +1238,7 @@ mod tests {
         db.save_dependencies(&s[0].id, vec![s[1].id.clone()])
             .unwrap();
         db.reconcile_auto(AT + 10).unwrap();
-        assert_eq!(db.incident_groups(false, 0).unwrap().total, 1);
+        assert_eq!(db.incident_groups(false, 0, "").unwrap().total, 1);
     }
     #[test]
     fn declared_dependencies_correlate_different_operational_symptoms() {
@@ -1114,7 +1248,7 @@ mod tests {
         event(&db, &s[0], "nginx:upstream", AT, true);
         event(&db, &s[1], "postgresql:connections", AT + 20, true);
         db.reconcile_auto(AT + 20).unwrap();
-        let groups = db.incident_groups(false, 0).unwrap();
+        let groups = db.incident_groups(false, 0, "").unwrap();
         assert_eq!(groups.total, 1);
         let view = db.incident_group(&groups.groups[0].id, 0, None).unwrap();
         assert_eq!(view.dependencies, vec![(s[0].id.clone(), s[1].id.clone())]);
@@ -1130,7 +1264,7 @@ mod tests {
             event(&db, server, "cpu", AT, true);
         }
         db.reconcile_auto(AT).unwrap();
-        assert_eq!(db.incident_groups(false, 0).unwrap().total, 1);
+        assert_eq!(db.incident_groups(false, 0, "").unwrap().total, 1);
         assert_eq!(db.auto_status(AT).unwrap().queued, 0);
         settings.mode = "auto".into();
         db.save_settings(&settings).unwrap();
@@ -1154,7 +1288,7 @@ mod tests {
             event(&db, server, "cpu", AT + 130, true);
         }
         db.reconcile_auto(AT + 130).unwrap();
-        let groups = db.incident_groups(false, 0).unwrap();
+        let groups = db.incident_groups(false, 0, "").unwrap();
         assert_eq!(groups.total, 1);
         assert_ne!(groups.groups[0].id, job.id);
     }
@@ -1200,7 +1334,7 @@ mod tests {
             "withdrawn"
         );
         trim(&db.0.lock().unwrap(), AT + 1002 + 31 * 86400).unwrap();
-        assert_eq!(db.incident_groups(true, 0).unwrap().total, 0);
+        assert_eq!(db.incident_groups(true, 0, "").unwrap().total, 0);
     }
     #[test]
     fn restart_and_completed_tombstone_survive_migration_and_report_rotation() {
@@ -1227,7 +1361,7 @@ mod tests {
         db.reconcile_auto(AT + 150).unwrap();
         assert_eq!(db.auto_status(AT + 150).unwrap().runs, 1);
         assert_eq!(db.auto_status(AT + 150).unwrap().queued, 0);
-        assert_eq!(db.incident_groups(false, 0).unwrap().total, 1);
+        assert_eq!(db.incident_groups(false, 0, "").unwrap().total, 1);
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("v10.sqlite");
         let db = Store::open(&path).unwrap();
@@ -1253,7 +1387,7 @@ mod tests {
             event(&db, node, "nginx:upstream", AT, true);
         }
         db.reconcile_auto(AT).unwrap();
-        let g = &db.incident_groups(false, 0).unwrap().groups[0];
+        let g = &db.incident_groups(false, 0, "").unwrap().groups[0];
         assert_eq!(g.server_count, 2);
         assert_eq!(db.group_targets(&g.id).unwrap().len(), 3);
         assert_eq!(
@@ -1346,7 +1480,9 @@ mod tests {
             )
             .unwrap();
         db.reconcile_auto(AT).unwrap();
-        let id = db.incident_groups(false, 0).unwrap().groups[0].id.clone();
+        let id = db.incident_groups(false, 0, "").unwrap().groups[0]
+            .id
+            .clone();
         let mut offset = 0;
         let mut seen = BTreeSet::new();
         loop {
@@ -1373,7 +1509,9 @@ mod tests {
             event(&db, node, "cpu", AT, true);
         }
         db.reconcile_auto(AT).unwrap();
-        let group = db.incident_groups(false, 0).unwrap().groups[0].id.clone();
+        let group = db.incident_groups(false, 0, "").unwrap().groups[0]
+            .id
+            .clone();
         db.0.lock()
             .unwrap()
             .execute(
@@ -1417,7 +1555,9 @@ mod tests {
             event(&db, node, "cpu", AT, true);
         }
         db.reconcile_auto(AT).unwrap();
-        let group = db.incident_groups(false, 0).unwrap().groups[0].id.clone();
+        let group = db.incident_groups(false, 0, "").unwrap().groups[0]
+            .id
+            .clone();
         for (index, node) in s.iter().enumerate() {
             let mut payload = serde_json::to_value(node).unwrap();
             payload["project"] = json!(format!("old-{index}"));
@@ -1433,7 +1573,10 @@ mod tests {
         db.reconcile_auto(AT + 120).unwrap();
         assert_eq!(db.group_targets(&group).unwrap().len(), 2);
         assert_eq!(db.auto_status(AT + 120).unwrap().queued, 1);
-        assert_eq!(db.incident_groups(false, 0).unwrap().groups[0].id, group);
+        assert_eq!(
+            db.incident_groups(false, 0, "").unwrap().groups[0].id,
+            group
+        );
     }
     #[tokio::test]
     async fn mcp_group_scope_is_frozen_and_budget_does_not_expand_with_late_members() {
@@ -1591,7 +1734,7 @@ mod tests {
         event(&db, &s[1], "nginx:upstream", AT, true);
         event(&db, &s[2], "postgresql:connections", AT + 20, true);
         db.reconcile_auto(AT + 20).unwrap();
-        let groups = db.incident_groups(false, 0).unwrap();
+        let groups = db.incident_groups(false, 0, "").unwrap();
         assert_eq!(groups.total, 1);
         assert_eq!(db.group_targets(&groups.groups[0].id).unwrap().len(), 3);
     }

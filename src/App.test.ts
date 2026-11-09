@@ -712,6 +712,54 @@ describe('fleet ribbon integration', () => {
   });
 });
 
+it('searches individual incidents across fields and respects the resolved filter', async () => {
+  vi.useFakeTimers();
+  const server: Server = {
+    id: 'node', name: 'inventory.example.net', sourceId: 'fixture',
+    endpoint: { host: '192.0.2.10', user: 'ops', port: 2201, identityFile: null, jumpHost: null },
+    observation: null, lastError: null, lastAttempt: null, nextCheck: 0, failures: 0,
+  };
+  const incident: Incident = {
+    id: 'i-nginx', episode: 'ep-nginx', serverId: server.id, check: 'nginx:upstream',
+    title: 'Upstream errors', status: 'open', severity: 'critical', evidence: 'Bad gateway',
+    openedAt: 100, updatedAt: 101,
+  };
+  const resolved: Incident = { ...incident, id: 'i-disk', check: 'disk:/', title: 'Disk full',
+    status: 'resolved', evidence: '98% used', resolvedByUserAt: 120 };
+  vi.mocked(call).mockImplementation(async command => {
+    if (command === 'snapshot') return {
+      servers: [server], incidents: [incident, resolved], sources: [], logStatus: {},
+      settings: { mode: 'manual', autoAgent: 'codex', pollSeconds: 180, paused: false },
+    };
+    if (command === 'incident_groups') return { groups: [], total: 0 };
+    return {};
+  });
+  const app = mount(App);
+  try {
+    await flushPromises();
+    await app.get('nav button[title="Incidents"]').trigger('click');
+    await flushPromises();
+    const search = app.get<HTMLInputElement>('input[aria-label="Search incidents"]');
+    await search.setValue('  INVENTORY.EXAMPLE.NET  192.0.2.10:2201   nginx:upstream   gateway CRITICAL  i-nginx ');
+    expect(app.get('.incident-row').text()).toContain('Upstream errors');
+    expect(app.find('.resolve-all').exists()).toBe(false);
+    await search.setValue('98% manually resolved');
+    await vi.advanceTimersByTimeAsync(200);
+    expect(app.text()).toContain('No matching incidents');
+    await app.get('.incident-actions input').setValue(true);
+    await flushPromises();
+    expect(app.get('.incident-row').text()).toContain('Disk full');
+    await search.trigger('keydown', { key: 'Escape' });
+    expect(search.element.value).toBe('');
+    expect(app.findAll('.incident-row')).toHaveLength(2);
+    expect(app.find('.resolve-all').exists()).toBe(true);
+  } finally {
+    app.unmount();
+    vi.useRealTimers();
+    vi.clearAllMocks();
+  }
+});
+
 it('removes manually resolved incidents from the active page and keeps them in resolved history',async()=>{
  apiState.preview=false;vi.stubGlobal('ResizeObserver',class{observe(){}unobserve(){}disconnect(){}});
  const server:Server={id:'s',name:'web',sourceId:'src',endpoint:{host:'host',user:'root',port:22,identityFile:null,jumpHost:null},observation:null,lastError:null,lastAttempt:null,nextCheck:0,failures:0};
