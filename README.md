@@ -29,6 +29,10 @@
 
 *Fleet overview with critical CVE counts highlighted in red. All screenshots use fictional demo data.*
 
+![Cyberbot demo showing two critical CVEs resolved through the server console and a one-time AI approval](docs/screenshots/vulnerability-remediation.gif)
+
+*This demo uses fictional data and simulates the console output and AI responses.*
+
 ## Why Cyberbot
 
 - **Nothing to run on your servers.** Cyberbot connects with the OpenSSH setup you already have and copies a Python collector into the remote account's cache. It needs no always-running daemon, no extra listening port, and no hosted backend.
