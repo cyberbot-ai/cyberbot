@@ -133,7 +133,7 @@ it('switches to the AI tab and hands over a question asked on the vulnerabilitie
  const w=mount(ServerDetail,{props:{server,now:100,interval:180,aiAgent:'codex'},global:{stubs:{VulnerabilityPanel:vuln,InvestigationPanel:ai}}});await flushPromises();
  await w.findAll('nav button').find(b=>b.text().startsWith('Vulnerabilities'))!.trigger('click');await flushPromises();
  await w.get('.ask').trigger('click');await flushPromises();
- expect(w.get('nav button.active').text()).toBe('Conversations');expect(w.get('.ai').text()).toBe('1:Whether CVE-2025-1 is dangerous?');w.unmount();
+ expect(w.get('nav button.active').text()).toBe('AI');expect(w.get('.ai').text()).toBe('1:Whether CVE-2025-1 is dangerous?');w.unmount();
 });
 
 it('scrolls the AI conversation to the end after loading and after returning to the tab', async () => {
@@ -157,7 +157,7 @@ it('scrolls the AI conversation to the end after loading and after returning to 
      await w.findAll('.detail-tabs button').find(button => button.text() === name)!.trigger('click');
      await flushPromises();
     };
-    await openTab('Conversations');
+    await openTab('AI');
     const messages = w.get('.messages');
     expect(messages.text()).toContain('AI response');
     expect(messages.element.scrollTop).toBe(1200);
@@ -165,7 +165,7 @@ it('scrolls the AI conversation to the end after loading and after returning to 
     messages.element.scrollTop = 100;
     await messages.trigger('scroll');
     await openTab('Overview');
-    await openTab('Conversations');
+    await openTab('AI');
     expect(w.get('.messages').element).toBe(messages.element);
     expect(messages.element.scrollTop).toBe(1200);
    } finally {

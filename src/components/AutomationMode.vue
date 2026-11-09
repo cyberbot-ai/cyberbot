@@ -28,7 +28,7 @@ async function select(mode: Settings['mode']) {
       <span v-if="compact && enabled && settings.paused" class="pause-indicator" role="status" aria-label="Automatic investigations paused" title="Monitoring on pause: automatic tasks do not start"><UiIcon name="pause" :size="14"/></span>
       <slot name="badge"/>
     </div>
-    <p v-if="!compact" class="mode-help">{{ enabled ? `AI is parsing new significant incidents within limits — ${settings.autoAgent === 'codex' ? 'Codex' : 'Claude Code'}.` : 'Automatic launches are off. Manual AI is available in “Conversations” and in the incident group card.' }}</p>
+    <p v-if="!compact" class="mode-help">{{ enabled ? `AI is parsing new significant incidents within limits — ${settings.autoAgent === 'codex' ? 'Codex' : 'Claude Code'}.` : 'Automatic launches are off. Start a manual investigation from a server’s AI tab or an incident group card.' }}</p>
     <p v-if="!compact && settings.paused" class="pause-notice" role="status"><UiIcon name="pause" :size="14"/>Monitoring is paused. Automatic tasks are not started.</p>
     <p v-if="error" class="error" role="alert">{{ error }}</p>
   </div>

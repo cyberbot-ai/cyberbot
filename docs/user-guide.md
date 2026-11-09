@@ -27,7 +27,7 @@ The monitoring library lists built-in checks, their sources and operations, and 
 
 1. Install and authenticate the Codex or Claude CLI with its own login flow.
 2. Under **AI → Settings**, select the provider, check CLI compatibility, and choose supported models for the low, medium, and high profiles.
-3. Open a server's **Conversations** or an incident and start a manual investigation. An AI run receives access to a fixed server scope and selected monitoring evidence. Provider requests may process information included in that evidence.
+3. Open a server's **AI** tab or an incident and start a manual investigation. An AI run receives access to a fixed server scope and selected monitoring evidence. Provider requests may process information included in that evidence.
 4. To run investigations automatically, set the run and token limits, then turn on the **AI** switch. Zero disables the corresponding limit. Limits count UTC days and apply to manual runs as well. The CLI reports token usage asynchronously, so the app's limits may differ from provider billing.
 
 In a manual conversation, the agent may propose a supported action. Review the target, exact effect, and evidence before approving. Approving until the end of the run keeps the same fixed server scope and each proposed script still goes through risk review. For supported Nginx configuration changes, the app shows the result and offers rollback while the recorded files still match. If the response is lost, verify the saved receipt before deciding what to do next.

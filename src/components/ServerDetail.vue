@@ -32,7 +32,7 @@ const section=ref<string>(initialTab()),service=ref(defaultService);
 const aiAsk=ref<{id:number;text:string}>();let askId=0;
 function askAi(text:string){aiAsk.value={id:++askId,text};section.value='investigation';}
 const ServerConsole=defineAsyncComponent(()=>import('./ServerConsole.vue'));
-const tabs=[{id:'overview',label:'Overview'},{id:'incidents',label:'Incidents'},{id:'services',label:'Services'},{id:'logs',label:'Logs'},{id:'security',label:'Vulnerabilities'},{id:'checks',label:'Checks'},{id:'investigation',label:'Conversations'},{id:'console',label:'Console'}];
+const tabs=[{id:'overview',label:'Overview'},{id:'incidents',label:'Incidents'},{id:'services',label:'Services'},{id:'logs',label:'Logs'},{id:'security',label:'Vulnerabilities'},{id:'checks',label:'Checks'},{id:'investigation',label:'AI'},{id:'console',label:'Console'}];
 const activePanel=computed(()=>({services:ServiceInstances,logs:LogPanel,security:VulnerabilityPanel,checks:CheckPanel,investigation:InvestigationPanel})[section.value as 'services'|'logs'|'security'|'checks'|'investigation']);
 const serviceOptions=computed(()=>Object.entries(serviceCatalog).flatMap(([kind,s])=>{
  const cards=props.server.services?.filter(c=>c.kind===kind)??[];

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.1
+
+- Rename the Conversations tab in server details to AI.
+
 ## 0.1.0
 
 - First public source release of Cyberbot for macOS.
