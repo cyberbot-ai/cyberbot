@@ -37,7 +37,10 @@
 
 ## Features
 
-### Fleet dashboard
+Expand a feature to see the details and screenshots.
+
+<details>
+<summary><strong>Fleet dashboard.</strong> Resources, services, and incident status for every server on one screen.</summary>
 
 ![Cyberbot server list filtered to eight servers that need attention, including critical, warning, failed, and stale ones](docs/screenshots/fleet-attention.jpg)
 
@@ -48,7 +51,10 @@
 - Add servers by address or import a [static Ansible inventory](docs/INVENTORY.md). When sorted by host, inventories are grouped by domain.
 - Pause and resume polling from the sidebar. Cyberbot keeps polling from the menu bar after you close the window and stops while your Mac is asleep.
 
-### Server details and SSH console
+</details>
+
+<details>
+<summary><strong>Server details and SSH console.</strong> One panel per server, with an interactive SSH session.</summary>
 
 Open a server to see its overview, incidents, services, logs, vulnerabilities, checks, AI conversations, and console in one panel.
 
@@ -56,7 +62,10 @@ Open a server to see its overview, incidents, services, logs, vulnerabilities, c
 - The **Console** tab opens an interactive SSH session and keeps it open while you switch tabs.
 - Polling, file sync, and the console share pooled OpenSSH connections. Host aliases, keys, and jump hosts from your SSH configuration keep working.
 
-### Service connectors
+</details>
+
+<details>
+<summary><strong>Service connectors.</strong> 18 built-in connectors for databases, proxies, containers, and more.</summary>
 
 Cyberbot detects application services and monitors each one separately from the host, with its own schedule, history, and incidents. Several connectors support multiple instances on one server, such as two PostgreSQL clusters on different ports.
 
@@ -70,7 +79,10 @@ Cyberbot detects application services and monitors each one separately from the 
 
 Diagnostics use local endpoints and credentials that already exist on the server. See [connectors](docs/CONNECTORS.md) for the requirements of each service.
 
-### Incidents and correlation
+</details>
+
+<details>
+<summary><strong>Incidents and correlation.</strong> Incidents that keep their evidence and are grouped across related servers.</summary>
 
 - Deterministic rules turn metrics, logs, service results, and package advisories into incidents. Every incident keeps its own evidence and history.
 - Related incidents on different servers are grouped using the dependencies you declare, a shared jump host, or the same failing check. See [incident groups](docs/INCIDENT_GROUPS.md).
@@ -78,7 +90,10 @@ Diagnostics use local endpoints and credentials that already exist on the server
 - Automatic recovery has to be confirmed by observations. Missing coverage cannot confirm it.
 - Optional macOS notifications announce new incidents, including while the window is hidden.
 
-### Vulnerabilities and logs
+</details>
+
+<details>
+<summary><strong>Vulnerabilities and logs.</strong> Critical package advisories for Debian and Ubuntu, and log summaries.</summary>
 
 ![Cyberbot OS vulnerability panel listing three sample CVEs for s1.app.example.com](docs/screenshots/fleet-vulnerabilities.jpg)
 
@@ -88,11 +103,17 @@ Diagnostics use local endpoints and credentials that already exist on the server
 - Each finding shows the installed and required versions, whether an update is available, and the command that installs it. Hide a package you have accepted until its installed version changes.
 - System and SSH logs are summarized on the server. Cyberbot reads them incrementally and receives a summary with redacted examples.
 
-### Fleet console
+</details>
+
+<details>
+<summary><strong>Fleet console.</strong> One command on selected servers or the whole fleet.</summary>
 
 Run one command on a selection of servers, or on the whole fleet, and read the output for each server in one place. The same page has an AI chat scoped to the selected servers.
 
-### AI investigations with approvals
+</details>
+
+<details>
+<summary><strong>AI investigations with approvals.</strong> An optional agent with a fixed server scope that asks before it changes anything.</summary>
 
 <p align="center">
   <img src="docs/screenshots/ai-action-approval.jpg" width="620" alt="Cyberbot approval window for a proposed Nginx worker_processes change, with a diff, a risk review result, and Decline and Allow once buttons">
@@ -107,13 +128,19 @@ Run one command on a selection of servers, or on the whole fleet, and read the o
 - The managed Nginx change backs up and validates the configuration, records a receipt, and offers rollback.
 - Automatic investigations are off by default. When you turn them on, they run from a queue with the daily token and run limits you set, one run per incident, and cooldowns. Choose a model for each of the low, medium, and high profiles.
 
-### Custom checks and the monitoring library
+</details>
+
+<details>
+<summary><strong>Custom checks and the monitoring library.</strong> Your own declarative checks next to the built-in ones.</summary>
 
 - The **Library** lists every built-in check with its source, operations, and settings. Settings inherit from the factory defaults through the fleet, the server, and the service instance, and you can override them at each level.
 - Write your own checks as declarative rules over metrics that Cyberbot has already collected. Test a draft with fixtures, preview it on a real server, and enable the version you reviewed. You can roll back to an earlier version.
 - An agent can draft a check for you. Enabled checks run on a schedule in an isolated runner without a model.
 
-### Everyday details
+</details>
+
+<details>
+<summary><strong>Everyday details.</strong> Themes, the activity log, connectivity checks, and storage limits.</summary>
 
 ![Cyberbot server list in the light theme](docs/screenshots/fleet-light.jpg)
 
@@ -123,6 +150,8 @@ Run one command on a selection of servers, or on the whole fleet, and read the o
 - The **Activity log** records operations with their timing and results.
 - Cyberbot checks its own internet connection, so a network outage on your side is not recorded as a failure of every server.
 - Storage settings show how much space the database, advisory cache, and activity log use. Old records are pruned automatically.
+
+</details>
 
 ## How it works
 
@@ -172,17 +201,21 @@ Resource metrics work on any distribution that meets the server requirement. See
 
 ## Get started
 
-1. Download a source archive from [GitHub Releases](https://github.com/cyberbot-ai/cyberbot/releases/latest), or clone the repository.
+1. **Get the source and build the app.** Clone the repository, or download a source archive from [GitHub Releases](https://github.com/cyberbot-ai/cyberbot/releases/latest), and run `make install` in the source directory.
 
    ```sh
    git clone https://github.com/cyberbot-ai/cyberbot.git
    cd cyberbot
+   make install
    ```
 
-2. Run `make install` in the source directory. The installer builds and copies the app to `/Applications/Cyberbot.app`. Open Cyberbot from Applications or Spotlight.
-3. Verify that `ssh user@host` works and that you have verified the host key. In Cyberbot, choose **Add server** and enter a host or import a [static Ansible inventory](docs/INVENTORY.md). The first poll starts automatically.
+2. **Open Cyberbot.** The installer builds the app and copies it to `/Applications/Cyberbot.app`. Open it from Applications or Spotlight.
 
-Releases contain source archives. Local builds use ad-hoc macOS signing. To update, quit Cyberbot from its menu, open the new source version, and run `make install` again. The installer preserves the app's data.
+   There is no prebuilt app to download, and this is deliberate. Cyberbot gets SSH access to your servers, so you should not have to trust a binary you cannot inspect. With the source on your Mac, you can read the code or ask a coding agent to audit it, and then know that the app you run was built from exactly that code. To audit first, run `make install` after your review.
+
+3. **Add your servers.** Verify that `ssh user@host` works and that you have verified the host key. In Cyberbot, choose **Add server** and enter a host or import a [static Ansible inventory](docs/INVENTORY.md). The first poll starts automatically.
+
+Local builds use ad-hoc macOS signing. To update, quit Cyberbot from its menu, open the new source version, and run `make install` again. The installer preserves the app's data.
 
 ### Try the demo
 
