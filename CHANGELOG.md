@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.2
+
+- Give the server sorting controls a compact text style with an arrow on the active column.
+
 ## 0.3.1
 
 - Restore the main window's size and position on macOS, including when it fills the available work area.

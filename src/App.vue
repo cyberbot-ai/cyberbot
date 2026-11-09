@@ -392,8 +392,24 @@ dialog{color:var(--text);background:var(--canvas);border:0;padding:0;box-sizing:
 .fleet-controls{display:flex;align-items:center;flex-wrap:wrap;gap:8px 12px;margin-bottom:8px}.fleet-controls .fleet-filters{flex:1 1 340px;padding:0}.fleet-controls .fleet-toolbar{padding:0;margin-left:auto}
 .fleet-sort{display:flex;align-items:center;flex-wrap:wrap;flex-shrink:0;gap:4px;margin-bottom:8px}
 .sort-label{padding-inline:4px;font-size:12px;color:var(--muted)}
-.fleet-sort button{min-height:28px;padding:3px 8px;gap:4px;font-size:12px;color:var(--muted)}
-.fleet-sort button[aria-pressed=true]{background:var(--accent-bg);border-color:var(--accent);color:var(--accent)}
+.fleet-sort button {
+  min-height: 28px;
+  padding: 3px 6px;
+  gap: 4px;
+  border: 0;
+  background: none;
+  font-size: 12px;
+  color: var(--muted);
+}
+.fleet-sort button:hover {
+  color: var(--text);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.fleet-sort button[aria-pressed=true] {
+  color: var(--text);
+  font-weight: 600;
+}
 .monitor-control{display:flex;align-items:center;justify-content:space-between;gap:4px;padding:0 8px;min-width:0}.monitor-caption{font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}.monitor-short{display:none}.monitor-toggle{flex-shrink:0;width:28px;min-height:28px;padding:0;border:0;background:none;color:var(--muted);border-radius:5px}.monitor-control.paused .monitor-caption{color:var(--warning)}.monitor-control.paused .monitor-toggle{color:var(--accent)}
 .title-search{display:flex;align-items:center;gap:6px;min-width:0}.search-toggle{width:28px;min-height:28px;padding:0;border:0;background:none;color:var(--muted);border-radius:5px}.search-toggle:hover,.search-toggle[aria-expanded=true]{background:var(--hover);color:var(--text)}.title-search input{width:180px;height:28px;min-height:28px;padding:4px 8px;font-size:12px}
 @media(max-width:1100px){.main.fleet-page .page-head.searching{height:96px;padding-bottom:36px;box-sizing:border-box}.title-search input{position:absolute;top:calc(100% + 8px);left:0;width:min(220px,calc(100vw - 112px));z-index:2;box-shadow:var(--shadow)}}
