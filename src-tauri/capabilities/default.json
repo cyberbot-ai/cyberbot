@@ -1,0 +1,1 @@
+{ "$schema": "../gen/schemas/desktop-schema.json", "identifier": "main", "description": "Only Cyberbot windows; no shell or general filesystem access", "windows": ["main", "server-*", "approval-*"], "permissions": ["core:default"] }

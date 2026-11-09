@@ -1,0 +1,51 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Cyberbot",
+  "version": "0.1.0",
+  "identifier": "dev.cyberbot.desktop",
+  "build": {
+    "beforeDevCommand": "bash scripts/build-check-runner.sh && npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "bash scripts/build-check-runner.sh && npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "create": false,
+        "title": "Cyberbot",
+        "width": 1280,
+        "height": 840,
+        "minWidth": 900,
+        "minHeight": 640
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-src 'none'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "app"
+    ],
+    "category": "DeveloperTool",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": ["../THIRD_PARTY_NOTICES.md"],
+    "shortDescription": "Infrastructure observability",
+    "macOS": {
+      "signingIdentity": "-",
+      "minimumSystemVersion": "12.0"
+    },
+    "externalBin": [
+      "binaries/cyberbot-check-runner"
+    ]
+  }
+}

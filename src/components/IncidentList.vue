@@ -1,0 +1,13 @@
+<script setup lang="ts">
+import ServerLink from './ServerLink.vue';
+import type {Incident} from '../types';
+import UiIcon from './UiIcon.vue';
+import RelativeDate from './RelativeDate.vue';
+import ResolveIncidentButton from './ResolveIncidentButton.vue';
+withDefaults(defineProps<{incidents:Incident[];showServer?:boolean;openable?:boolean;compact?:boolean}>(),{openable:true});
+const emit=defineEmits<{open:[incident:Incident];updated:[];error:[message:string]}>();
+</script>
+<template><div class="incidents" :class="{compact}" role="list" aria-label="Incidents"><article v-for="i in incidents" :key="i.id" class="incident-row" role="listitem"><component :is="openable?'button':'div'" :type="openable?'button':undefined" class="incident-main" @click="openable&&emit('open',i)"><UiIcon :name="i.status==='open'?'incident':'check'" :class="i.status==='open'?i.severity:'closed'"/><span class="body"><strong>{{i.title}}</strong><span>{{i.evidence}}</span></span><span class="state">{{i.status==='open'?'Open':i.resolvedByUserAt?'Manually resolved':'Restored'}}</span><small><RelativeDate :at="i.status==='resolved'&&i.resolvedByUserAt?i.resolvedByUserAt:i.updatedAt"/></small></component><ServerLink v-if="showServer" class="incident-server" :id="i.serverId" section="incidents"/><ResolveIncidentButton :incident="i" @resolved="emit('updated')" @error="emit('error',$event)"/></article></div></template>
+<style scoped>
+.incident-row{display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--line);min-width:0}.incident-main{display:flex;align-items:center;gap:14px;text-align:left;min-width:0;flex:1;border:0;border-radius:6px;background:transparent;color:var(--text);font:inherit;padding:18px 8px}.incident-server{max-width:35%;font-size:12px}.incident-main:is(button){cursor:pointer}.incident-main:is(button):hover{background:var(--hover)}.incident-main:is(button):focus-visible{outline:2px solid var(--accent);outline-offset:2px}.body{display:grid;gap:5px;min-width:0;flex:1}.body strong{font-size:14px;font-weight:550;overflow-wrap:anywhere}.body>span{font-size:12px;color:var(--muted);overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}.critical{color:var(--danger)}.warning{color:var(--warning)}.closed{color:var(--muted)}.state,small{font-size:12px;color:var(--muted);white-space:nowrap}.compact .incident-main{padding:10px 0;gap:10px}.compact .body strong{font-size:13px}.compact .state{display:none}.compact small{font-size:11px}@media(max-width:900px){small{display:none}}@media(max-width:560px){.state{display:none}.incident-main{gap:10px}}
+</style>

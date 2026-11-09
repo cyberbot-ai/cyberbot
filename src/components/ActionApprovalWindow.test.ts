@@ -1,0 +1,57 @@
+// @vitest-environment happy-dom
+import {mount,flushPromises} from '@vue/test-utils';
+import {afterEach,beforeEach,expect,it,vi} from 'vitest';
+import ActionApprovalWindow from './ActionApprovalWindow.vue';
+import {actionFixture} from '../test/actionFixture';
+import type {ActionRequest} from '../types';
+const mock=vi.hoisted(()=>({call:vi.fn(),off:vi.fn(),close:vi.fn()}));
+vi.mock('../api',()=>({preview:false,call:mock.call}));
+vi.mock('@tauri-apps/api/event',()=>({listen:vi.fn(async()=>mock.off)}));
+vi.mock('@tauri-apps/api/window',()=>({getCurrentWindow:()=>({close:mock.close})}));
+let request:ActionRequest;
+beforeEach(()=>{vi.useFakeTimers();mock.call.mockReset();mock.close.mockReset();request=actionFixture();mock.call.mockImplementation(async(command,args)=>{if(command==='action_request')return structuredClone(request);if(command==='decide_action'){request.state=args.decision==='deny'?'denied':'approved';return structuredClone(request);}});});
+afterEach(()=>{vi.useRealTimers();document.body.innerHTML='';});
+it('shows only consent, keeps details collapsed and decisions outside the scrolling body',async()=>{const w=mount(ActionApprovalWindow,{props:{requestId:request.id},attachTo:document.body});await flushPromises();expect(w.get('h1').text()).toBe('Allow action?');expect(w.get('.server').text()).toBe('node');expect(w.text()).not.toContain('Automatic launches');expect(w.find('script').exists()).toBe(false);expect(w.get('pre').text()).toContain('<script>');expect(w.get('details').attributes('open')).toBeUndefined();expect(w.get('.content').element.contains(w.get('footer').element)).toBe(false);expect(document.activeElement?.textContent).toBe('Decline');expect(mock.call.mock.calls.map(c=>c[0])).toEqual(['action_request']);w.unmount();});
+it('binds one-time approval to exact ID/hash and prevents a double click',async()=>{const w=mount(ActionApprovalWindow,{props:{requestId:request.id}});await flushPromises();let done!:(value:ActionRequest)=>void;mock.call.mockImplementationOnce(()=>new Promise(resolve=>{done=resolve;}));const button=w.get('button.primary');await button.trigger('click');await button.trigger('click');expect(mock.call.mock.calls.filter(c=>c[0]==='decide_action')).toEqual([['decide_action',{id:request.id,artifactHash:request.artifactHash,decision:'once'}]]);done({...request,state:'approved'});await flushPromises();expect(w.get('h1').text()).toBe('Permission sent');expect(w.find('button.primary').exists()).toBe(false);w.unmount();});
+it('requires an explicit choice for session approval',async()=>{const w=mount(ActionApprovalWindow,{props:{requestId:request.id}});await flushPromises();expect((w.get('input').element as HTMLInputElement).checked).toBe(false);await w.get('input').setValue(true);expect(w.get('button.primary').text()).toBe('Allow for this run');await w.get('button.primary').trigger('click');await flushPromises();expect(mock.call).toHaveBeenCalledWith('decide_action',{id:request.id,artifactHash:request.artifactHash,decision:'session'});w.unmount();});
+it('denies without granting or invoking a model',async()=>{const w=mount(ActionApprovalWindow,{props:{requestId:request.id}});await flushPromises();await w.findAll('button').find(b=>b.text()==='Decline')!.trigger('click');await flushPromises();expect(mock.call).toHaveBeenCalledWith('decide_action',{id:request.id,artifactHash:request.artifactHash,decision:'deny'});expect(mock.call.mock.calls.some(c=>String(c[0]).includes('investigation'))).toBe(false);w.unmount();});
+it('keeps an IPC refusal visible without retrying or silently closing',async()=>{const w=mount(ActionApprovalWindow,{props:{requestId:request.id}});await flushPromises();mock.call.mockRejectedValueOnce(new Error('Connection has changed'));await w.get('button.primary').trigger('click');await flushPromises();expect(w.get('[role=alert]').text()).toContain('Connection has changed');expect(mock.call.mock.calls.filter(c=>c[0]==='decide_action')).toHaveLength(1);expect(mock.close).not.toHaveBeenCalled();w.unmount();});
+it('does not offer consent for an expired request',async()=>{request.expiresAt=1;const w=mount(ActionApprovalWindow,{props:{requestId:request.id}});await flushPromises();expect(w.text()).toContain('The waiting time has expired');expect(w.find('button.primary').exists()).toBe(false);await w.get('footer button').trigger('click');expect(mock.close).toHaveBeenCalledOnce();expect(mock.call.mock.calls.some(c=>c[0]==='decide_action')).toBe(false);w.unmount();});
+it('shows precise Nginx effect and connection-loss risk before technical detail',async()=>{request.artifact.spec.action={kind:'nginx_workers',workerProcesses:'2',activation:'restart'};request.artifact.prepared={before:'worker_processes 1;',after:'worker_processes 2;'};const w=mount(ActionApprovalWindow,{props:{requestId:request.id}});await flushPromises();expect(w.get('.effect').text()).toContain('worker_processes → 2');expect(w.get('.effect').text()).toContain('restart nginx.service');expect(w.get('.risk').text()).toContain('Connections may drop');expect(w.get('.diff').text()).toContain('worker_processes 1;');w.unmount();});
+it('does not poll when hidden and releases listeners on close',async()=>{const w=mount(ActionApprovalWindow,{props:{requestId:request.id}});await flushPromises();mock.call.mockClear();Object.defineProperty(document,'hidden',{value:true,configurable:true});await vi.advanceTimersByTimeAsync(60000);expect(mock.call).not.toHaveBeenCalled();delete (document as unknown as Record<string,unknown>).hidden;w.unmount();expect(mock.off).toHaveBeenCalled();});
+it('shows the exact shell script, account and low verdict before consent',async()=>{
+  request.artifact.spec.action={kind:'shell'};
+  request.artifact.spec.code="printf '%s\\n' marker";
+  request.artifact.prepared={user:'root',uid:0};
+  request.artifact.isolation={wallSeconds:15};
+  const w=mount(ActionApprovalWindow,{props:{requestId:request.id}});await flushPromises();
+  expect(w.get('.effect').text()).toContain('Shell on behalf of root');
+  expect(w.get('pre[aria-label="Exact script"]').text()).toBe(request.artifact.spec.code);
+  expect(w.get('.content').text()).toContain(request.review!.verdict.explanation);
+  expect(w.get('label.session').text()).toContain('shell scripts');
+  expect(w.get('button.primary').text()).toBe('Allow once');
+  w.unmount();
+});
+it('offers only one-time approval for a package upgrade with operational risk',async()=>{
+  request.artifact.spec.action={kind:'shell'};
+  request.artifact.spec.code='apt-get install --only-upgrade --no-remove python3.11';
+  request.review!.verdict={decision:'confirm',explanation:'Update may restart services.',effects:['Python packages will change']};
+  const w=mount(ActionApprovalWindow,{props:{requestId:request.id}});await flushPromises();
+  expect(w.get('.content').text()).toContain('Update may restart services.');
+  expect(w.find('input[type=checkbox]').exists()).toBe(false);
+  await w.get('button.primary').trigger('click');
+  expect(mock.call).toHaveBeenCalledWith('decide_action',{id:request.id,artifactHash:request.artifactHash,decision:'once'});
+  w.unmount();
+});
+it('closes after approval and reports a native close failure',async()=>{
+  const w=mount(ActionApprovalWindow,{props:{requestId:request.id}});await flushPromises();
+  await w.get('button.primary').trigger('click');await flushPromises();
+  mock.close.mockRejectedValueOnce(new Error('window.close denied'));
+  await w.get('footer button').trigger('click');await flushPromises();
+  expect(w.get('[role=alert]').text()).toContain('Failed to close the window');
+  expect(w.get('footer button').attributes('disabled')).toBeUndefined();
+  await w.get('footer button').trigger('click');await flushPromises();
+  expect(mock.close).toHaveBeenCalledTimes(2);
+  expect(mock.call.mock.calls.filter(c=>c[0]==='decide_action')).toHaveLength(1);
+  w.unmount();
+});

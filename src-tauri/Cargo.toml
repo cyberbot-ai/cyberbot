@@ -1,0 +1,57 @@
+[package]
+name = "cyberbot"
+version = "0.1.0"
+edition = "2021"
+description = "Infrastructure observability desktop"
+license = "GPL-3.0-only"
+
+[lib]
+name = "cyberbot_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+serde_json = "1"
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tokio = { version = "1", features = ["rt-multi-thread", "process", "io-util", "time", "sync", "macros", "net"] }
+axum = "0.8"
+tokio-util = { version = "0.7", features = ["rt"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+yaml-rust2 = { version = "0.13", default-features = false }
+rusqlite = { version = "0.32", features = ["bundled"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+sha2 = "0.10"
+socket2 = "0.6"
+libc = "0.2"
+zeroize = "1"
+
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+quick-xml = "0.38"
+bzip2 = "0.6"
+flate2 = "1"
+regex = "1"
+html5ever = "0.39"
+tauri-plugin-dialog = "2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSString", "NSDictionary", "NSArray", "NSError", "NSObject", "NSNotification", "NSOperation", "block2"] }
+objc2-user-notifications = { version = "0.3", features = ["block2"] }
+objc2-app-kit = { version = "0.3", features = ["NSResponder", "NSScreen", "NSWindow", "NSWorkspace"] }
+block2 = "0.6"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.dev]
+debug = "line-tables-only"
+incremental = false
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

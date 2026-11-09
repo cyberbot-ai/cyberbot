@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "approval-window",
+  "description": "Consent windows can close themselves after a decision",
+  "windows": ["approval-*"],
+  "permissions": ["core:window:allow-close"]
+}

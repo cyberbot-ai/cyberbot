@@ -1,0 +1,39 @@
+{
+  "name": "cyberbot",
+  "version": "0.1.0",
+  "private": true,
+  "license": "GPL-3.0-only",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vue-tsc --noEmit && vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "tauri": "tauri",
+    "icons": "node scripts/generate-icons.mjs",
+    "desktop": "bash scripts/desktop.sh dev",
+    "desktop:build": "bash scripts/desktop.sh build --bundles app",
+    "test": "vitest run",
+    "test:collector": "python3 -m unittest discover -s tests -p 'test_*.py'",
+    "test:rust": "bash scripts/build-check-runner.sh && bash scripts/cargo.sh test --manifest-path src-tauri/Cargo.toml",
+    "check": "npm run build && npm test && npm run test:collector && npm run test:rust"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.0.0",
+    "@xterm/addon-fit": "0.11.0",
+    "@xterm/xterm": "6.0.0",
+    "highlight.js": "^11.12.0",
+    "lowlight": "^3.3.0",
+    "markdown-it": "^15.0.3",
+    "vue": "^3.5.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0",
+    "@vitejs/plugin-vue": "^5.2.0",
+    "@vue/test-utils": "^2.4.6",
+    "happy-dom": "^15.11.7",
+    "typescript": "~5.7.3",
+    "vite": "^6.0.0",
+    "vitest": "^3.0.0",
+    "vue-tsc": "^2.2.0"
+  }
+}

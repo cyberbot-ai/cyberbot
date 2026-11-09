@@ -1,0 +1,1243 @@
+{
+  "mysql": {
+    "name": "MySQL / MariaDB",
+    "endpoint": "/run/mysqld/mysqld.sock",
+    "endpoints": [
+      "/run/mysqld/mysqld.sock",
+      "/var/run/mysqld/mysqld.sock",
+      "/tmp/mysql.sock",
+      "127.0.0.1",
+      "::1"
+    ],
+    "port": 3306,
+    "credentials": "my.cnf",
+    "rights": "PROCESS for general activity and InnoDB; REPLICATION CLIENT (MySQL) or REPLICA MONITOR (MariaDB) for replication, the settings don’t change.",
+    "metrics": [
+      {
+        "key": "connections",
+        "label": "Connections",
+        "unit": "count"
+      },
+      {
+        "key": "connectionUsage",
+        "label": "Employment of compounds",
+        "unit": "percent",
+        "rule": {
+          "threshold": 90,
+          "critical": 97,
+          "mode": "value"
+        }
+      },
+      {
+        "key": "active",
+        "label": "Active requests",
+        "unit": "count"
+      },
+      {
+        "key": "longQueries",
+        "label": "Requests longer than 60s",
+        "unit": "count",
+        "rule": {
+          "threshold": 1,
+          "critical": null,
+          "mode": "value"
+        }
+      },
+      {
+        "key": "longestQuery",
+        "label": "Longest request",
+        "unit": "seconds"
+      },
+      {
+        "key": "blocked",
+        "label": "Expecting InnoDB Transactions",
+        "unit": "count"
+      },
+      {
+        "key": "lockWait",
+        "label": "Waiting for lockdown",
+        "unit": "seconds",
+        "rule": {
+          "threshold": 30,
+          "critical": null,
+          "mode": "value"
+        }
+      },
+      {
+        "key": "longTransactions",
+        "label": "Transactions longer than 5 minutes",
+        "unit": "count",
+        "rule": {
+          "threshold": 1,
+          "critical": null,
+          "mode": "value"
+        }
+      },
+      {
+        "key": "slowQueries",
+        "label": "Slow requests",
+        "unit": "counter",
+        "rule": {
+          "threshold": 20,
+          "critical": null,
+          "mode": "delta_per_10m"
+        }
+      },
+      {
+        "key": "slowThreshold",
+        "label": "The slow query threshold",
+        "unit": "seconds"
+      },
+      {
+        "key": "slowLog",
+        "label": "Slow log enabled",
+        "unit": "boolean"
+      },
+      {
+        "key": "replicaSenders",
+        "label": "Connected replicas",
+        "unit": "count"
+      },
+      {
+        "key": "missingPeers",
+        "label": "Missing expected replicas",
+        "unit": "count",
+        "rule": {
+          "threshold": 1,
+          "critical": 1,
+          "mode": "value"
+        }
+      },
+      {
+        "key": "channels",
+        "label": "Replication channels",
+        "unit": "count"
+      },
+      {
+        "key": "replicationStopped",
+        "label": "Shut down channels",
+        "unit": "count",
+        "rule": {
+          "threshold": 1,
+          "critical": 1,
+          "mode": "value"
+        }
+      },
+      {
+        "key": "replicationErrors",
+        "label": "Error channels",
+        "unit": "count",
+        "rule": {
+          "threshold": 1,
+          "critical": 1,
+          "mode": "value"
+        }
+      },
+      {
+        "key": "replicationLag",
+        "label": "Delayed replication",
+        "unit": "seconds",
+        "rule": {
+          "threshold": 60,
+          "critical": 300,
+          "mode": "value"
+        }
+      },
+      {
+        "key": "replicationUnknown",
+        "label": "Channels with unknown/determined delay",
+        "unit": "count"
+      },
+      {
+        "key": "bufferPoolUsed",
+        "label": "Employment of buffer pool",
+        "unit": "percent"
+      },
+      {
+        "key": "bufferPoolDirty",
+        "label": "Dirty pages of buffer pool",
+        "unit": "percent"
+      },
+      {
+        "key": "bufferPoolWaits",
+        "label": "Expectations of a free page",
+        "unit": "counter",
+        "rule": {
+          "threshold": 1,
+          "critical": null,
+          "mode": "delta_per_10m"
+        }
+      },
+      {
+        "key": "deadlocks",
+        "label": "Deadlocks",
+        "unit": "counter",
+        "rule": {
+          "threshold": 5,
+          "critical": null,
+          "mode": "delta_per_10m"
+        }
+      },
+      {
+        "key": "uptimeFlush",
+        "label": "Seconds since the counters were reset",
+        "unit": "seconds"
+      }
+    ],
+    "actions": [
+      "discover",
+      "configure",
+      "collect",
+      "snapshot",
+      "evaluate"
+    ],
+    "python": "mysql",
+    "multiple": true,
+    "replication": true,
+    "units": [
+      "mysql",
+      "mariadb",
+      "mysqld"
+    ],
+    "instanceCredentials": "cnf"
+  },
+  "redis": {
+    "name": "Redis",
+    "endpoint": "127.0.0.1",
+    "endpoints": [
+      "127.0.0.1",
+      "::1",
+      "/run/redis/redis-server.sock"
+    ],
+    "port": 6379,
+    "credentials": "json",
+    "rights": "ACL: INFO and, if necessary, AUTH. Local Redis only ~/.cache/cyberbot/credentials/redis.json (0600).",
+    "metrics": [
+      {
+        "key": "connections",
+        "label": "Connections",
+        "unit": "count"
+      },
+      {
+        "key": "blocked",
+        "label": "Blocked customers",
+        "unit": "count",
+        "rule": {
+          "threshold": 1,
+          "critical": null,
+          "mode": "value"
+        }
+      },
+      {
+        "key": "memory",
+        "label": "Memory",
+        "unit": "bytes"
+      },
+      {
+        "key": "maxMemory",
+        "label": "Memory limit",
+        "unit": "bytes"
+      },
+      {
+        "key": "memoryUsage",
+        "label": "Use of the limit",
+        "unit": "%",
+        "rule": {
+          "threshold": 90,
+          "critical": 98,
+          "mode": "value"
+        }
+      },
+      {
+        "key": "evictions",
+        "label": "Repression",
+        "unit": "counter",
+        "rule": {
+          "threshold": 20,
+          "critical": null,
+          "mode": "delta_per_10m"
+        }
+      },
+      {
+        "key": "rejected",
+        "label": "Rejected connections",
+        "unit": "counter",
+        "rule": {
+          "threshold": 1,
+          "critical": null,
+          "mode": "delta_per_10m"
+        }
+      },
+      {
+        "key": "commands",
+        "label": "Teams",
+        "unit": "counter"
+      },
+      {
+        "key": "replicas",
+        "label": "Remarks",
+        "unit": "count"
+      },
+      {
+        "key": "persistenceErrors",
+        "label": "Conservation errors",
+        "unit": "count",
+        "rule": {
+          "threshold": 1,
+          "critical": 1,
+          "mode": "value"
+        }
+      },
+      {
+        "key": "replicationStopped",
+        "label": "Replication stopped",
+        "unit": "count",
+        "rule": {
+          "threshold": 1,
+          "critical": 1,
+          "mode": "value"
+        }
+      },
+      {
+        "key": "missingPeers",
+        "label": "Missing lines",
+        "unit": "count",
+        "rule": {
+          "threshold": 1,
+          "critical": 1,
+          "mode": "value"
+        }
+      }
+    ],
+    "actions": [
+      "discover",
+      "configure",
+      "collect",
+      "snapshot",
+      "evaluate"
+    ],
+    "python": "redis",
+    "multiple": true,
+    "replication": true,
+    "units": [
+      "redis",
+      "redis-server"
+    ],
+    "instanceCredentials": "json"
+  },
+  "mongodb": {
+    "name": "MongoDB",
+    "endpoint": "127.0.0.1",
+    "endpoints": [
+      "127.0.0.1",
+      "::1"
+    ],
+    "port": 27017,
+    "credentials": "json",
+    "rights": "The role of clusterMonitor in admin, SCRAM-SHA-256 ~/.cache/cyberbot/credentials/mongodb.json (0600). The collections are not read.",
+    "metrics": [
+      {
+        "key": "connections",
+        "label": "Connections",
+        "unit": "count"
+      },
+      {
+        "key": "available",
+        "label": "Free connections",
+        "unit": "count"
+      },
+      {
+        "key": "active",
+        "label": "Active clients",
+        "unit": "count"
+      },
+      {
+        "key": "rejected",
+        "label": "Rejected connections",
+        "unit": "counter",
+        "rule": {
+          "threshold": 1,
+          "critical": null,
+          "mode": "delta_per_10m"
+        }
+      },
+      {
+        "key": "connectionUsage",
+        "label": "Use of connections",
+        "unit": "%",
+        "rule": {
+          "threshold": 90,
+          "critical": 97,
+          "mode": "value"
+        }
+      },
+      {
+        "key": "residentMemory",
+        "label": "Resident memory",
+        "unit": "MiB"
+      },
+      {
+        "key": "queued",
+        "label": "Waiting for lockdowns",
+        "unit": "count",
+        "rule": {
+          "threshold": 5,
+          "critical": null,
+          "mode": "value"
+        }
+      },
+      {
+        "key": "replicationErrors",
+        "label": "Replica set errors",
+        "unit": "count",
+        "rule": {
+          "threshold": 1,
+          "critical": 1,
+          "mode": "value"
+        }
+      },
+      {
+        "key": "replicationLag",
+        "label": "Optime backlog",
+        "unit": "s",
+        "rule": {
+          "threshold": 60,
+          "critical": 300,
+          "mode": "value"
+        }
+      },
+      {
+        "key": "missingPeers",
+        "label": "Missing participants",
+        "unit": "count",
+        "rule": {
+          "threshold": 1,
+          "critical": 1,
+          "mode": "value"
+        }
+      }
+    ],
+    "actions": [
+      "discover",
+      "configure",
+      "collect",
+      "snapshot",
+      "evaluate"
+    ],
+    "python": "mongodb",
+    "multiple": true,
+    "replication": true,
+    "instanceCredentials": "json"
+  },
+  "docker": {
+    "name": "Docker",
+    "endpoint": "/var/run/docker.sock",
+    "endpoints": [
+      "/var/run/docker.sock",
+      "/run/docker.sock"
+    ],
+    "port": 1,
+    "credentials": "none",
+    "rights": "An SSH user accesses an existing Docker socket. The intermediary only makes GET/info and /containers/json.",
+    "metrics": [
+      {
+        "key": "running",
+        "label": "Working",
+        "unit": "count"
+      },
+      {
+        "key": "stopped",
+        "label": "Stopped",
+        "unit": "count"
+      },
+      {
+        "key": "paused",
+        "label": "Suspended",
+        "unit": "count"
+      },
+      {
+        "key": "containers",
+        "label": "Total containers",
+        "unit": "count"
+      },
+      {
+        "key": "unhealthy",
+        "label": "Not pass healthcheck",
+        "unit": "count",
+        "rule": {
+          "threshold": 1,
+          "critical": null,
+          "mode": "value"
+        }
+      },
+      {
+        "key": "restarting",
+        "label": "Relaunch",
+        "unit": "count",
+        "rule": {
+          "threshold": 1,
+          "critical": null,
+          "mode": "value"
+        }
+      },
+      {
+        "key": "dead",
+        "label": "Emergency containers",
+        "unit": "count",
+        "rule": {
+          "threshold": 1,
+          "critical": 1,
+          "mode": "value"
+        }
+      }
+    ],
+    "actions": [
+      "discover",
+      "configure",
+      "collect",
+      "snapshot",
+      "evaluate"
+    ],
+    "ignoredMountPrefixes": [
+      "/var/lib/docker/",
+      "/var/lib/containerd/"
+    ],
+    "python": "docker",
+    "multiple": false,
+    "replication": false,
+    "units": [
+      "docker"
+    ]
+  },
+  "php-fpm": {
+    "name": "PHP-FPM",
+    "endpoint": "127.0.0.1",
+    "endpoints": [
+      "127.0.0.1",
+      "::1"
+    ],
+    "port": 80,
+    "credentials": "none",
+    "rights": "The local FastCGI listener and the pm.status_path working pool are automatically used. If the status page is not available, only process and listener metrics are available. The manual profile uses local HTTP.",
+    "metrics": [
+      {
+        "key": "queue",
+        "label": "Queueue of requests",
+        "unit": "count",
+        "rule": {
+          "threshold": 5,
+          "critical": null,
+          "mode": "value"
+        }
+      },
+      {
+        "key": "active",
+        "label": "Occupied processes",
+        "unit": "count"
+      },
+      {
+        "key": "idle",
+        "label": "Free processes",
+        "unit": "count"
+      },
+      {
+        "key": "total",
+        "label": "Processes",
+        "unit": "count"
+      },
+      {
+        "key": "requests",
+        "label": "Requests processed",
+        "unit": "counter"
+      },
+      {
+        "key": "maxChildren",
+        "label": "Reach max_children",
+        "unit": "counter",
+        "rule": {
+          "threshold": 1,
+          "critical": null,
+          "mode": "delta_per_10m"
+        }
+      },
+      {
+        "key": "slowRequests",
+        "label": "Slow requests",
+        "unit": "counter",
+        "rule": {
+          "threshold": 5,
+          "critical": null,
+          "mode": "delta_per_10m"
+        }
+      }
+    ],
+    "actions": [
+      "discover",
+      "configure",
+      "collect",
+      "snapshot",
+      "evaluate"
+    ],
+    "python": "php_fpm",
+    "multiple": true,
+    "replication": false
+  },
+  "asterisk": {
+    "name": "Asterisk",
+    "endpoint": "/run/asterisk/asterisk.ctl",
+    "endpoints": [
+      "/run/asterisk/asterisk.ctl"
+    ],
+    "port": 1,
+    "credentials": "none",
+    "rights": "Existing /usr/sbin/asterisk and access to local CLI socket. core show channels count, core show uptime seconds, pjsip show registrations.",
+    "metrics": [
+      {
+        "key": "channels",
+        "label": "Active channels",
+        "unit": "count"
+      },
+      {
+        "key": "calls",
+        "label": "Active calls",
+        "unit": "count"
+      },
+      {
+        "key": "processed",
+        "label": "Call processing",
+        "unit": "counter"
+      },
+      {
+        "key": "registrationErrors",
+        "label": "Errors of PJSIP registration",
+        "unit": "count",
+        "rule": {
+          "threshold": 1,
+          "critical": null,
+          "mode": "value"
+        }
+      }
+    ],
+    "actions": [
+      "discover",
+      "configure",
+      "collect",
+      "snapshot",
+      "evaluate"
+    ],
+    "python": "asterisk",
+    "multiple": false,
+    "replication": false
+  },
+  "clickhouse": {
+    "name": "ClickHouse",
+    "endpoint": "127.0.0.1",
+    "endpoints": [
+      "127.0.0.1",
+      "::1"
+    ],
+    "port": 8123,
+    "credentials": "json",
+    "rights": "SELECT for system.processes, system.replicas, system.mutations; to confirm full coverage - global SHOW TABLES and access to system.grants/enabled_roles ~/.cache/cyberbot/credentials/clickhouse.json (0600).",
+    "metrics": [
+      {
+        "key": "queries",
+        "label": "Active requests",
+        "unit": "count"
+      },
+      {
+        "key": "longQueries",
+        "label": "Requests longer than 60s",
+        "unit": "count",
+        "rule": {
+          "threshold": 1,
+          "critical": null,
+          "mode": "value"
+        }
+      },
+      {
+        "key": "queryMemory",
+        "label": "Memory of requests",
+        "unit": "bytes"
+      },
+      {
+        "key": "replicaTables",
+        "label": "Replicable tables",
+        "unit": "count"
+      },
+      {
+        "key": "replicationErrors",
+        "label": "Readonly / expired replicas",
+        "unit": "count",
+        "rule": {
+          "threshold": 1,
+          "critical": 1,
+          "mode": "value"
+        }
+      },
+      {
+        "key": "replicationLag",
+        "label": "Delayed replication",
+        "unit": "s",
+        "rule": {
+          "threshold": 60,
+          "critical": 300,
+          "mode": "value"
+        }
+      },
+      {
+        "key": "replicationQueue",
+        "label": "Replication queue",
+        "unit": "count",
+        "rule": {
+          "threshold": 100,
+          "critical": null,
+          "mode": "value"
+        }
+      },
+      {
+        "key": "pendingMutations",
+        "label": "Expecting mutations",
+        "unit": "count"
+      },
+      {
+        "key": "failedMutations",
+        "label": "Mistakes of mutations",
+        "unit": "count",
+        "rule": {
+          "threshold": 1,
+          "critical": null,
+          "mode": "value"
+        }
+      }
+    ],
+    "actions": [
+      "discover",
+      "configure",
+      "collect",
+      "snapshot",
+      "evaluate"
+    ],
+    "python": "clickhouse",
+    "multiple": true,
+    "replication": false,
+    "instanceCredentials": "json"
+  },
+  "cockroach": {
+    "name": "CockroachDB",
+    "endpoint": "127.0.0.1",
+    "endpoints": [
+      "127.0.0.1",
+      "::1"
+    ],
+    "port": 26257,
+    "credentials": "pgpass",
+    "rights": "Local node metrics are automatically used by CockroachDB. HTTPS requires a trusted certificate or access to the node’s CA. SQL collection requires psql, an existing psql ~/.pgpass and access to crdb_internal.node_metrics.",
+    "metrics": [
+      {
+        "key": "connections",
+        "label": "SQL connections",
+        "unit": "count"
+      },
+      {
+        "key": "active",
+        "label": "Active SQL operations",
+        "unit": "count"
+      },
+      {
+        "key": "queries",
+        "label": "SQL queries",
+        "unit": "counter"
+      },
+      {
+        "key": "errors",
+        "label": "SQL errors",
+        "unit": "counter",
+        "rule": {
+          "threshold": 20,
+          "critical": null,
+          "mode": "delta_per_10m"
+        }
+      },
+      {
+        "key": "unavailableRanges",
+        "label": "Unavailable ranges",
+        "unit": "count",
+        "rule": {
+          "threshold": 1,
+          "critical": 1,
+          "mode": "value"
+        }
+      },
+      {
+        "key": "underreplicatedRanges",
+        "label": "Not enough ranges replicas",
+        "unit": "count",
+        "rule": {
+          "threshold": 1,
+          "critical": null,
+          "mode": "value"
+        }
+      }
+    ],
+    "actions": [
+      "discover",
+      "configure",
+      "collect",
+      "snapshot",
+      "evaluate"
+    ],
+    "python": "cockroach",
+    "multiple": true,
+    "replication": false
+  },
+  "nginx": {
+    "name": "Nginx",
+    "actions": [
+      "discover",
+      "collect",
+      "snapshot",
+      "evaluate"
+    ],
+    "endpoint": "local",
+    "endpoints": [],
+    "port": 80,
+    "credentials": "none",
+    "rights": "Existing access/error log and local stub_status. no configuration changes; native read positions and server aggregation.",
+    "metrics": [],
+    "python": "nginx",
+    "multiple": false,
+    "replication": false,
+    "units": [
+      "nginx"
+    ],
+    "rust": "nginx",
+    "panel": "NginxPanel",
+    "incidentNamespace": "",
+    "preferred": true,
+    "refreshOnDiscovery": false,
+    "scopeInstances": false,
+    "legacyLogInterval": true,
+    "monitoring": {
+      "purpose": "RPS, response codes, upstream and delays when data is available",
+      "reads": "Available status and configuration of Nginx to search for format/logs; access/error logs on the server",
+      "commands": "python3 -I <collector>; A local HTTP request to an already available stub_status",
+      "rights": "Reading rights to existing configurations/logs; status not included in the annex",
+      "limits": "Answer up to 32 KiB, limited units; Nginx configuration unchanged",
+      "schedule": "Log analysis interval"
+    },
+    "factoryInterval": 600,
+    "checkInputs": [
+      "nginx_rps",
+      "nginx_requests",
+      "nginx_5xx",
+      "nginx_upstream_timeout",
+      "nginx_upstream_connect",
+      "nginx_request_mean_ms",
+      "nginx_upstream_mean_ms"
+    ],
+    "mutationKind": "nginx_workers",
+    "actionPresentation": "NginxAction",
+    "activityLabels": {
+      "nginx.collect": "Nginx Diagnostics"
+    }
+  },
+  "postgresql": {
+    "name": "PostgreSQL",
+    "actions": [
+      "discover",
+      "configure",
+      "collect",
+      "snapshot",
+      "evaluate"
+    ],
+    "endpoint": "/var/run/postgresql",
+    "endpoints": [
+      "/var/run/postgresql",
+      "/tmp",
+      "127.0.0.1",
+      "::1"
+    ],
+    "port": 5432,
+    "credentials": "pgpass",
+    "rights": "CONNECT, pg_read_all_stats; existing peer/.pgpass. PostgreSQL Typed Advanced Diagnostics.",
+    "metrics": [],
+    "python": "postgresql",
+    "multiple": true,
+    "replication": true,
+    "units": [
+      "postgresql"
+    ],
+    "rust": "postgresql",
+    "panel": "PostgresqlPanel",
+    "incidentNamespace": "",
+    "ignoreExitedUnit": true,
+    "unixSocketName": ".s.PGSQL.{port}",
+    "hideUnits": true,
+    "monitoring": {
+      "purpose": "Connections, locks, long-term requests, and replication",
+      "reads": "System catalogs/statistics; table contents and query texts are not transmitted",
+      "commands": "psql -X: fixed read-only PG_META/PG_STATS; full SQL in source",
+      "rights": "Connecting an existing role; full statistics require pg_read_all_stats/pg_monitor",
+      "limits": "Answer up to 32 KiB; statement timeout; unknown data is not considered zeros",
+      "schedule": "Every 3 minutes"
+    },
+    "profileDefaults": {
+      "database": "postgres"
+    },
+    "activityLabels": {
+      "postgresql.collect_for": "PostgreSQL diagnostics",
+      "configure_postgresql": "PostgreSQL setup",
+      "refresh_postgresql": "PostgreSQL diagnostics"
+    }
+  },
+  "pgbouncer": {
+    "name": "PgBouncer",
+    "endpoint": "127.0.0.1",
+    "endpoints": [
+      "127.0.0.1",
+      "::1",
+      "/var/run/postgresql",
+      "/var/run/pgbouncer",
+      "/tmp"
+    ],
+    "port": 6432,
+    "credentials": "pgpass",
+    "rights": "Existing psql, local listener, and stats_users role with .pgpass or peer access.",
+    "metrics": [
+      {
+        "key": "activeClients",
+        "label": "Active clients",
+        "unit": "count"
+      },
+      {
+        "key": "waitingClients",
+        "label": "Waiting customers",
+        "unit": "count"
+      },
+      {
+        "key": "activeServers",
+        "label": "Busy server connections",
+        "unit": "count"
+      },
+      {
+        "key": "idleServers",
+        "label": "Free server connections",
+        "unit": "count"
+      }
+    ],
+    "actions": [
+      "discover",
+      "configure",
+      "collect",
+      "snapshot",
+      "evaluate"
+    ],
+    "python": "pgbouncer",
+    "multiple": false,
+    "replication": false,
+    "units": [
+      "pgbouncer"
+    ],
+    "reportsAvailability": true,
+    "unixSocketName": ".s.PGSQL.{port}"
+  },
+  "proxysql": {
+    "name": "ProxySQL",
+    "endpoint": "127.0.0.1",
+    "endpoints": [
+      "127.0.0.1",
+      "::1"
+    ],
+    "port": 6032,
+    "credentials": "json",
+    "rights": "Administrative port 6032 and existing statistics in the ~/.cache/cyberbot/credentials/proxysql.json (0600).",
+    "metrics": [
+      {
+        "key": "clientConnections",
+        "label": "Client connections",
+        "unit": "count"
+      },
+      {
+        "key": "serverConnections",
+        "label": "Server connections",
+        "unit": "count"
+      },
+      {
+        "key": "queries",
+        "label": "Requests",
+        "unit": "counter"
+      },
+      {
+        "key": "slowQueries",
+        "label": "Slow requests",
+        "unit": "counter"
+      }
+    ],
+    "actions": [
+      "discover",
+      "configure",
+      "collect",
+      "snapshot",
+      "evaluate"
+    ],
+    "python": "proxysql",
+    "multiple": false,
+    "replication": false,
+    "units": [
+      "proxysql"
+    ],
+    "reportsAvailability": true
+  },
+  "twemproxy": {
+    "name": "Twemproxy",
+    "endpoint": "127.0.0.1",
+    "endpoints": [
+      "127.0.0.1",
+      "::1"
+    ],
+    "port": 22222,
+    "credentials": "none",
+    "rights": "Read the stats port of the confirmed process and the limited JSON from that port.",
+    "metrics": [
+      {
+        "key": "clientConnections",
+        "label": "Client connections",
+        "unit": "count"
+      },
+      {
+        "key": "forwardErrors",
+        "label": "Transfer errors",
+        "unit": "counter"
+      },
+      {
+        "key": "requests",
+        "label": "Requests",
+        "unit": "counter"
+      },
+      {
+        "key": "timeouts",
+        "label": "Server timeouts",
+        "unit": "counter"
+      }
+    ],
+    "actions": [
+      "discover",
+      "configure",
+      "collect",
+      "snapshot",
+      "evaluate"
+    ],
+    "python": "twemproxy",
+    "multiple": false,
+    "replication": false,
+    "units": [
+      "twemproxy",
+      "nutcracker"
+    ],
+    "reportsAvailability": true
+  },
+  "envoy": {
+    "name": "Envoy",
+    "endpoint": "127.0.0.1",
+    "endpoints": [
+      "127.0.0.1",
+      "::1"
+    ],
+    "port": 9901,
+    "credentials": "none",
+    "rights": "Existing local administrative listener: The container requires access to the Docker Unix socket and publication of the administrative port on the host.",
+    "metrics": [
+      {
+        "key": "ready",
+        "label": "Readiness",
+        "unit": "boolean"
+      },
+      {
+        "key": "upstreamConnections",
+        "label": "Connections to upstream",
+        "unit": "count"
+      },
+      {
+        "key": "memory",
+        "label": "Dedicated memory",
+        "unit": "bytes"
+      }
+    ],
+    "actions": [
+      "discover",
+      "configure",
+      "collect",
+      "snapshot",
+      "evaluate"
+    ],
+    "python": "envoy",
+    "multiple": false,
+    "replication": false,
+    "units": [
+      "envoy"
+    ],
+    "reportsAvailability": true
+  },
+  "qdrant": {
+    "name": "Qdrant",
+    "endpoint": "127.0.0.1",
+    "endpoints": [
+      "127.0.0.1",
+      "::1"
+    ],
+    "port": 6333,
+    "credentials": "api-key",
+    "rights": "Existing local REST. For protected metrics, store the read-only key in the password field of the file ~/.cache/cyberbot/credentials/qdrant.json (0600). The container is published via local Docker.",
+    "metrics": [
+      {
+        "key": "ready",
+        "label": "Readiness",
+        "unit": "boolean"
+      },
+      {
+        "key": "collections",
+        "label": "Collections",
+        "unit": "count"
+      },
+      {
+        "key": "restResponses",
+        "label": "Replies to REST",
+        "unit": "counter"
+      },
+      {
+        "key": "restFailures",
+        "label": "REST errors",
+        "unit": "counter"
+      }
+    ],
+    "actions": [
+      "discover",
+      "configure",
+      "collect",
+      "snapshot",
+      "evaluate"
+    ],
+    "python": "qdrant",
+    "multiple": false,
+    "replication": false,
+    "units": [
+      "qdrant"
+    ],
+    "reportsAvailability": true
+  },
+  "nebula": {
+    "name": "Nebula",
+    "endpoint": "local",
+    "endpoints": [
+      "local"
+    ],
+    "port": 1,
+    "credentials": "none",
+    "rights": "Local /proc of a confirmed Nebula process.",
+    "metrics": [
+      {
+        "key": "processUptime",
+        "label": "Time of the process",
+        "unit": "seconds"
+      },
+      {
+        "key": "rss",
+        "label": "RSS memory",
+        "unit": "bytes"
+      }
+    ],
+    "actions": [
+      "discover",
+      "configure",
+      "collect",
+      "snapshot",
+      "evaluate"
+    ],
+    "python": "nebula",
+    "multiple": false,
+    "replication": false,
+    "units": [
+      "nebula"
+    ],
+    "reportsAvailability": true
+  },
+  "fail2ban": {
+    "name": "Fail2ban",
+    "endpoint": "local",
+    "endpoints": [
+      "local"
+    ],
+    "port": 1,
+    "credentials": "none",
+    "rights": "Access to the existing Fail2ban system socket, with older versions only available jail information.",
+    "metrics": [
+      {
+        "key": "jails",
+        "label": "Jail",
+        "unit": "count"
+      },
+      {
+        "key": "currentlyBanned",
+        "label": "Existing lockdowns",
+        "unit": "count"
+      },
+      {
+        "key": "totalBanned",
+        "label": "Blocking everything",
+        "unit": "counter"
+      }
+    ],
+    "actions": [
+      "discover",
+      "configure",
+      "collect",
+      "snapshot",
+      "evaluate"
+    ],
+    "python": "fail2ban",
+    "multiple": false,
+    "replication": false,
+    "units": [
+      "fail2ban"
+    ],
+    "reportsAvailability": true
+  },
+  "caddy": {
+    "name": "Caddy",
+    "endpoint": "127.0.0.1",
+    "endpoints": [
+      "127.0.0.1",
+      "::1"
+    ],
+    "port": 2019,
+    "credentials": "none",
+    "rights": "Existing local administrative listener Caddy with /metrics.",
+    "metrics": [
+      {
+        "key": "rss",
+        "label": "RSS memory",
+        "unit": "bytes"
+      },
+      {
+        "key": "goroutines",
+        "label": "Goroutine",
+        "unit": "count"
+      }
+    ],
+    "actions": [
+      "discover",
+      "configure",
+      "collect",
+      "snapshot",
+      "evaluate"
+    ],
+    "python": "caddy",
+    "multiple": false,
+    "replication": false,
+    "units": [
+      "caddy"
+    ],
+    "reportsAvailability": true
+  }
+}

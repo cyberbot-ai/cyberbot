@@ -1,0 +1,17 @@
+node_modules/
+dist/
+.tools/
+.runtime/
+src-tauri/target/
+src-tauri/gen/
+*.log
+.DS_Store
+.env
+.env.*
+!.env.example
+coverage/
+__pycache__/
+*.pyc
+
+check-runner/target/
+src-tauri/binaries/
