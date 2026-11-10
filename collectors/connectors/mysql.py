@@ -29,11 +29,11 @@ MY_STATUS = (
 MY_LOCKS = """SELECT COUNT(CASE WHEN trx_state='LOCK WAIT' THEN 1 END) AS blocked,
  COUNT(CASE WHEN trx_state='LOCK WAIT' AND trx_wait_started IS NULL THEN 1 END) AS unknownWaits,
  COALESCE(MAX(CASE WHEN trx_state='LOCK WAIT' THEN GREATEST(0,TIMESTAMPDIFF(SECOND,trx_wait_started,NOW())) END),0) AS maxWaitSeconds,
- COUNT(CASE WHEN trx_started<NOW()-INTERVAL 300 SECOND THEN 1 END) AS longTransactions,
+ COUNT(CASE WHEN trx_started<NOW()-INTERVAL {longTransactionSeconds} SECOND THEN 1 END) AS longTransactions,
  COALESCE(MAX(GREATEST(0,TIMESTAMPDIFF(SECOND,trx_started,NOW()))),0) AS oldestTransactionSeconds
  FROM information_schema.INNODB_TRX WHERE trx_mysql_thread_id<>CONNECTION_ID()"""
 MY_ACTIVITY = """SELECT COUNT(CASE WHEN COMMAND IN ('Query','Execute') THEN 1 END) AS active,
- COUNT(CASE WHEN COMMAND IN ('Query','Execute') AND TIME>=60 THEN 1 END) AS longQueries,
+ COUNT(CASE WHEN COMMAND IN ('Query','Execute') AND TIME>={longQuerySeconds} THEN 1 END) AS longQueries,
  COALESCE(MAX(CASE WHEN COMMAND IN ('Query','Execute') THEN TIME END),0) AS longestQuerySeconds,
  COUNT(CASE WHEN COMMAND IN ('Binlog Dump','Binlog Dump GTID') THEN 1 END) AS replicaSenders
  FROM information_schema.PROCESSLIST WHERE ID<>CONNECTION_ID()"""
@@ -295,6 +295,7 @@ def analyze_mysql(request, detected_process=False, automatic=False):
     started = time.monotonic()
     deadline = started + 12
     config = mysql_config(request.get("state", {}))
+    limits = collector_thresholds("mysql", request.get("thresholds", {}))
     detected = detected_process or os.path.isdir("/etc/mysql") or any(
         os.path.exists(p) for p in ("/run/mysqld/mysqld.sock", "/tmp/mysql.sock")
     )
@@ -386,7 +387,7 @@ def analyze_mysql(request, detected_process=False, automatic=False):
         group("status", MY_STATUS, status, "status_unavailable")
         group(
             "locks",
-            MY_LOCKS,
+            MY_LOCKS.format(**limits),
             lambda rows: {k: int(v) for k, v in rows[0].items()},
             "process_or_innodb_unavailable",
         )
@@ -409,7 +410,7 @@ def analyze_mysql(request, detected_process=False, automatic=False):
         if metrics["locks"] is not None:
             group(
                 "activity",
-                MY_ACTIVITY,
+                MY_ACTIVITY.format(**limits),
                 lambda rows: {k: int(v) for k, v in rows[0].items()},
                 "activity_unavailable",
             )
@@ -468,7 +469,7 @@ def mysql_connector(c, r):
         "instanceId": c.get("_instanceId", "default"),
         "expectReplica": c["expectReplica"],
     }
-    v = analyze_mysql({"state": config}, r["detected"], c.get("autoEndpoint", False))
+    v = analyze_mysql({"state": config, "thresholds": c["_thresholds"]}, r["detected"], c.get("autoEndpoint", False))
     r.update(detected=v["detected"], connected=v["connected"], complete=v["coverage"])
     mapping = {
         "profile_disabled": "profile_disabled",

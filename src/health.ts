@@ -26,6 +26,14 @@ function hasCoreMetrics(o: NonNullable<Server['observation']>): boolean {
     && o.disks.some(disk => Number.isFinite(disk.usedPercent));
 }
 
+export type Resource = 'cpu' | 'memory' | 'disk';
+export function resourceHealth(server: Server, resource: Resource, value: number | null | undefined): Health {
+  if (value == null || !Number.isFinite(value)) return 'unknown';
+  const limits = server.monitoring?.thresholds?.[resource];
+  if (value >= (limits?.critical ?? 97)) return 'critical';
+  return value >= (limits?.warning ?? 90) ? 'warning' : 'healthy';
+}
+
 export function partialHealthReason(server: Server, state: Health): string | undefined {
   if (!hasPartialData(server, state)) return undefined;
   return 'The server is reachable, but some basic metrics are unavailable.';
@@ -41,9 +49,13 @@ export function health(server: Server, now = Date.now()/1000, interval = 180): H
   if (!o) return known;
   interval = server.monitoring?.intervalSeconds ?? interval;
   if (now-o.at > interval*2+30) return 'stale';
-  const values = [o.cpuPercent, o.memoryPercent, ...o.disks.map(d=>d.usedPercent)].filter((v): v is number => v !== null);
-  if (known === 'critical' || values.some(v=>v>=97)) return 'critical';
-  if (known === 'warning' || values.some(v=>v>=90) || o.services.some(s=>s.state==='failed')) return 'warning';
+  const resources = [
+    resourceHealth(server, 'cpu', o.cpuPercent),
+    resourceHealth(server, 'memory', o.memoryPercent),
+    ...o.disks.map(disk => resourceHealth(server, 'disk', disk.usedPercent)),
+  ];
+  if (known === 'critical' || resources.includes('critical')) return 'critical';
+  if (known === 'warning' || resources.includes('warning') || o.services.some(s=>s.state==='failed')) return 'warning';
   return hasCoreMetrics(o) ? 'healthy' : 'unknown';
 }
 export function percent(value: number | null | undefined): string { return value==null ? '—' : `${Math.round(value)}%`; }

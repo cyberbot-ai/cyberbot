@@ -35,9 +35,12 @@ def clickhouse_connector(c, r):
         pass
     if not visibility:
         r["issues"].append("partial_coverage")
+    long_query_seconds = c["_thresholds"]["longQuerySeconds"]
     queries = [
         (
-            "SELECT count() AS queries, countIf(elapsed>60) AS longQueries, sum(memory_usage) AS queryMemory FROM system.processes WHERE query_id != initialQueryID()",
+            ("SELECT count() AS queries, countIf(elapsed>{}) AS longQueries, "
+             "sum(memory_usage) AS queryMemory FROM system.processes WHERE query_id != initialQueryID()"
+             .format(long_query_seconds)),
             ["queries", "longQueries", "queryMemory"],
         ),
         (

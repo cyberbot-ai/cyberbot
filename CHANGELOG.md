@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.0
+
+- Set alert thresholds for built-in resource, service, and log checks across the fleet, per server, or per service connection.
+
 ## 0.9.1
 
 - Retry temporary SSH connection failures, limit concurrent handshakes, and show failed metric refreshes on the affected server.

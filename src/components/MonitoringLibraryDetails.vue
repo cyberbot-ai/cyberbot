@@ -3,7 +3,7 @@ import ActivityServerLink from './ActivityServerLink.vue';
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import { call, preview } from '../api';
 import { monitoringInterval } from '../monitoring';
-import type { ActivityEvent, ActivityPage, MonitoringDefinition, MonitoringOverrides, MonitoringPolicy, MonitoringScope, MonitoringValues, ServiceInstance } from '../types';
+import type { ActivityEvent, ActivityPage, MonitoringDefinition, MonitoringOverrides, MonitoringPolicy, MonitoringScalarField, MonitoringScope, MonitoringThresholdField, MonitoringThresholdRule, MonitoringValues, ServiceInstance } from '../types';
 import { serviceCatalog } from '../services';
 import { servicePanel } from '../servicePanels';
 import RefreshButton from './RefreshButton.vue';
@@ -30,6 +30,8 @@ const intervalText = ref('');
 const editing = ref(false);
 const intervalField = ref<InstanceType<typeof UiInput>>();
 const intervalButton = ref<HTMLButtonElement>();
+const thresholdDrafts = ref<Record<string, Record<string, string | number>>>({});
+const thresholdErrors = ref<Record<string, string>>({});
 const sources = ref<{ name: string; text: string }[]>();
 const sourceError = ref('');
 const loadingSources = ref(false);
@@ -55,13 +57,15 @@ const resetLabel = computed(() => instance.value ? 'Use server settings' : props
 const triggers: Record<string, string> = { schedule: 'On schedule', manual: 'Manual', ai: 'AI request' };
 const phases: Record<string, string> = { completed: 'Finished', failed: 'Failed', cancelled: 'Cancelled', interrupted: 'Interrupted', info: 'Event' };
 const message = (value: unknown) => String(value).replace(/^Error: /, '');
-const hasOverride = (field: keyof MonitoringValues) => policy.value?.overrides[field] != null;
+const hasOverride = (field: MonitoringScalarField) => policy.value?.overrides[field] != null;
 
 async function loadPolicy() {
   if (!props.definition.configurable) return;
   const current = ++generation;
   editing.value = false;
   intervalError.value = '';
+  thresholdDrafts.value = {};
+  thresholdErrors.value = {};
   policy.value = undefined;
   error.value = '';
   loading.value = true;
@@ -114,7 +118,7 @@ async function write(overrides: MonitoringOverrides) {
     if (!disposed) emit('busy', false);
   }
 }
-async function change<K extends keyof MonitoringValues>(field: K, value: MonitoringValues[K] | null) {
+async function change<K extends MonitoringScalarField>(field: K, value: MonitoringValues[K] | null) {
   return write({ ...policy.value?.overrides, [field]: value });
 }
 async function toggle(field: 'enabled' | 'diagnosticEnabled', event: Event) {
@@ -170,6 +174,46 @@ async function saveInterval() {
 }
 async function resetInterval() {
   if (await change('intervalSeconds', null)) await closeInterval();
+}
+
+function currentThreshold(rule: string, field: MonitoringThresholdField) {
+  return policy.value?.values.thresholds?.[rule]?.[field.key] ?? field.default;
+}
+function thresholdOrigin(rule: string) {
+  const origin = policy.value?.thresholdOrigins?.[rule] ?? 'factory';
+  return origin === 'server' && policy.value?.overrides.thresholds?.[rule]
+    ? 'Server override' : scopeOrigin[origin];
+}
+function editThreshold(rule: string, field: string, value: string | number) {
+  (thresholdDrafts.value[rule] ??= {})[field] = value;
+  delete thresholdErrors.value[rule];
+}
+async function saveThreshold(rule: MonitoringThresholdRule) {
+  const thresholds = { ...policy.value?.overrides.thresholds };
+  const values: Record<string, number> = {};
+  for (const field of rule.fields) {
+    const draft = thresholdDrafts.value[rule.key]?.[field.key];
+    const value = draft === '' ? NaN : Number(draft ?? currentThreshold(rule.key, field));
+    if (!Number.isFinite(value) || value < field.min || value > field.max || (field.integer && !Number.isInteger(value))) {
+      thresholdErrors.value[rule.key] = `Enter ${field.integer ? 'a whole number' : 'a number'} from ${field.min} to ${field.max} for ${field.label}.`;
+      return;
+    }
+    values[field.key] = value;
+  }
+  if ('warning' in values && 'critical' in values && values.warning >= values.critical) {
+    thresholdErrors.value[rule.key] = 'Critical must be higher than Warning.';
+    return;
+  }
+  thresholds[rule.key] = values;
+  if (await write({ ...policy.value?.overrides, thresholds })) delete thresholdDrafts.value[rule.key];
+}
+async function resetThreshold(rule: string) {
+  const thresholds = { ...policy.value?.overrides.thresholds };
+  delete thresholds[rule];
+  if (await write({ ...policy.value?.overrides, thresholds })) {
+    delete thresholdDrafts.value[rule];
+    delete thresholdErrors.value[rule];
+  }
 }
 
 async function showSources(event: Event) {
@@ -260,6 +304,31 @@ onBeforeUnmount(() => {
         </div>
       </div>
       <p v-if="intervalError" class="problem" role="alert">{{ intervalError }}</p>
+      <details v-if="definition.thresholds?.length">
+        <summary>Alert thresholds</summary>
+        <form v-for="rule in definition.thresholds" :key="rule.key" class="threshold" novalidate @submit.prevent="saveThreshold(rule)">
+          <fieldset>
+            <legend>{{ rule.label }}</legend>
+            <div class="threshold-fields">
+              <label v-for="field in rule.fields" :key="field.key">
+                {{ field.label }}
+                <UiInput compact type="number" :unit="field.unit" :min="field.min" :max="field.max"
+                  :step="field.integer ? 1 : 'any'" :aria-label="`${rule.label} ${field.label}`"
+                  :model-value="thresholdDrafts[rule.key]?.[field.key] ?? currentThreshold(rule.key, field)"
+                  :disabled="saving || preview" @update:model-value="editThreshold(rule.key, field.key, $event)"
+                />
+              </label>
+            </div>
+            <div class="threshold-actions">
+              <small>{{ thresholdOrigin(rule.key) }}</small>
+              <button class="link" type="submit" :disabled="!thresholdDrafts[rule.key] || saving || preview">Save</button>
+              <button v-if="policy.overrides.thresholds?.[rule.key]" class="link" type="button" :disabled="saving || preview"
+                @click="resetThreshold(rule.key)">{{ resetLabel }}</button>
+            </div>
+            <p v-if="thresholdErrors[rule.key]" class="problem" role="alert">{{ thresholdErrors[rule.key] }}</p>
+          </fieldset>
+        </form>
+      </details>
       <div class="toggle">
         <label><input type="checkbox" :checked="policy.values.enabled" :disabled="saving || preview" @change="toggle('enabled', $event)"> Enable check</label>
         <button v-if="hasOverride('enabled')" type="button" class="link" :disabled="saving || preview" @click="change('enabled', null)">{{ resetLabel }}</button>
@@ -295,7 +364,7 @@ onBeforeUnmount(() => {
         <div><dt>Schedule</dt><dd>{{ definition.schedule }}</dd></div>
         <div><dt>Limits</dt><dd>{{ definition.limits }}</dd></div>
       </dl>
-      <p class="hint">View the source for built-in thresholds and algorithms.</p>
+      <p class="hint">View the source for built-in rules and algorithms.</p>
       <details @toggle="showSources">
         <summary>Sources and version {{ definition.version.slice(0, 12) }}</summary>
         <p v-if="loadingSources" class="hint">Loading sources…</p>
@@ -338,6 +407,13 @@ onBeforeUnmount(() => {
 .interval>span{min-width:120px}
 .interval-value{min-width:0}
 .interval-input{--field-width:86px}
+.threshold{margin:9px 0}
+.threshold fieldset{min-width:0;margin:0;padding:6px 9px 9px;border:1px solid var(--line);border-radius:6px}
+.threshold legend{padding:0 4px;font-size:13px;font-weight:600}
+.threshold-fields,.threshold-actions{display:flex;align-items:end;flex-wrap:wrap;gap:6px 12px}
+.threshold-fields label{display:grid;gap:4px;color:var(--muted);font-size:12px}
+.threshold-actions{margin-top:6px;align-items:center}
+.threshold-actions button:disabled{opacity:.5}
 .toggle input{margin:0;accent-color:var(--accent)}
 small{color:var(--muted);font-size:12px}
 .link{border:0;padding:0;background:none;color:var(--accent);text-decoration:underline;text-underline-offset:3px;font-size:12px}

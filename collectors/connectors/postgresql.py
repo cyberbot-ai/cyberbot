@@ -28,9 +28,9 @@ SELECT pg_catalog.json_build_object(
  'reservedConnections',current_setting('superuser_reserved_connections')::int+coalesce(current_setting('reserved_connections',true),'0')::int,
  'active',(SELECT count(*) FROM activity WHERE backend_type='client backend' AND state='active'),
  'disabledActivities',(SELECT count(*) FROM activity WHERE state='disabled'),
- 'longQueries',(SELECT count(*) FROM activity WHERE backend_type='client backend' AND state='active' AND query_start<statement_timestamp()-interval '60 seconds'),
+ 'longQueries',(SELECT count(*) FROM activity WHERE backend_type='client backend' AND state='active' AND query_start<statement_timestamp()-interval '{longQuerySeconds} seconds'),
  'longestQuerySeconds',(SELECT coalesce(max(greatest(0,extract(epoch from statement_timestamp()-query_start))),0) FROM activity WHERE backend_type='client backend' AND state='active'),
- 'idleTransactions',(SELECT count(*) FROM activity WHERE state IN ('idle in transaction','idle in transaction (aborted)') AND xact_start<statement_timestamp()-interval '300 seconds'),
+ 'idleTransactions',(SELECT count(*) FROM activity WHERE state IN ('idle in transaction','idle in transaction (aborted)') AND xact_start<statement_timestamp()-interval '{idleTransactionSeconds} seconds'),
  'blocked',(SELECT count(*) FROM waits),
  'unknownWaits',(SELECT count(*) FROM waits WHERE started IS NULL),
  'maxWaitSeconds',(SELECT coalesce(max(greatest(0,extract(epoch from statement_timestamp()-started))),0) FROM waits),
@@ -123,6 +123,7 @@ def pg_owned_endpoint(config, records, scan_complete):
 
 def analyze_postgresql(request):
     started=time.monotonic();config=pg_config(request.get('state',{}))
+    limits = collector_thresholds('postgresql', request.get('thresholds', {}))
     records, scan_complete = service_runtime(kind_filter='postgresql', details=True)
     detected = any(record['verified'] for record in records)
     result={'version':1,'detected':detected,'connected':False,'coverage':False,'issues':[], 'meta':None,'metrics':None,'durationMs':0}
@@ -143,7 +144,7 @@ def analyze_postgresql(request):
             if not 140000<=meta['version']<190000:result['issues']=['unsupported_version']
             elif not meta['fullStats']:result['issues']=['read_all_stats_required']
             else:
-                metrics=pg_query(config,PG_STATS)
+                metrics=pg_query(config,PG_STATS.format(**limits))
                 if any(metrics[k]!=meta[k] for k in ('version','generation','recovery','fullStats','trackActivities','trackCounts')):raise ValueError('instance_changed')
                 result['metrics']=metrics
                 if not meta['trackActivities'] or metrics['disabledActivities']:result['issues'].append('activity_incomplete')
@@ -177,7 +178,10 @@ def collect_postgresql(state):
     if not isinstance(config, dict):
         raise ValueError('Invalid database profile')
     aliases = {'endpoint': 'host', 'expectedPeers': 'expectedStreaming', 'expectReplica': 'expectReceiver'}
-    return analyze_postgresql({'state': {aliases.get(key, key): value for key, value in config.items()}})
+    return analyze_postgresql({
+        'state': {aliases.get(key, key): value for key, value in config.items()},
+        'thresholds': state.get('thresholds', {}),
+    })
 
 
 POSTGRESQL_ADAPTER = ServiceAdapter(

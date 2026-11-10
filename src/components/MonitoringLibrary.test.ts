@@ -4,7 +4,7 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import { serverDirectory, serverDirectoryKey } from '../serverDirectory';
 import CheckPanel from './CheckPanel.vue';
 import MonitoringLibrary from './MonitoringLibrary.vue';
-import type { MonitoringDefinition, MonitoringLibraryEntry, MonitoringOverrides, MonitoringPolicy, MonitoringScope, Server } from '../types';
+import type { MonitoringDefinition, MonitoringLibraryEntry, MonitoringOverrides, MonitoringPolicy, MonitoringScope, MonitoringValues, Server } from '../types';
 
 const mocks = vi.hoisted(() => ({ call: vi.fn() }));
 vi.mock('../api', () => ({ preview: false, call: mocks.call }));
@@ -17,7 +17,15 @@ const metrics: MonitoringDefinition = {
 };
 const definitions = [
   metrics,
-  { ...metrics, id: 'redis', name: 'Redis', category: 'Services', runner: 'service', diagnostics: true, replication: true },
+  { ...metrics, id: 'redis', name: 'Redis', category: 'Services', runner: 'service', diagnostics: true, replication: true,
+    thresholds: [{
+      key: 'memoryUsage', label: 'Memory limit usage',
+      fields: [
+        { key: 'warning', label: 'Warning', unit: '%', default: 90, min: 0, max: 100, integer: false },
+        { key: 'critical', label: 'Critical', unit: '%', default: 98, min: 0, max: 100, integer: false },
+      ],
+    }],
+  },
   { ...metrics, id: 'transport', name: 'SSH and delivery', runner: 'local', configurable: false, intervalEditable: false },
   { ...metrics, id: 'custom', runner: 'custom', configurable: false, intervalEditable: false },
 ];
@@ -36,9 +44,13 @@ const key = (scope: MonitoringScope) => [scope.definitionId, scope.serverId ?? '
 let overrides: Map<string, MonitoringOverrides>;
 let revision: number;
 function policy(scope: MonitoringScope): MonitoringPolicy {
-  const base = { ...defaults, diagnosticEnabled: scope.definitionId === 'redis' };
+  const base: MonitoringValues = {
+    ...defaults, diagnosticEnabled: scope.definitionId === 'redis',
+    thresholds: scope.definitionId === 'redis' ? { memoryUsage: { warning: 90, critical: 98 } } : {},
+  };
   const inherited = { ...base };
   const resultOrigins = { ...origins };
+  const thresholdOrigins: Record<string, string> = {};
   const layers = [
     { ...scope, serverId: null, instanceId: null },
     ...(scope.serverId ? [{ ...scope, instanceId: null }] : []),
@@ -48,13 +60,16 @@ function policy(scope: MonitoringScope): MonitoringPolicy {
   for (const layer of layers) {
     if (key(layer) === key(scope)) Object.assign(inherited, values);
     const update = overrides.get(key(layer)) ?? {};
-    for (const field of Object.keys(update) as (keyof typeof values)[]) {
+    const origin = layer.instanceId ? 'instance' : layer.serverId ? 'server' : 'global';
+    for (const field of Object.keys(origins) as (keyof typeof origins)[]) {
       if (update[field] == null) continue;
       Object.assign(values, { [field]: update[field] });
-      resultOrigins[field] = layer.instanceId ? 'instance' : layer.serverId ? 'server' : 'global';
+      resultOrigins[field] = origin;
     }
+    values.thresholds = { ...values.thresholds, ...update.thresholds };
+    for (const rule of Object.keys(update.thresholds ?? {})) thresholdOrigins[rule] = origin;
   }
-  return { values, inherited, origins: resultOrigins, overrides: overrides.get(key(scope)) ?? {}, revision };
+  return { values, inherited, origins: resultOrigins, thresholdOrigins, overrides: overrides.get(key(scope)) ?? {}, revision };
 }
 beforeEach(() => {
   vi.clearAllMocks();
@@ -80,7 +95,8 @@ beforeEach(() => {
     if (command === 'activity_log') return { events: [] };
     if (command === 'monitoring_sources') return [{ name: 'actual.py', text: '<script>untrusted</script>' }];
     if (command === 'configure_monitoring') {
-      const update = Object.fromEntries(Object.entries(args.overrides).filter(([, value]) => value != null));
+      const update = Object.fromEntries(Object.entries(args.overrides).filter(([key, value]) =>
+        value != null && (key !== 'thresholds' || Object.keys(value).length)));
       if (Object.keys(update).length) overrides.set(key(args.scope), update);
       else overrides.delete(key(args.scope));
       revision++;
@@ -88,6 +104,36 @@ beforeEach(() => {
     }
     throw new Error(command);
   });
+});
+
+it('saves a threshold pair together and resets only that rule at a connection', async () => {
+  overrides.set('redis/a/second', { intervalSeconds: 120 });
+  const wrapper = mountLibrary({ definitionId: 'redis', serverId: 'a', instanceId: 'second' });
+  await flushPromises();
+  const rule = wrapper.get('.threshold');
+  const warning = rule.get<HTMLInputElement>('[aria-label="Memory limit usage Warning"]');
+  const critical = rule.get<HTMLInputElement>('[aria-label="Memory limit usage Critical"]');
+  expect(wrapper.text()).toContain('Alert thresholds');
+  expect(warning.element.value).toBe('90');
+  await warning.setValue('99');
+  await rule.trigger('submit');
+  expect(rule.get('[role="alert"]').text()).toContain('Critical must be higher');
+  expect(mocks.call.mock.calls.some(([name]) => name === 'configure_monitoring')).toBe(false);
+  await critical.setValue('100');
+  await rule.trigger('submit');
+  await flushPromises();
+  expect(mocks.call).toHaveBeenCalledWith('configure_monitoring', {
+    scope: { definitionId: 'redis', serverId: 'a', instanceId: 'second' },
+    overrides: { intervalSeconds: 120, thresholds: { memoryUsage: { warning: 99, critical: 100 } } },
+    expectedRevision: 1,
+  });
+  expect(rule.text()).toContain('Connection override');
+  await rule.get('button[type="button"]').trigger('click');
+  await flushPromises();
+  expect(warning.element.value).toBe('90');
+  expect(critical.element.value).toBe('98');
+  expect(overrides.get('redis/a/second')).toEqual({ intervalSeconds: 120 });
+  wrapper.unmount();
 });
 
 it('opens the CVE catalog independently and keeps all server links under a filtered result', async () => {

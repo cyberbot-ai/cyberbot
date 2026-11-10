@@ -1,5 +1,6 @@
 //! Shared connector lifecycle. Plugins provide only fixed collection and metric contracts.
 use crate::instances::{self, DEFAULT};
+use crate::monitoring::thresholds::{self, Thresholds};
 use crate::{inventory::stable_id, model::*, ssh, store::Store, AppState};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -698,14 +699,6 @@ fn metric_value(
     values.get(key).copied().flatten()
 }
 
-fn severity(rule: &Rule, value: f64) -> &'static str {
-    if rule.critical.is_some_and(|threshold| value >= threshold) {
-        "critical"
-    } else {
-        "warning"
-    }
-}
-
 fn absent(wire: &Wire, config: &Config) -> bool {
     if wire.availability.is_some() {
         return !wire.detected && wire.issues.iter().any(|issue| issue == "not_detected");
@@ -721,10 +714,13 @@ fn assessment(
     state: &Checkpoint,
     summary: &Summary,
     incidents: &BTreeMap<String, Incident>,
+    thresholds: &Thresholds,
 ) -> Result<(&'static str, Vec<Deviation>)> {
     let mut deviations = Vec::new();
     for metric in &spec(kind)?.metrics {
         let Some(rule) = &metric.rule else { continue };
+        let limits = &thresholds[&metric.key];
+        let activation = thresholds::activation(limits);
         let key = format!(
             "service:{}:{}",
             instances::scope(kind, &state.instance_id),
@@ -735,10 +731,10 @@ fn assessment(
         let value = metric_value(rule, &metric.key, &summary.data, &summary.rates);
         // Old summaries stored the measured value even when the first breach had no finding.
         let legacy_pending = if summary.pending_findings.is_none() && confirmed.is_none() {
-            value.filter(|v| *v >= rule.threshold).map(|value| Finding {
+            value.filter(|v| *v >= activation).map(|value| Finding {
                 key: key.clone(),
                 title: metric.label.clone(),
-                severity: severity(rule, value).into(),
+                severity: thresholds::severity(limits, value).into(),
                 value,
                 at: None,
             })
@@ -792,11 +788,7 @@ fn assessment(
             title: title.clone(),
             severity: level.clone(),
             value: measured,
-            threshold: if level == "critical" {
-                rule.critical.unwrap_or(rule.threshold)
-            } else {
-                rule.threshold
-            },
+            threshold: limits.get(level).copied().unwrap_or(activation),
             at,
             pending,
             recovering,
@@ -846,7 +838,16 @@ pub(crate) fn resolve_deviation(db: &Connection, incident: &Incident) -> Result<
     state.escalating.remove(metric);
     if state.last_success.is_some() && state.error.is_none() {
         let incidents = service_incidents(db, &incident.server_id, kind, instance)?;
-        state.status = assessment(kind, &state, &summary, &incidents)?.0.into();
+        let policy = crate::monitoring::effective(db, kind, &incident.server_id, instance)?;
+        state.status = assessment(
+            kind,
+            &state,
+            &summary,
+            &incidents,
+            &policy.values.thresholds,
+        )?
+        .0
+        .into();
     }
     write(db, &incident.server_id, kind, &state)
 }
@@ -1068,6 +1069,7 @@ impl Store {
             diagnostic_enabled: config.enabled,
             expected_peers: config.expected_peers,
             expect_replica: config.expect_replica,
+            ..old.clone()
         };
         crate::monitoring::legacy_service(&tx, kind, id, instance, &old, &new)?;
         s.config = config;
@@ -1238,7 +1240,7 @@ impl Store {
         }
         let (status, mut deviations) = if let Some(summary) = summary.as_ref().filter(|_| current) {
             let incidents = service_incidents(&db, id, kind, instance)?;
-            assessment(kind, &state, summary, &incidents)?
+            assessment(kind, &state, summary, &incidents, &monitoring.thresholds)?
         } else {
             ("unknown", Vec::new())
         };
@@ -1292,6 +1294,8 @@ impl Store {
         let current: Server = serde_json::from_str(&current).map_err(err)?;
         let instance = &expected.instance_id;
         let mut s = read(&tx, &server.id, kind, instance)?;
+        let policy = crate::monitoring::effective(&tx, kind, &server.id, instance)?;
+        let thresholds = &policy.values.thresholds;
         if serde_json::to_value(current.endpoint).map_err(err)?
             != serde_json::to_value(&server.endpoint).map_err(err)?
             || s.epoch != expected.epoch
@@ -1333,7 +1337,7 @@ impl Store {
         let previous_pending = match previous {
             Some(previous) => match previous.pending_findings {
                 Some(findings) => findings,
-                None => assessment(kind, &s, &previous, &incidents)?
+                None => assessment(kind, &s, &previous, &incidents, thresholds)?
                     .1
                     .into_iter()
                     .filter(|d| d.pending)
@@ -1354,6 +1358,7 @@ impl Store {
         let mut pending_findings = Vec::new();
         for metric in &spec(kind)?.metrics {
             let Some(rule) = &metric.rule else { continue };
+            let limits = &thresholds[&metric.key];
             let check = format!(
                 "service:{}:{}",
                 instances::scope(kind, instance),
@@ -1383,8 +1388,8 @@ impl Store {
                 stale(&tx, &server.id, kind, instance, Some(&check))?;
                 continue;
             };
-            let bad = value >= rule.threshold;
-            let severity = severity(rule, value);
+            let bad = value >= thresholds::activation(limits);
+            let severity = thresholds::severity(limits, value);
             let n = if let Some(suppressed) = suppressed {
                 if bad && !(severity == "critical" && suppressed.severity == "warning") {
                     s.streaks.remove(&metric.key);
@@ -1516,7 +1521,9 @@ impl Store {
                 21600
             } + server.id.bytes().map(i64::from).sum::<i64>() % 30;
         let incidents = service_incidents(&tx, &server.id, kind, instance)?;
-        s.status = assessment(kind, &s, &summary, &incidents)?.0.into();
+        s.status = assessment(kind, &s, &summary, &incidents, thresholds)?
+            .0
+            .into();
         write(&tx, &server.id, kind, &s)?;
         trim_instance(&tx, &server.id, kind, instance, at)?;
         tx.commit().map_err(err)?;
@@ -1581,6 +1588,7 @@ async fn collect_for_inner(
             .find(|s| s.id == id)
             .ok_or("The server is remote")?;
         let cp = state.store.service_state_for(&id, &kind, &instance)?;
+        let policy = crate::monitoring::effective_values(&state.store, &kind, &id, &instance)?;
         let result = async {
             ssh::deploy(&server.endpoint, &state.collector).await?;
             let bytes = ssh::service_sample(
@@ -1589,6 +1597,7 @@ async fn collect_for_inner(
                 &instance,
                 json!(cp.config),
                 serde_json::Value::Null,
+                thresholds::collector_values(&kind, &policy.thresholds),
             )
             .await?;
             state
@@ -1904,6 +1913,58 @@ mod tests {
         assert!(!reason.pending);
         assert!((reason.value.unwrap() - 1012.871287).abs() < 0.001);
         assert_eq!(db.snapshot().unwrap().incidents[0].status, "open");
+    }
+    #[test]
+    fn redis_memory_uses_configured_warning_and_critical_boundaries() {
+        let (db, server) = fixture();
+        let kind = "redis";
+        let scope = crate::monitoring::scope(kind, Some(&server.id), Some(DEFAULT));
+        let policy = db.monitoring_policy(&scope).unwrap();
+        let old = db.service_state(&server.id, kind).unwrap();
+        db.set_monitoring(
+            &scope,
+            crate::monitoring::Overrides {
+                thresholds: [(
+                    "memoryUsage".into(),
+                    [("warning".into(), 99.), ("critical".into(), 100.)].into(),
+                )]
+                .into(),
+                ..policy.overrides
+            },
+            policy.revision,
+        )
+        .unwrap();
+        let at = now();
+        let sample = |seconds, usage: Option<f64>| {
+            let mut v = wire(kind, at + seconds);
+            v["metrics"]["memoryUsage"] = json!(usage);
+            v
+        };
+        assert!(db
+            .record_service(
+                &server,
+                kind,
+                &old,
+                &serde_json::to_vec(&sample(0, Some(100.))).unwrap(),
+                at
+            )
+            .is_err());
+        let observe =
+            |seconds, usage| record(&db, &server, kind, sample(seconds, usage), at + seconds);
+        let view = || db.service_view(&server.id, kind).unwrap();
+        observe(0, Some(98.9));
+        assert_eq!(view().status, "healthy");
+        observe(60, Some(99.));
+        let pending = view().deviations.remove(0);
+        assert_eq!(pending.threshold, 99.);
+        assert!(pending.pending);
+        observe(120, None);
+        assert!(view().deviations.is_empty());
+        assert!(observe(180, Some(99.)).findings.is_empty());
+        assert_eq!(observe(240, Some(99.)).findings[0].severity, "warning");
+        assert_eq!(observe(300, Some(100.)).findings[0].severity, "critical");
+        assert_eq!(view().deviations[0].threshold, 100.);
+        assert_eq!(db.snapshot().unwrap().incidents[0].severity, "critical");
     }
 
     #[test]

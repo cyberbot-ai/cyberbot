@@ -123,6 +123,20 @@ class BackgroundLogsTests(unittest.TestCase):
             self.assertNotIn(secret,str(r))
         self.assertLessEqual(len(__import__('json').dumps(r['examples'][0]).encode()),384)
 
+    def test_custom_ssh_correlation_boundaries_apply_to_saved_buckets(self):
+        now = 1793740800
+        first = collector.LogAnalysis({'salt': 'a' * 64}, clock=now)
+        for _ in range(3):
+            first.event(self.line('Failed password for ops from 192.0.2.10 port 1', now), 'auth')
+        saved = first.result()['nextState']
+        for lookback, expected in [(300, 0), (900, 1)]:
+            with self.subTest(lookback=lookback):
+                second = collector.LogAnalysis({'salt': 'a' * 64, 'state': saved, 'thresholds': {
+                    'sshFailedAttempts': 3, 'sshLookbackSeconds': lookback,
+                }}, clock=now + 600)
+                second.event(self.line('Accepted publickey for ops from 192.0.2.10 port 1', now + 600), 'auth')
+                self.assertEqual(second.counts['ssh_suspicious_success'], expected)
+
     def test_real_errors_and_protection_failure_are_not_suppressed(self):
         a=self.analysis();a.event(self.line('ERROR Failed to start jail sshd',program='fail2ban.server'),'fail2ban')
         a.event(self.line('Out of memory: Killed process 42 token=secret',program='kernel'),'syslog')

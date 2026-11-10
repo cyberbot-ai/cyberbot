@@ -403,6 +403,7 @@ pub(crate) async fn service_sample(
     instance: &str,
     config: serde_json::Value,
     checkpoint: serde_json::Value,
+    thresholds: std::collections::BTreeMap<&'static str, u64>,
 ) -> Result<Vec<u8>, String> {
     use serde_json::{json, Value};
     #[derive(serde::Deserialize)]
@@ -417,7 +418,7 @@ pub(crate) async fn service_sample(
         details: Value,
     }
     let request = json!({"kind":"service","state":{
-        "kind":kind,"instanceId":instance,"config":config,"checkpoint":checkpoint
+        "kind":kind,"instanceId":instance,"config":config,"checkpoint":checkpoint,"thresholds":thresholds
     }});
     if request.to_string().len() > 16384 {
         return Err("Diagnostic status exceeds the limit".into());

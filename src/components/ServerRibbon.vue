@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { serverDisplayHost, serverHint } from '../serverDirectory';
 import { computed } from 'vue';
-import { health, healthLabel, serverHealthLabel, partialHealthReason, ribbonMetricsUnavailable } from '../health';
+import { health, healthLabel, resourceHealth, serverHealthLabel, partialHealthReason, ribbonMetricsUnavailable } from '../health';
 import { exactMetric, formatMetric } from '../metrics';
 import { dashboardConnectors, hideServiceUnit, serviceAvailabilityLabels, servicePriority } from '../services';
 import type { Health, Server } from '../types';
@@ -12,19 +12,18 @@ const displayHost = computed(() => serverDisplayHost(props.server.name, props.se
 const status = computed(() => health(props.server, props.now, props.interval));
 const pending = computed(() => Boolean(props.server.networkOffline || props.server.awaitingFirstCheck));
 const unavailable = computed(() => ribbonMetricsUnavailable(props.server, status.value));
-const resourceState = (value: number | null | undefined) => value == null || !Number.isFinite(value) ? 'unknown' : value >= 97 ? 'critical' : value >= 90 ? 'warning' : 'healthy';
 const metrics = computed(() => {
   const o = props.server.observation;
   const metric = (key: string, label: string, help: string, raw: number|null|undefined, state = 'healthy', unit = '%', precision = 0) => ({ key, label, help, value: unavailable.value ? '—' : formatMetric(raw,precision,unit), exact: unavailable.value ? '—' : exactMetric(raw,unit), state: pending.value ? 'unknown' : unavailable.value ? 'unavailable' : raw == null || !Number.isFinite(raw) ? 'unknown' : state });
   const list = [
-    metric('cpu', 'CPU', 'CPU usage', o?.cpuPercent, resourceState(o?.cpuPercent)),
+    metric('cpu', 'CPU', 'CPU usage', o?.cpuPercent, resourceHealth(props.server, 'cpu', o?.cpuPercent)),
     // Load has no percentage threshold: the collector does not supply a CPU count.
     metric('load', 'LA', '1-minute load average', o?.load, o?.load == null ? 'unknown' : 'healthy', '', 1),
-    metric('ram', 'RAM', 'Memory usage', o?.memoryPercent, resourceState(o?.memoryPercent)),
+    metric('ram', 'RAM', 'Memory usage', o?.memoryPercent, resourceHealth(props.server, 'memory', o?.memoryPercent)),
   ];
   if (o?.swapPercent != null) list.push(metric('swap', 'SWP', 'Swap usage', o.swapPercent));
   for (const disk of o?.disks ?? []) {
-    list.push(metric(`disk:${disk.mount}`, disk.mount === '/' ? 'DISK' : disk.mount, `Disk usage on ${disk.mount}`, disk.usedPercent, resourceState(disk.usedPercent)));
+    list.push(metric(`disk:${disk.mount}`, disk.mount === '/' ? 'DISK' : disk.mount, `Disk usage on ${disk.mount}`, disk.usedPercent, resourceHealth(props.server, 'disk', disk.usedPercent)));
     if (disk.inodePercent != null) list.push(metric(`inode:${disk.mount}`, 'INO', `Inode usage on ${disk.mount}`, disk.inodePercent));
   }
   if (!o?.disks.length) list.push(metric('disk', 'DISK', 'Disk data not available', null, 'unknown'));

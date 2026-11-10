@@ -54,3 +54,18 @@ class PostgreSQL(unittest.TestCase):
         self.assertNotRegex(c.PG_STATS,r'\bquery\b');self.assertNotIn('pg_last_xact_replay_timestamp',c.PG_STATS)
         for command in ['ALTER ', 'GRANT ', 'pg_terminate_backend','pg_cancel_backend','pg_stat_statements','pg_stat_all_tables']:
             self.assertNotIn(command,c.PG_STATS)
+
+    def test_query_and_idle_durations_reach_fixed_aggregate(self):
+        meta = {'version': 150000, 'generation': 1, 'fullStats': True, 'recovery': False,
+                'trackActivities': True, 'trackCounts': True}
+        metrics = dict(meta, disabledActivities=0, unknownWaits=0, replicationUnknown=0)
+        with patch.object(c.os.path, 'isfile', return_value=True), \
+             patch.object(c, 'service_runtime', return_value=([POSTGRES], True)), \
+             patch.object(c, 'pg_query', side_effect=[meta, metrics]) as query:
+            result = c.collect_postgresql({'config': {'enabled': True}, 'thresholds': {
+                'longQuerySeconds': 120, 'idleTransactionSeconds': 900,
+            }})
+            self.assertTrue(result['coverage'])
+            sql = query.call_args.args[1]
+            self.assertIn("interval '120 seconds'", sql)
+            self.assertIn("interval '900 seconds'", sql)
