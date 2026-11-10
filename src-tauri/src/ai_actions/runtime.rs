@@ -229,7 +229,7 @@ async fn remote(
     };
     drop(guard);
     if shell_sent.load(std::sync::atomic::Ordering::Relaxed) {
-        state.package_refresh_after_command(&request.server_id, &endpoint);
+        state.poll_after_action(&request.server_id, &endpoint);
     }
     result
 }

@@ -375,7 +375,7 @@ impl Config {
             || spec.endpoints.iter().any(|v| v == "127.0.0.1") && literal_address(&self.endpoint);
         if !valid_endpoint
             || self.port == 0
-            || !(60..=86400).contains(&self.interval_seconds)
+            || !(30..=86400).contains(&self.interval_seconds)
             || self.expected_peers > 64
             || self.user.len() > 63
             || !self.user.bytes().enumerate().all(|(i, b)| {
@@ -1089,6 +1089,7 @@ impl Store {
         write(&tx, id, kind, &s)?;
         tx.commit().map_err(err)
     }
+    #[cfg(test)]
     pub(crate) fn service_schedule(
         &self,
         servers: &[Server],
@@ -1529,7 +1530,7 @@ impl Store {
         tx.commit().map_err(err)?;
         Ok(summary)
     }
-    fn service_error(&self, id: &str, kind: &str, expected: &Checkpoint) -> Result<()> {
+    pub(crate) fn service_error(&self, id: &str, kind: &str, expected: &Checkpoint) -> Result<()> {
         let mut db = self.0.lock().map_err(err)?;
         let tx = db.transaction().map_err(err)?;
         crate::monitoring::check_commit(&tx)?;
@@ -1695,7 +1696,7 @@ mod tests {
                 .unwrap()
                 .availability
         };
-        let at = now() - 200;
+        let at = now() - 400;
         let mut sample = wire("caddy", at);
         sample["connected"] = json!(false);
         sample["complete"] = json!(false);

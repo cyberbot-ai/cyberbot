@@ -4,7 +4,7 @@ import MetricValue from '../MetricValue.vue';
 import RelativeDate from '../RelativeDate.vue';
 import { formatDuration, formatTimeRange } from '../../dateTime';
 import {computed,ref,watch,onUnmounted} from 'vue';
-import {call,preview} from '../../api';
+import {call} from '../../api';
 import type { Health, LogSummary, MonitoringValues } from '../../types';
 
 interface NginxCard {detected:boolean;status:Health|'not_detected';rps:number|null;rpsSource:string;at:number|null}
@@ -12,14 +12,13 @@ interface NginxTiming {samples:number;sumMs:number;maxMs:number;slow:number;hist
 interface NginxSummary {id:string;at:number;receivedAt:number;detected:boolean;service:string;windowSeconds:number;coverage:LogSummary['coverage'];accessComplete:boolean;errorComplete:boolean;missing:string[];rps:number|null;rpsSource:string;status:{active:number;reading:number;writing:number;waiting:number;requests:number}|null;counts:Record<string,number>;statuses:Record<string,number>;requestTime:NginxTiming;upstreamTime:NginxTiming;examples:{at:number;category:string}[];bytesRead:number;bytesReceived:number;durationMs:number;findings:LogSummary['findings']}
 interface NginxView {monitoring?:MonitoringValues;evidence?:{summaryId:string;at:number;findings:LogSummary['findings'];counts:Record<string,number>}[];summary:NginxSummary|null;fresh:boolean;error:string|null;nextCheck:number;card:NginxCard}
 
-const props=defineProps<{serverId:string;now:number;kind?:string;refreshKey?:string;displayName?:string;instanceId?:string}>();const emit=defineEmits<{updated:[]}>();
-const view=ref<NginxView>();const error=ref('');const busy=ref(false);let version=0;
+const props=defineProps<{serverId:string;now:number;kind?:string;refreshKey?:string;displayName?:string;instanceId?:string}>();
+const view=ref<NginxView>();const error=ref('');let version=0;
 const labels:Record<string,string>={requests:'Requests',unparsed:'Unrecognized records',upstream_timeout:'Upstream timeouts',upstream_connect:'Upstream connection errors',upstream_unavailable:'No available upstreams',capacity:'Connection limit',critical_error:'Critical errors',client_noise:'Client errors and scans',other_errors:'Other errors'};
 const gaps:Record<string,string>={config_limit:'Configuration limit or unsupported structure',config_unavailable:'Configuration unavailable',unsupported_log_path:'Log path outside the allowed directories',multiple_logs:'Multiple logs found. Cyberbot reads one primary log of each type.',access_filtered:'Conditional or compressed logging',source_unavailable:'Log unavailable',source_changed:'The log or format has changed',backlog_skipped:'Older entries skipped. Recent entries were read.',file_rewritten:'File rewritten',file_truncated:'File truncated',rotation_tail_lost:'End of rotated log unavailable',long_line:'Line too long',incomplete_line:'Incomplete line',invalid_encoding:'Unknown encoding',read_limit:'Read or time limit reached',unknown_format:'Unrecognized log format',unknown_timestamp:'Unrecognized timestamp',clock_changed:'Clock drift',late_records:'Late entries outside the check window',timing_unavailable:'Some request timings are unavailable',counter_reset:'Status counter reset'};
 const scope = () => ({id:props.serverId,kind:props.kind??'nginx',...(props.instanceId?{instanceId:props.instanceId}:{})});
 async function load(){const v=++version;try{const result=await call<NginxView>('service_summary',scope());if(v===version){view.value=result;error.value='';}}catch(e){if(v===version)error.value=String(e);}}
-watch(()=>props.serverId,()=>{view.value=undefined;void load();},{immediate:true});watch(()=>[props.now,props.refreshKey],()=>{if(!document.hidden&&!busy.value)void load();});onUnmounted(()=>{version++;});
-async function refresh(){busy.value=true;error.value='';try{await call('refresh_service',scope());await load();emit('updated');}catch(e){error.value=String(e);}finally{busy.value=false;}}
+watch(()=>props.serverId,()=>{view.value=undefined;void load();},{immediate:true});watch(()=>[props.now,props.refreshKey],()=>{if(!document.hidden)void load();});onUnmounted(()=>{version++;});
 const codeKeys=['2xx','3xx','4xx','5xx','1xx'];
 const codes=computed(()=>{const c=view.value?.summary?.counts??{};const items=codeKeys.filter(k=>c[k]).map(k=>({key:k,count:c[k]}));return {items,total:items.reduce((n,i)=>n+i.count,0)};});
 const other=computed(()=>Object.entries(view.value?.summary?.counts??{}).filter(([k,n])=>k!=='requests'&&!codeKeys.includes(k)&&n>0));
@@ -32,7 +31,7 @@ function p95(t:NginxTiming){if(!t.samples)return 'no data';let n=0;const bounds=
 </script>
 <template>
 <section class="nginx">
-<ServerTabBar :title="displayName ?? 'Nginx'" :busy="busy" :disabled="preview || view?.monitoring?.enabled===false" @refresh="refresh">
+<ServerTabBar :title="displayName ?? 'Nginx'">
   <span v-if="view?.summary?.detected" class="tag" :class="health">{{ healthText }}</span>
   <RelativeDate :at="view?.summary?.receivedAt" empty="Not checked yet"/>
   <template #actions><slot name="actions"/></template>
@@ -40,7 +39,7 @@ function p95(t:NginxTiming){if(!t.samples)return 'no data';let n=0;const bounds=
 <slot name="before-content"/>
 <p v-if="view?.monitoring?.enabled===false" class="notice">Monitoring is off. You can enable it in the Monitoring library.</p><p v-if="error||view?.error" class="problem" role="alert">{{error||view?.error}}</p>
 <p v-if="!view?.summary" class="note">Results will appear after the next scheduled check.</p>
-<template v-if="view?.summary"><p v-if="!view.summary.detected" class="note">Nginx was not detected. Cyberbot checks again every 6 hours.</p><template v-else>
+<template v-if="view?.summary"><p v-if="!view.summary.detected" class="note">Nginx was not detected.</p><template v-else>
 <div v-for="f in view.summary.findings" :key="f.check" class="problem">{{f.title}} · {{f.count}}</div>
 <p v-if="['warning','critical'].includes(view.card.status)&&!view.summary.findings.length" class="problem">The incident stays open until two full checks confirm recovery.</p>
 <div class="metrics">

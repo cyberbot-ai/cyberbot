@@ -44,7 +44,7 @@ onMounted(async()=>{document.addEventListener('visibilitychange',visible);if(dem
 onUnmounted(()=>{disposed=true;++epoch;off?.();offState?.();clearTimeout(timer);document.removeEventListener('visibilitychange',visible);});
 const dirty=computed(()=>!!version.value&&editor.value!==JSON.stringify(version.value.spec,null,2));
 </script>
-<template><section class="checks"><ServerTabBar title="Checks" :busy="busy" :disabled="demo" @refresh="action(async()=>{})">
+<template><section class="checks"><ServerTabBar title="Checks">
   <span v-if="view">Total {{ view.definitions.length }}</span>
   <template #actions><button class="primary" :disabled="busy||demo" @click="create">+ New check</button></template>
 </ServerTabBar>

@@ -190,6 +190,7 @@ pub struct View {
     pub next_check: i64,
     pub error: Option<String>,
     pub total: usize,
+    pub apt_error: Option<String>,
     pub offset: usize,
     pub findings: Vec<Finding>,
     pub fixes: BTreeMap<String, String>,
@@ -544,6 +545,7 @@ impl Store {
             last_success: state.last_success,
             next_check: state.next_check,
             error: state.error,
+            apt_error: state.apt_error,
             total,
             offset,
             findings,
@@ -945,47 +947,6 @@ impl Store {
         )?;
         self.commit_assessment(id, &state, assessment, &groups::versions(&packages))
     }
-    pub(crate) fn vulnerability_recovery_pending(
-        &self,
-        id: &str,
-        min_checks: u64,
-    ) -> Result<Option<bool>> {
-        let db = self.0.lock().map_err(err)?;
-        let (open, first_at): (bool, Option<i64>) = db
-            .query_row(
-                "SELECT count(*)>0, max(CASE WHEN json_extract(payload,'$.healthyStreak')=1
-                                           THEN json_extract(payload,'$.updatedAt') END)
-             FROM incidents WHERE server_id=?1 AND json_extract(payload,'$.status')='open'
-             AND json_extract(payload,'$.check') LIKE 'vuln:%'",
-                [id],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .map_err(err)?;
-        if !open {
-            return Ok(Some(false));
-        }
-        let raw: Option<(String, Option<i64>)> = db
-            .query_row(
-                "SELECT e.payload, json_extract(p.payload,'$.lastSuccess')
-             FROM vulnerability_evaluations e JOIN package_state p USING(server_id)
-             WHERE e.server_id=?1 AND json_extract(e.payload,'$.checks')>=?2
-             AND json_extract(e.payload,'$.checks')=json_extract(p.payload,'$.checks')
-             AND json_extract(e.payload,'$.root')=json_extract(p.payload,'$.root')",
-                params![id, min_checks],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .optional()
-            .map_err(err)?;
-        let Some((raw, read_at)) = raw else {
-            return Ok(None);
-        };
-        let evaluation: Evaluation = serde_json::from_str(&raw).map_err(err)?;
-        Ok(evaluation.verified_at(now()).then(|| {
-            first_at
-                .zip(read_at)
-                .is_some_and(|(first, read)| first >= read)
-        }))
-    }
     fn vulnerability_error(&self, id: &str) -> Result<()> {
         let db = self.0.lock().map_err(err)?;
         db.execute("UPDATE incidents SET payload=json_set(payload,'$.autoEligible',json('false'),'$.freshUntil',?2,'$.healthyStreak',0) WHERE server_id=?1 AND json_extract(payload,'$.check') LIKE 'vuln:%'",params![id,now()-1]).map_err(err)?;
@@ -1009,7 +970,6 @@ impl Store {
     }
 }
 pub(crate) async fn process_pending(app: Arc<AppState>) -> Result<bool> {
-    let priority = app.package_refresh.awaiting_assessment();
     let ids = {
         let db = app.store.0.lock().map_err(err)?;
         let book = crate::monitoring::Book::load(&db)?;
@@ -1025,7 +985,6 @@ pub(crate) async fn process_pending(app: Arc<AppState>) -> Result<bool> {
             .into_iter()
             .filter(|id| book.enabled("packages", id, "default"))
             .collect::<Vec<_>>();
-        ids.sort_by_key(|id| !priority.contains(id));
         ids.truncate(8);
         ids
     };
@@ -1252,7 +1211,7 @@ mod tests {
         }
         let _busy = app.collectors.try_background(&id, 1).unwrap().unwrap();
         assert!(
-            crate::monitoring::trigger("schedule", crate::packages::collect(app.clone(), id))
+            crate::monitoring::trigger("schedule", crate::packages::rescan(app.clone(), id))
                 .await
                 .err()
                 .unwrap()

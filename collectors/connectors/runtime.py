@@ -135,7 +135,7 @@ def service_profile(kind, raw):
         raise ValueError("Invalid endpoint")
     for k, lo, hi in [
         ("port", 1, 65535),
-        ("intervalSeconds", 60, 86400),
+        ("intervalSeconds", 30, 86400),
         ("expectedPeers", 0, 64),
     ]:
         if type(c[k]) != int or not lo <= c[k] <= hi:

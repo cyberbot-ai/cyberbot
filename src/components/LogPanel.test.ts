@@ -7,9 +7,17 @@ const end=new Date(2026,10,6,14,6,8).getTime()/1000;
 const view={fresh:true,shortCheck:true,lastIncomplete:null,lastSuccess:end,nextCheck:700,error:null,summary:{id:'s',at:end,remoteAt:end,windowSeconds:12,coverage:{complete:false,initial:false,sources:['auth'],gaps:[{reason:'source_unavailable',source:'syslog'}]},counts:{ssh_failed:1000,ssh_banned:10},examples:[],findings:[],learning:true,bytesReceived:800,bytesRead:100000,durationMs:20}};
 beforeEach(()=>{vi.clearAllMocks();mocks.call.mockResolvedValue(view);});
 it('reads cached coverage without remote collection or AI and explains SSH noise',async()=>{const w=mount(LogPanel,{props:{serverId:'s',now:100}});await flushPromises();expect(mocks.call).toHaveBeenCalledWith('log_summary',{id:'s'});expect(mocks.call.mock.calls).toHaveLength(1);expect(w.get('.meta .tag.ok').text()).toBe('No issues found');expect(w.text()).toContain('11/06/2026, 14:05:56–14:06:08');expect(w.text()).toContain('do not trigger incidents');expect(w.text()).toContain('Log source unavailable');w.unmount();});
-it('refreshes explicitly through the shared collector',async()=>{const w=mount(LogPanel,{props:{serverId:'s',now:100}});await flushPromises();await w.get('button').trigger('click');await flushPromises();expect(mocks.call).toHaveBeenCalledWith('diagnose',{id:'s',kind:'logs'});expect(w.emitted('updated')).toHaveLength(1);w.unmount();});
-it('shows missing coverage and failure without a retry',async()=>{mocks.call.mockImplementation(async c=>{if(c==='diagnose')throw new Error('SSH unavailable');return {...view,error:'Position retained',fresh:false};});const w=mount(LogPanel,{props:{serverId:'s',now:100}});await flushPromises();expect(w.text()).toContain('Log check failed');await w.get('button').trigger('click');await flushPromises();expect(w.get('[role="alert"]').text()).toContain('SSH unavailable');expect(mocks.call.mock.calls.filter(c=>c[0]==='diagnose')).toHaveLength(1);w.unmount();});
-
+it('reloads the saved logs after the server poll and shows a collection failure', async () => {
+  const w = mount(LogPanel, { props: { serverId: 's', now: 100, refreshKey: 'before' } });
+  await flushPromises();
+  expect(w.find('.tab-actions button').exists()).toBe(false);
+  mocks.call.mockResolvedValue({ ...view, error: 'SSH unavailable. Position retained.', fresh: false });
+  await w.setProps({ refreshKey: 'after' });
+  await flushPromises();
+  expect(w.get('[role="alert"]').text()).toContain('SSH unavailable');
+  expect(mocks.call.mock.calls).toEqual([['log_summary', { id: 's' }], ['log_summary', { id: 's' }]]);
+  w.unmount();
+});
 it('explains a Fail2ban finding and gives a read-only diagnostic step', async () => {
  mocks.call.mockResolvedValue({...view, summary:{...view.summary,
   counts:{protection_failure:1},
@@ -64,7 +72,7 @@ it('shows an SSH matching limit separately from successful reading', async () =>
  expect(w.get('.meta .tag.ok').text()).toBe('No issues found');
  expect(w.text()).toContain('Some failed attempts could not be correlated with successful logins');
  expect(w.text()).not.toContain('There are passes');
- expect(w.get('.tab-actions button').text()).toBe('Refresh');
+ expect(w.find('.tab-actions button').exists()).toBe(false);
  w.unmount();
 });
 

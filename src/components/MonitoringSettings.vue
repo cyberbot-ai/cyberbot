@@ -6,10 +6,10 @@ import type { Settings } from '../types';
 
 const props = defineProps<{ settings: Settings }>();
 const emit = defineEmits<{ saved: [settings: Settings] }>();
-const fields = ['pollSeconds', 'logPollSeconds', 'concurrency', 'connectivityProbe'] as const;
+const fields = ['pollSeconds', 'concurrency', 'connectivityProbe'] as const;
 const defaultProbe = { host: 'cloudflare-dns.com', backupHost: 'www.microsoft.com' };
-const ranges = { pollSeconds: [30, 86400], logPollSeconds: [60, 86400], concurrency: [1, 24] } as const;
-const names = { pollSeconds: 'Server polling', logPollSeconds: 'Log analysis', concurrency: 'Concurrent SSH connections' };
+const ranges = { pollSeconds: [30, 86400], concurrency: [1, 24] } as const;
+const names = { pollSeconds: 'Server polling', concurrency: 'Concurrent SSH connections' };
 const { draft, saving, error, edited, flush } = useSettingsAutosave(
   () => props.settings, fields, (draft, dirty) => {
     const patch: Partial<Settings> = {}, errors: string[] = [];
@@ -48,7 +48,6 @@ const backupHost = computed({
   <div :aria-busy="saving">
     <div class="fields">
       <label>Poll servers every<UiInput v-model.number="draft.pollSeconds" type="number" unit="seconds" min="30" max="86400" step="1" @input="edited('pollSeconds')" @blur="flush"/></label>
-      <label>Analyze logs every<UiInput v-model.number="draft.logPollSeconds" type="number" unit="seconds" min="60" max="86400" step="1" @input="edited('logPollSeconds')" @blur="flush"/></label>
       <label>Concurrent SSH connections<UiInput v-model.number="draft.concurrency" type="number" :min="ranges.concurrency[0]" :max="ranges.concurrency[1]" step="1" @input="edited('concurrency')" @blur="flush"/></label>
     </div>
     <fieldset>

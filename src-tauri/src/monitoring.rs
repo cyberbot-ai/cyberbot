@@ -54,6 +54,7 @@ fn build_catalog() -> Vec<Definition> {
     for bytes in [
         ssh::COLLECTOR,
         include_str!("store.rs"),
+        include_str!("server_poll.rs"),
         include_str!("services.rs"),
         include_str!("logs.rs"),
         include_str!("packages.rs"),
@@ -75,11 +76,11 @@ fn build_catalog() -> Vec<Definition> {
     let version = format!("{:x}", digest.finalize())[..24].to_owned();
     let mut out = Vec::new();
     for (id,name,category,runner,interval,purpose,reads,commands,rights,limits,schedule) in [
-      ("metrics","System resources and services","Operating system",Runner::Metrics,180,"CPU, memory, drives, uptime, and state of selected services","/proc (including limited information about PIDs and listening sockets), /sys, /etc/os-release, mount points; fixed list of services","python3 -I <collector>; systemctl show (fixed-services only)","Reading system information by an SSH user","Answer up to 8 KiB; transport 25 s","Every 3 minutes"),
-      ("logs","System and SSH logs","Logs",Runner::Logs,600,"Aggregates logs on the server and detects significant events. Routine SSH activity does not create incidents.","journal or /var/log/{auth.log,syslog,kern.log,fail2ban.log}, with saved read positions","python3 -I <collector>; journalctl --output=json by cursor; files are read on the server","Read access to selected logs. Missing permissions are reported.","Reads up to 2 MiB and returns up to 32 KiB with 10 redacted examples. Limits include 15 s elapsed time, 8 s CPU time, and 96 MiB of Python memory.","Every 10 minutes"),
+      ("metrics","System resources and services","Operating system",Runner::Metrics,180,"CPU, memory, drives, uptime, and state of selected services","/proc (including limited information about PIDs and listening sockets), /sys, /etc/os-release, mount points; fixed list of services","python3 -I <collector>; systemctl show (fixed-services only)","Reading system information by an SSH user","Answer up to 8 KiB; transport 25 s","With each server poll"),
+      ("logs","System and SSH logs","Logs",Runner::Logs,600,"Aggregates logs on the server and detects significant events. Routine SSH activity does not create incidents.","journal or /var/log/{auth.log,syslog,kern.log,fail2ban.log}, with saved read positions","python3 -I <collector>; journalctl --output=json by cursor; files are read on the server","Read access to selected logs. Missing permissions are reported.","Reads up to 2 MiB and returns up to 32 KiB with 10 redacted examples. Limits include 15 s elapsed time, 8 s CPU time, and 96 MiB of Python memory.","With each server poll"),
 
-      ("packages","Installed OS packages","Vulnerabilities",Runner::Packages,21600,"Track changes to installed packages and match them against critical advisories","OS release information and installed packages and versions from the dpkg database","python3 -I <collector>; dpkg-query (page-by-page)","Read access to the installed package database","Response limited to 32 KiB. Sends only changed groups and saves progress between checks.","Every 6 hours, with follow-up pages collected sooner"),
-      ("apt","Available APT fixes","Vulnerabilities",Runner::Apt,21600,"Check available versions for affected packages","The existing local APT cache","python3 -I <collector>; apt-cache policy for a verified list of packages","Read access to the existing APT cache","Bounded package count and a 32 KiB response limit","On demand"),
+      ("packages","Installed OS packages","Vulnerabilities",Runner::Packages,21600,"Track changes to installed packages and match them against critical advisories","OS release information and installed packages and versions from the dpkg database","python3 -I <collector>; dpkg-query (page-by-page)","Read access to the installed package database","Response limited to 32 KiB. Sends only changed groups and saves progress between checks.","With each server poll"),
+      ("apt","Available APT fixes","Vulnerabilities",Runner::Apt,21600,"Check available versions for affected packages","The existing local APT cache","python3 -I <collector>; apt-cache policy for a verified list of packages","Read access to the existing APT cache","Bounded package count and a 32 KiB response limit","With each server poll when affected packages have been identified"),
 
       ("custom","Custom checks","Checks",Runner::Custom,0,"Reusable rules with previews, tests, versions, and rollback","Saved metrics from the allowed fields","Declarative rules run in the isolated check runner","The user enables a reviewed version. Scheduled runs require no model.","The check editor shows language limits, versions, and tests.","Each enabled version follows its own schedule"),
       ("advisories","Vulnerability data","Official",Runner::Local,21600,"Refresh Ubuntu and Debian advisories and CVSS scores","Official distribution advisories and CVSS scores for relevant CVEs","HTTPS with conditional requests; local version matching with backport fixes","Network access to public advisory sources","Network and cache limits apply. The app stores critical records only.","Refresh advisories every 6 hours and CVSS scores in daily batches"),
@@ -87,18 +88,30 @@ fn build_catalog() -> Vec<Definition> {
       ("storage","Cleaning up local storage","Official",Runner::Local,60,"Limit the size of the database, evidence, cache, queues, and activity log","Local SQLite, cache, activity log","Fixed SQL cleanup, WAL checkpointing, and JSONL log rotation","Access only to application data","SQLite up to 1 GiB; action log up to 30 MiB; storage rules in settings","Once a minute"),
       ("transport","SSH and collector deployment","Official",Runner::Local,0,"Verify host keys and deploy immutable collector versions by hash over a bounded SSH connection pool","The SSH process uses local configuration, keys, and known_hosts","OpenSSH; test -f; sha256sum; mkdir; rsync --checksum; python3 -I","Uses the configured SSH user and host-key checks","Pool 32; keepalive 60s, idle 15 min; strict host key check; timeouts/limits required","Before an authorized check, Cyberbot transfers the collector only if the required version is missing or changed"),
     ] {
-      out.push(Definition{id:id.into(),name:name.into(),category:category.into(),runner,place:if matches!(runner,Runner::Custom|Runner::Local){"On the computer"}else{"Data collection on the server, incident rules on this computer"}.into(),purpose:purpose.into(),reads:reads.into(),commands:commands.into(),writes:if matches!(runner,Runner::Custom|Runner::Local){"Limited application state on this computer"}else{"Versioned collector files under ~/.cache/cyberbot"}.into(),rights:rights.into(),limits:limits.into(),schedule:schedule.into(),configurable:!matches!(runner,Runner::Custom|Runner::Local),interval_editable:matches!(runner,Runner::Metrics|Runner::Logs),diagnostics:false,replication:false,factory_interval:interval,thresholds:thresholds::for_definition(id, &[]),version:version.clone()});
+      out.push(Definition{id:id.into(),name:name.into(),category:category.into(),runner,place:if matches!(runner,Runner::Custom|Runner::Local){"On the computer"}else{"Data collection on the server, incident rules on this computer"}.into(),purpose:purpose.into(),reads:reads.into(),commands:commands.into(),writes:if matches!(runner,Runner::Custom|Runner::Local){"Limited application state on this computer"}else{"Versioned collector files under ~/.cache/cyberbot"}.into(),rights:rights.into(),limits:limits.into(),schedule:schedule.into(),configurable:!matches!(runner,Runner::Custom|Runner::Local),interval_editable:false,diagnostics:false,replication:false,factory_interval:interval,thresholds:thresholds::for_definition(id, &[]),version:version.clone()});
     }
     for (id, spec) in catalog {
         let thresholds = thresholds::for_definition(&id, &spec.metrics);
-        let description = spec.monitoring.unwrap_or_else(|| services::ServiceDescription {
-            purpose: spec.metrics.iter().map(|m| m.label.as_str()).collect::<Vec<_>>().join(", "),
-            reads: "Available local service status and statistics".into(),
-            commands: format!("python3 -I <collector>; connector: {}.", spec.actions.join(", ")),
-            rights: spec.rights,
-            limits: "Fixed requests to a local endpoint, with timeouts and a 32 KiB response limit".into(),
-            schedule: "Collect diagnostics every 3 minutes. With diagnostics disabled, check whether the service is present every 6 hours.".into(),
-        });
+        let description = spec
+            .monitoring
+            .unwrap_or_else(|| services::ServiceDescription {
+                purpose: spec
+                    .metrics
+                    .iter()
+                    .map(|m| m.label.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                reads: "Available local service status and statistics".into(),
+                commands: format!(
+                    "python3 -I <collector>; connector: {}.",
+                    spec.actions.join(", ")
+                ),
+                rights: spec.rights,
+                limits:
+                    "Fixed requests to a local endpoint, with timeouts and a 32 KiB response limit"
+                        .into(),
+                schedule: "With each server poll".into(),
+            });
         out.push(Definition {
             id,
             name: spec.name,
@@ -111,9 +124,9 @@ fn build_catalog() -> Vec<Definition> {
             writes: "Versioned collector files under ~/.cache/cyberbot".into(),
             rights: description.rights,
             limits: description.limits,
-            schedule: description.schedule,
+            schedule: "With each server poll".into(),
             configurable: true,
-            interval_editable: true,
+            interval_editable: false,
             diagnostics: spec.actions.iter().any(|action| action == "configure"),
             replication: spec.replication,
             factory_interval: spec.factory_interval,
@@ -189,6 +202,12 @@ fn key(s: &Scope) -> String {
     )
 }
 impl Book {
+    pub(crate) fn poll_seconds(&self) -> u64 {
+        self.rows
+            .get("metrics::")
+            .and_then(|overrides| overrides.interval_seconds)
+            .unwrap_or(180)
+    }
     fn read(db: &Connection, sql: &str, params: impl rusqlite::Params) -> Result<Self> {
         let revision = db
             .query_row(
@@ -218,7 +237,7 @@ impl Book {
         let server = key(&scope(&s.definition_id, s.server_id.as_deref(), None));
         Self::read(
             db,
-            "SELECT id,payload FROM monitoring_overrides WHERE id IN (?1,?2,?3)",
+            "SELECT id,payload FROM monitoring_overrides WHERE id IN (?1,?2,?3,'metrics::')",
             params![global, server, key(s)],
         )
     }
@@ -296,6 +315,15 @@ impl Book {
                     p.threshold_origins.insert(rule.clone(), origin.into());
                 }
             }
+        }
+        if matches!(
+            d.runner,
+            Runner::Metrics | Runner::Logs | Runner::Packages | Runner::Apt | Runner::Service
+        ) {
+            p.values.interval_seconds = self.poll_seconds();
+            p.inherited.interval_seconds = self.poll_seconds();
+            p.overrides.interval_seconds = None;
+            p.origins.insert("intervalSeconds".into(), "global".into());
         }
         Ok(p)
     }
@@ -430,14 +458,16 @@ impl Store {
                 let mut instance_overrides = BTreeMap::new();
                 if server.is_some() {
                     let prefix = key(&target);
-                    for (id, overrides) in book.rows.range(prefix.clone()..) {
+                    for id in book.rows.range(prefix.clone()..).map(|(id, _)| id) {
                         let Some(instance) = id.strip_prefix(&prefix) else {
                             break;
                         };
-                        if !instance.is_empty() && *overrides != Overrides::default() {
+                        if !instance.is_empty() {
                             let target = scope(&d.id, server, Some(instance));
-                            instance_overrides
-                                .insert(instance.to_owned(), book.resolve(&target)?.values);
+                            let policy = book.resolve(&target)?;
+                            if policy.overrides != Overrides::default() {
+                                instance_overrides.insert(instance.to_owned(), policy.values);
+                            }
                         }
                     }
                 }
@@ -464,7 +494,7 @@ impl Store {
     pub fn set_monitoring(
         &self,
         s: &Scope,
-        o: Overrides,
+        mut o: Overrides,
         expected_revision: i64,
     ) -> Result<Policy> {
         let mut db = self.0.lock().map_err(err)?;
@@ -477,10 +507,8 @@ impl Store {
                     .into(),
             );
         }
-        if (!d.interval_editable && o.interval_seconds.is_some())
-            || o.interval_seconds
-                .is_some_and(|n| n < if d.runner == Runner::Metrics { 30 } else { 60 } || n > 86400)
-            || (!d.diagnostics && o.diagnostic_enabled.is_some())
+        o.interval_seconds = None;
+        if (!d.diagnostics && o.diagnostic_enabled.is_some())
             || (!d.replication && (o.expected_peers.is_some() || o.expect_replica.is_some()))
             || o.expected_peers.is_some_and(|n| n > 64)
         {
@@ -495,6 +523,9 @@ impl Store {
         }
         let previous = book.resolve(s)?.overrides;
         if previous != o {
+            if key(s) == "metrics::" {
+                o.interval_seconds = book.rows.get("metrics::").and_then(|p| p.interval_seconds);
+            }
             put(&tx, s, &o)?;
             let pattern_limit_changed = previous.thresholds.get("new_error_pattern")
                 != o.thresholds.get("new_error_pattern");
@@ -621,18 +652,16 @@ pub fn legacy_intervals(
     old: &crate::model::Settings,
     new: &crate::model::Settings,
 ) -> Result<()> {
-    for ((kind, before), (_, after)) in legacy_interval_values(old)
-        .into_iter()
-        .zip(legacy_interval_values(new))
-    {
-        let kind = kind.as_str();
-        if before != after {
-            let s = scope(kind, None, None);
-            let mut o = Book::load(db)?.resolve(&s)?.overrides;
-            o.interval_seconds = Some(after);
-            put(db, &s, &o)?;
-            invalidate(db, &s, false)?;
-        }
+    if old.poll_seconds != new.poll_seconds {
+        let s = scope("metrics", None, None);
+        let mut o = Book::load(db)?.resolve(&s)?.overrides;
+        o.interval_seconds = Some(new.poll_seconds);
+        put(db, &s, &o)?;
+        db.execute(
+            "UPDATE monitoring_control SET revision=revision+1 WHERE id=1",
+            [],
+        )
+        .map_err(err)?;
     }
     Ok(())
 }
@@ -646,9 +675,6 @@ pub fn legacy_service(
 ) -> Result<()> {
     let s = scope(kind, Some(id), Some(instance));
     let mut o = Book::load(db)?.resolve(&s)?.overrides;
-    if old.interval_seconds != new.interval_seconds {
-        o.interval_seconds = Some(new.interval_seconds);
-    }
     if old.diagnostic_enabled != new.diagnostic_enabled {
         o.diagnostic_enabled = Some(new.diagnostic_enabled);
     }
@@ -677,6 +703,9 @@ tokio::task_local! {static EXECUTION: Execution; static TRIGGER: String;}
 pub fn context() -> Option<Execution> {
     EXECUTION.try_with(Clone::clone).ok()
 }
+pub(crate) fn with_execution<T>(execution: Execution, run: impl FnOnce() -> T) -> T {
+    EXECUTION.sync_scope(execution, run)
+}
 pub fn sync<T>(
     store: &Store,
     kind: &str,
@@ -694,6 +723,7 @@ pub fn sync<T>(
     };
     EXECUTION.sync_scope(e, f)
 }
+#[cfg(test)]
 pub fn next_candidate(
     book: &Book,
     server: &str,
@@ -766,7 +796,7 @@ pub fn sources(id: &str) -> Result<Vec<Source>> {
         });
     }
     let (name, text) = match d.runner {
-        Runner::Metrics => ("ssh.rs", include_str!("ssh.rs")),
+        Runner::Metrics => ("server_poll.rs", include_str!("server_poll.rs")),
         Runner::Logs => ("logs.rs", include_str!("logs.rs")),
         Runner::Packages | Runner::Apt => ("packages.rs", include_str!("packages.rs")),
         Runner::Service => ("services.rs and catalog.json", include_str!("services.rs")),
@@ -864,7 +894,7 @@ mod tests {
                 ..Default::default()
             },
         );
-        assert_eq!(changed.values.interval_seconds, 300);
+        assert_eq!(changed.values.interval_seconds, 180);
         assert_eq!(changed.values.thresholds["blocked"]["warning"], 3.);
         assert_eq!(changed.inherited.thresholds["memoryUsage"], pair(95., 99.));
         assert_eq!(changed.threshold_origins["blocked"], "server");
@@ -984,16 +1014,16 @@ mod tests {
         );
         let global = db.monitoring_library(None).unwrap();
         assert!(!global.contains_key("transport"));
-        assert_eq!(global["redis"].values.interval_seconds, 300);
+        assert_eq!(global["redis"].values.interval_seconds, 180);
         assert!(global["redis"].instance_overrides.is_empty());
         assert!(!global["metrics"].server_override);
 
         let scoped = db.monitoring_library(Some(&id)).unwrap();
         assert!(!scoped["redis"].instance_overrides["default"].diagnostic_enabled);
-        assert_eq!(scoped["redis"].values.interval_seconds, 300);
+        assert_eq!(scoped["redis"].values.interval_seconds, 180);
         assert!(!scoped["redis"].server_override);
-        assert!(scoped["metrics"].server_override);
-        assert_eq!(scoped["metrics"].values.interval_seconds, 90);
+        assert!(!scoped["metrics"].server_override);
+        assert_eq!(scoped["metrics"].values.interval_seconds, 180);
         assert!(!scoped["logs"].server_override);
         assert!(scoped["logs"].instance_overrides.is_empty());
 
@@ -1012,7 +1042,7 @@ mod tests {
         let instance = scope("redis", Some(&id), Some(&extra.id));
         assert_eq!(
             db.monitoring_policy(&instance).unwrap().origins["intervalSeconds"],
-            "factory"
+            "global"
         );
         change(
             &db,
@@ -1042,7 +1072,7 @@ mod tests {
         );
         assert!(p.values.enabled && p.values.diagnostic_enabled);
         assert!(!p.inherited.enabled);
-        assert_eq!(p.values.interval_seconds, 300);
+        assert_eq!(p.values.interval_seconds, 180);
         assert_eq!(p.origins["enabled"], "instance");
         assert_eq!(p.origins["intervalSeconds"], "global");
         assert!(
@@ -1100,7 +1130,7 @@ mod tests {
             effective_values(&db, "nginx", &id, "")
                 .unwrap()
                 .interval_seconds,
-            900
+            480
         );
         let mut c = db
             .service_state_for(&id, "redis", "default")
@@ -1116,7 +1146,7 @@ mod tests {
         let s = scope("redis", Some(&id), Some("default"));
         let p = db.monitoring_policy(&s).unwrap();
         assert!(!p.values.diagnostic_enabled);
-        assert_eq!(p.values.interval_seconds, 240);
+        assert_eq!(p.values.interval_seconds, 480);
         change(&db, &s, Overrides::default());
         let c = db
             .service_state_for(&id, "redis", "default")
@@ -1126,9 +1156,9 @@ mod tests {
         assert_eq!(c.auto_endpoint, Some(false));
         assert_eq!(c.user, "diagnostic");
         assert!(c.enabled);
-        assert_eq!(c.interval_seconds, 180);
+        assert_eq!(c.interval_seconds, 480);
         change(&db, &scope("metrics", None, None), Overrides::default());
-        assert_eq!(db.settings().unwrap().poll_seconds, 180);
+        assert_eq!(db.settings().unwrap().poll_seconds, 480);
     }
     #[tokio::test]
     async fn disabled_collectors_and_mcp_never_reach_ssh() {
@@ -1166,12 +1196,7 @@ mod tests {
             .err()
             .unwrap()
             .contains("disabled"));
-        assert!(crate::packages::collect(app.clone(), id.clone())
-            .await
-            .err()
-            .unwrap()
-            .contains("disabled"));
-        assert!(crate::packages::collect_apt(app.clone(), id.clone())
+        assert!(crate::packages::rescan(app.clone(), id.clone())
             .await
             .err()
             .unwrap()
@@ -1269,7 +1294,7 @@ mod tests {
         assert!(db.snapshot().unwrap().servers[0].last_attempt.is_none());
     }
     #[test]
-    fn v13_migration_preserves_existing_intervals_profiles_and_history() {
+    fn v13_migration_preserves_global_interval_profiles_and_history() {
         let tmp = tempfile::tempdir().unwrap();
         let file = tmp.path().join("db.sqlite");
         let db = Store::open(&file).unwrap();
@@ -1307,11 +1332,11 @@ mod tests {
             effective_values(&db, "nginx", &id, "")
                 .unwrap()
                 .interval_seconds,
-            1200
+            450
         );
         let cp = db.service_state_for(&id, "redis", "default").unwrap();
         assert!(cp.config.enabled);
-        assert_eq!(cp.config.interval_seconds, 360);
+        assert_eq!(cp.config.interval_seconds, 450);
         assert_eq!(cp.config.port, 6382);
         assert!(db.snapshot().unwrap().incidents.is_empty());
     }

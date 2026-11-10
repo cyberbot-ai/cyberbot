@@ -189,6 +189,7 @@ describe('fleet ribbon integration', () => {
         }
         observation.at = now;
         server.lastError = null;
+        return { updated: 4, failed: [] };
       }
       if (command === 'history') return [];
       if (command === 'log_summary') return logs;
@@ -203,10 +204,10 @@ describe('fleet ribbon integration', () => {
     await flushPromises();
     await app.get('button.ribbon.stale').trigger('click');
     await flushPromises();
-    const refresh = () => app.findAll('.detail-dialog button').find(button => button.text() === 'Refresh')!;
+    const refresh = () => app.findAll('.detail-dialog button').find(button => button.text() === 'Refresh server')!;
     await refresh().trigger('click');
     await flushPromises();
-    expect(app.get('.detail-dialog button[aria-busy="true"]').text()).toBe('Update…');
+    expect(app.get('.detail-dialog button[aria-busy="true"]').text()).toBe('Refreshing…');
     expect(app.find('.detail-dialog [role="alert"]').exists()).toBe(false);
     failPoll();
     await flushPromises();

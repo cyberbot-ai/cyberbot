@@ -152,7 +152,7 @@ impl Store {
         rows.map(|r| serde_json::from_str(&r.map_err(err)?).map_err(err))
             .collect()
     }
-    fn read_server(db: &Connection, id: &str) -> Result<Server> {
+    pub(crate) fn read_server(db: &Connection, id: &str) -> Result<Server> {
         let payload: String = db
             .query_row("SELECT payload FROM servers WHERE id=?1", [id], |r| {
                 r.get(0)
@@ -168,42 +168,13 @@ impl Store {
     pub(crate) fn server(&self, id: &str) -> Result<Server> {
         Self::read_server(&*self.0.lock().map_err(err)?, id)
     }
-    pub(crate) fn startup_metrics_targets(&self) -> Result<Vec<String>> {
+    pub(crate) fn poll_targets(&self) -> Result<(Vec<Server>, Settings)> {
         let db = self.0.lock().map_err(err)?;
-        if Self::read_settings(&db)?.paused {
-            return Ok(vec![]);
-        }
-        crate::storage::admit(&db)?;
-        let servers = Self::list::<Server>(&db, "servers")?;
-        let book = crate::monitoring::Book::load(&db)?;
-        let mut first = self.1.lock().map_err(err)?;
-        first.sync(&servers, now())?;
-        let mut pending: Vec<_> = servers
-            .into_iter()
-            .filter_map(|server| {
-                let due = first.pending(&server)?;
-                (due != i64::MAX && book.enabled("metrics", &server.id, ""))
-                    .then_some((due, server.id))
-            })
-            .collect();
-        pending.sort_unstable();
-        Ok(pending.into_iter().map(|(_, id)| id).collect())
+        Ok((Self::list(&db, "servers")?, Self::read_settings(&db)?))
     }
-    pub(crate) fn startup_metrics_server(&self, id: &str) -> Result<Option<Server>> {
-        let db = self.0.lock().map_err(err)?;
-        let settings = Self::read_settings(&db)?;
-        if settings.paused {
-            return Ok(None);
-        }
-        crate::monitoring::check_commit(&db)?;
-        let server = Self::read_server(&db, id)?;
-        let first = self.1.lock().map_err(err)?;
-        Ok(first
-            .pending(&server)
-            .filter(|&due| due != i64::MAX)
-            .map(|_| server))
+    pub(crate) fn polls_suspended(&self) -> bool {
+        self.1.lock().is_ok_and(|runtime| runtime.suspended())
     }
-
     pub fn snapshot(&self) -> Result<Snapshot> {
         let db = self.0.lock().map_err(err)?;
         let book = crate::monitoring::Book::load(&db)?;
@@ -279,9 +250,6 @@ impl Store {
             .map_err(err)?
         {
             s.poll_seconds = crate::monitoring::effective(db, "metrics", "", "")?
-                .values
-                .interval_seconds;
-            s.log_poll_seconds = crate::monitoring::effective(db, "logs", "", "")?
                 .values
                 .interval_seconds;
         }
@@ -468,7 +436,6 @@ impl Store {
         rows.map(|r| serde_json::from_str(&r.map_err(err)?).map_err(err))
             .collect()
     }
-    #[cfg(test)]
     pub(crate) fn reset_metrics_checks(&self) -> Result<()> {
         let _db = self.0.lock().map_err(err)?;
         self.1.lock().map_err(err)?.reset();
@@ -513,6 +480,20 @@ impl Store {
             return Err("The server connection has changed".into());
         }
         self.1.lock().map_err(err)?.begin(&current, now())
+    }
+    pub(crate) fn check_poll_attempt(
+        &self,
+        attempt: &crate::first_check::Attempt,
+        server: &Server,
+    ) -> Result<()> {
+        let db = self.0.lock().map_err(err)?;
+        crate::monitoring::check_commit(&db)?;
+        let current = Self::read_server(&db, &server.id)?;
+        if self.1.lock().map_err(err)?.accepts(attempt, &current) {
+            Ok(())
+        } else {
+            Err("Check response is outdated after sleep or server change".into())
+        }
     }
     #[cfg(test)]
     pub fn record(

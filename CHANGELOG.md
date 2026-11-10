@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.12.0
+
+- Poll each server over one SSH command at the shared interval, with a single refresh button for metrics, services, logs, and packages.
+- Check the server’s APT cache when affected packages are known.
+
 ## 0.11.0
 
 - Search for servers by name or SSH address in the Library's server filters.

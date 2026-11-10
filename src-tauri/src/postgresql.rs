@@ -63,7 +63,7 @@ impl Config {
             || self.port == 0
             || !name(&self.database)
             || (!self.user.is_empty() && !name(&self.user))
-            || !(60..=86400).contains(&self.interval_seconds)
+            || !(30..=86400).contains(&self.interval_seconds)
             || self.expected_streaming > 64
         {
             return Err("Unacceptable PostgreSQL profile: local endpoint and no connection string names".into());
@@ -886,7 +886,7 @@ impl Store {
         tx.commit().map_err(err)?;
         Ok(summary)
     }
-    fn postgresql_error(&self, id: &str, expected: &Checkpoint) -> Result<()> {
+    pub(crate) fn postgresql_error(&self, id: &str, expected: &Checkpoint) -> Result<()> {
         let mut db = self.0.lock().map_err(err)?;
         let tx = db.transaction().map_err(err)?;
         crate::monitoring::check_commit(&tx)?;

@@ -54,8 +54,8 @@ function schedule(definition: MonitoringDefinition) {
   if (!entry.serverOverride && exceptions.length > 1) return 'Connected';
   const values = !entry.serverOverride && exceptions.length === 1 ? entry.instanceOverrides[exceptions[0]] : entry.values;
   if (!values.enabled) return 'Turned off';
-  if (definition.diagnostics && !values.diagnosticEnabled) return 'Every 6 h';
-  return definition.intervalEditable ? 'Every ' + monitoringInterval(values.intervalSeconds) : definition.schedule;
+  if (definition.runner === 'apt') return 'When affected packages are known';
+  return 'Every ' + monitoringInterval(values.intervalSeconds);
 }
 
 async function loadEntries(keep = false) {

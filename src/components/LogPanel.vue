@@ -4,10 +4,10 @@ import MetricValue from './MetricValue.vue';
 import RelativeDate from './RelativeDate.vue';
 import { formatTimeRange } from '../dateTime';
 import { computed,ref,watch,onUnmounted } from 'vue';
-import {call,preview} from '../api';
+import {call} from '../api';
 import type {LogView} from '../types';
-const props=defineProps<{serverId:string;now:number}>();const emit=defineEmits<{updated:[]}>();
-const view=ref<LogView>();const error=ref('');const busy=ref(false);
+const props=defineProps<{serverId:string;now:number;refreshKey?:string}>();
+const view=ref<LogView>();const error=ref('');
 const labels:Record<string,string>={ssh_failed:'Failed logins',ssh_accepted:'Successful logins',ssh_noise:'Other SSH activity',ssh_banned:'Fail2ban bans',ssh_blocked:'Firewall blocks',ssh_failures_mitigated:'Attempts from blocked addresses',system_error:'System errors',oom:'Out-of-memory events',disk_io:'Disk errors',service_crash:'Service failures',protection_failure:'Fail2ban errors',ssh_suspicious_success:'Suspicious successful logins'};
 const fail2banReasons = new Map([
   ['Fail2ban log source missing', 'Fail2ban could not find its log during a check.'],
@@ -40,12 +40,11 @@ const outcome = computed(() => {
 let version=0;
 async function load(){const id=props.serverId;const v=++version;try{const result=await call<LogView>('log_summary',{id});if(v===version)view.value=result;}catch(e){if(v===version)error.value=String(e);}}
 watch(()=>props.serverId,()=>{view.value=undefined;error.value='';void load();},{immediate:true});
-watch(()=>props.now,()=>{if(!document.hidden&&!busy.value)void load();});onUnmounted(()=>{version++;});
-async function refresh(){busy.value=true;error.value='';try{await call('diagnose',{id:props.serverId,kind:'logs'});await load();emit('updated');}catch(e){error.value=String(e);await load();}finally{busy.value=false;}}
+watch(()=>[props.now, props.refreshKey],()=>{if(!document.hidden)void load();});onUnmounted(()=>{version++;});
 </script>
 <template>
 <section class="logs">
-<ServerTabBar title="System and SSH logs" :busy="busy" :disabled="preview || view?.monitoring?.enabled===false" @refresh="refresh">
+<ServerTabBar title="System and SSH logs">
   <span v-if="outcome" class="tag" :class="outcome.tone">{{ outcome.label }}</span>
   <RelativeDate :at="view?.lastSuccess" empty="Not checked yet"/>
 </ServerTabBar>

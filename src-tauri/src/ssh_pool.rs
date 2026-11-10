@@ -400,6 +400,7 @@ impl Pool {
         *files = Some(current);
         Ok(())
     }
+    #[cfg(test)]
     pub(crate) fn startup_until(&self, deadline: Option<Instant>) {
         if let Ok(mut state) = self.0.state.lock() {
             state.startup_until = deadline;

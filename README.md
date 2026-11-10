@@ -54,7 +54,7 @@ Expand a feature to see the details and screenshots.
 - Watch CPU, memory, swap, load, disk space, inodes, detected services, and open incidents for every server on one screen.
 - Filter by **Needs attention**, **Healthy**, or **Insufficient data**, search by name or address, and sort by any resource metric to compare servers.
 - Add a list of SSH addresses or import a static Ansible inventory in INI, YAML, or JSON. Cyberbot rereads inventories every five minutes and keeps the last valid list if an update fails. Host sorting groups inventory servers by domain. See [inventory formats](docs/INVENTORY.md).
-- Set separate intervals for server polling and log analysis, and allow up to 24 concurrent background SSH checks. Pause or resume polling from the sidebar. Cyberbot keeps polling from the menu bar after you close the window and stops while your Mac is asleep.
+- Set one interval for server metrics, logs, service diagnostics, and installed packages, and allow up to 24 concurrent background polls. Pause or resume polling from the sidebar. Cyberbot keeps polling from the menu bar after you close the window and stops while your Mac is asleep.
 
 </details>
 
@@ -63,7 +63,7 @@ Expand a feature to see the details and screenshots.
 
 Open a server to see its overview, incidents, services, logs, vulnerabilities, checks, AI conversations, and console in one panel. You can open that panel in a separate window.
 
-- The overview shows current metrics, recent CPU history, space and inode usage by mount point, OS details, and systemd service status. You can refresh the metrics on demand.
+- The overview shows current metrics, recent CPU history, space and inode usage by mount point, OS details, and systemd service status. Use the refresh button next to the server name to poll the server on demand.
 - The **Console** tab connects over SSH when you open it and keeps the interactive session open while you switch tabs.
 - Polling, file sync, and the console share pooled OpenSSH connections. Host aliases, keys, and jump hosts from your SSH configuration keep working.
 
@@ -72,7 +72,7 @@ Open a server to see its overview, incidents, services, logs, vulnerabilities, c
 <details>
 <summary><strong>Service connectors.</strong> 18 built-in connectors for databases, proxies, containers, and more.</summary>
 
-Cyberbot detects application services and monitors each one separately from the host, with its own schedule, history, and incidents. Several connectors support multiple instances on one server, such as two PostgreSQL clusters on different ports.
+Cyberbot tracks each detected service with its own profile, history, and incidents during the shared server poll. Several connectors support multiple instances on one server, such as two PostgreSQL clusters on different ports.
 
 | Category | Built-in connectors |
 | --- | --- |
@@ -107,7 +107,7 @@ Diagnostics use local endpoints and credentials that already exist on the server
 - Cyberbot matches installed packages against critical advisories for supported Debian and Ubuntu releases. Matching runs locally and does not use AI.
 - Open **Library → Vulnerabilities** to browse local advisories and findings across the fleet. Search by CVE, title, package, or server, and filter by server or finding status.
 - On a server, compare installed and fixed versions and check availability in the server's APT cache. Copy an upgrade command for one finding or a combined command for multiple eligible findings across all pages. Hide a package until its installed version changes, or restore it from the hidden list.
-- Checks run on a schedule, and a new finding opens an incident. You can also rescan packages, refresh advisory data, or use **Ask AI** to investigate whether a finding is exploitable on that server.
+- Checks run on a schedule, and a new finding opens an incident. You can also refresh the server, update the vulnerability database from the Library, or use **Ask AI** to investigate whether a finding is exploitable on that server.
 
 </details>
 

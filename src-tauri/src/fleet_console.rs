@@ -441,7 +441,6 @@ async fn run_target(
         Some(batch_id.to_string()),
     );
     let mut started = None;
-    let mut launched = false;
     let result = async {
         let _guard = tokio::select! {
             biased;
@@ -469,7 +468,7 @@ async fn run_target(
         state.fleet_console.change(batch_id, |batch| {
             batch.rows[index].row.status = Status::Running
         });
-        let result = capture(&args, &cancel, &lease, &mut launched).await;
+        let result = capture(&args, &cancel, &lease).await;
         if result.code == Some(255) {
             lease.invalidate();
         }
@@ -477,9 +476,6 @@ async fn run_target(
     }
     .await
     .unwrap_or_else(Outcome::failed);
-    if launched {
-        state.package_refresh_after_command(&target.label.id, &target.endpoint);
-    }
     let ok = result.ok();
     span.finish(if ok { "completed" } else { "failed" });
     state.fleet_console.change(batch_id, |batch| {
@@ -526,12 +522,7 @@ async fn read_output(
     }
 }
 
-async fn capture(
-    args: &[String],
-    cancel: &CancellationToken,
-    lease: &ssh_pool::Lease,
-    launched: &mut bool,
-) -> Outcome {
+async fn capture(args: &[String], cancel: &CancellationToken, lease: &ssh_pool::Lease) -> Outcome {
     let mut command = Command::new("/usr/bin/ssh");
     command
         .args(args)
@@ -544,7 +535,6 @@ async fn capture(
     let Ok(mut child) = command.spawn() else {
         return Outcome::failed("Could not start SSH");
     };
-    *launched = true;
     let Some(_guard) = child.id().and_then(|id| GroupGuard::register(id).ok()) else {
         return Outcome::failed("Failed to register the SSH process");
     };
@@ -684,6 +674,12 @@ mod tests {
         let id = &server.id;
         let before = state.store.cached_package_state(id).unwrap();
         assert_eq!(state.store.vulnerability_view(id, 0).unwrap().total, 1);
+        assert!(state
+            .store
+            .apt_targets(id)
+            .unwrap()
+            .iter()
+            .any(|name| name.starts_with("cyberbot-pkg-fixture:")));
         assert_eq!(snapshot.incidents[0].status, "open");
 
         let ticket = state
@@ -709,48 +705,23 @@ mod tests {
             .code;
         assert_eq!(code, Some(7));
 
+        assert!(!state.polls.forced(id));
+        assert_eq!(
+            state.store.cached_package_state(id).unwrap().checks,
+            before.checks
+        );
         let rescan = || async {
-            let at = *state
-                .package_refresh
-                .due()
-                .get(id)
-                .expect("a package refresh should be queued");
-            tokio::time::sleep_until(at.into()).await;
-            let job = state
-                .package_refresh
-                .claim(id, &server.endpoint, Instant::now())
+            crate::server_poll::refresh(state.clone(), id.clone())
+                .await
                 .unwrap();
-            crate::monitoring::trigger(
-                "schedule",
-                crate::packages::refresh_after_ssh(state.clone(), id.clone(), job),
-            )
-            .await;
         };
-        // Pause after dispatch is selected, and then occupy the same server with a normal check.
-        let mut settings = state.store.settings().unwrap();
-        settings.paused = true;
-        state.store.save_settings(&settings).unwrap();
-        rescan().await;
-        assert_eq!(
-            state.store.cached_package_state(id).unwrap().checks,
-            before.checks
-        );
-        settings.paused = false;
-        state.store.save_settings(&settings).unwrap();
-        let occupied = state.collectors.try_background(id, 1).unwrap().unwrap();
-        rescan().await;
-        assert_eq!(
-            state.store.cached_package_state(id).unwrap().checks,
-            before.checks
-        );
-        drop(occupied);
         rescan().await;
         let fixed = state.store.cached_package_state(id).unwrap();
         assert_eq!(fixed.checks, before.checks + 1);
         assert_ne!(fixed.root, before.root);
         assert_eq!(
             state
-                .package_refresh
+                .advisory_priority
                 .take_advisories()
                 .into_iter()
                 .collect::<Vec<_>>(),
@@ -768,10 +739,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(state.store.vulnerability_view(id, 0).unwrap().total, 1);
-        state
-            .package_refresh
-            .reconcile_assessments(&state.store, Instant::now());
-        assert!(state.package_refresh.due().is_empty());
 
         // Simulate the successful promotion of the local bulletin fixture for the new root.
         state.store.0.lock().unwrap().execute(
@@ -801,9 +768,6 @@ mod tests {
             1
         );
 
-        state
-            .package_refresh
-            .reconcile_assessments(&state.store, Instant::now());
         rescan().await;
         crate::vulnerabilities::process_pending(state.clone())
             .await
@@ -816,10 +780,6 @@ mod tests {
             state.store.snapshot().unwrap().incidents[0].status,
             "resolved"
         );
-        state
-            .package_refresh
-            .reconcile_assessments(&state.store, Instant::now());
-        assert!(state.package_refresh.due().is_empty());
     }
 
     #[tokio::test]

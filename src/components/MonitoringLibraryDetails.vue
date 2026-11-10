@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import ActivityServerLink from './ActivityServerLink.vue';
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { call, preview } from '../api';
 import { monitoringInterval } from '../monitoring';
 import type { ActivityEvent, ActivityPage, MonitoringDefinition, MonitoringOverrides, MonitoringPolicy, MonitoringScalarField, MonitoringScope, MonitoringThresholdField, MonitoringThresholdRule, MonitoringValues, ServiceInstance } from '../types';
@@ -25,11 +25,6 @@ const loading = ref(false);
 const saving = ref(false);
 const error = ref('');
 const instanceError = ref('');
-const intervalError = ref('');
-const intervalText = ref('');
-const editing = ref(false);
-const intervalField = ref<InstanceType<typeof UiInput>>();
-const intervalButton = ref<HTMLButtonElement>();
 const thresholdDrafts = ref<Record<string, Record<string, string | number>>>({});
 const thresholdErrors = ref<Record<string, string>>({});
 const sources = ref<{ name: string; text: string }[]>();
@@ -49,7 +44,6 @@ const scope = computed<MonitoringScope>(() => ({
   serverId: props.server || null,
   instanceId: instance.value || null,
 }));
-const minInterval = props.definition.runner === 'metrics' ? 30 : 60;
 const scopeOrigin: Record<string, string> = {
   factory: 'Factory default', global: 'From global settings', server: 'From server settings', instance: 'Connection override',
 };
@@ -62,8 +56,6 @@ const hasOverride = (field: MonitoringScalarField) => policy.value?.overrides[fi
 async function loadPolicy() {
   if (!props.definition.configurable) return;
   const current = ++generation;
-  editing.value = false;
-  intervalError.value = '';
   thresholdDrafts.value = {};
   thresholdErrors.value = {};
   policy.value = undefined;
@@ -140,40 +132,6 @@ async function setPeers(event: Event) {
     return;
   }
   input.value = String(policy.value?.values.expectedPeers ?? '');
-}
-
-async function openInterval() {
-  if (!policy.value) return;
-  intervalText.value = monitoringInterval(policy.value.values.intervalSeconds);
-  editing.value = true;
-  intervalError.value = '';
-  await nextTick();
-  const field = intervalField.value?.el;
-  field?.focus();
-  field?.setSelectionRange(0, intervalText.value.indexOf(' '));
-}
-async function closeInterval() {
-  editing.value = false;
-  intervalError.value = '';
-  await nextTick();
-  intervalButton.value?.focus();
-}
-async function saveInterval() {
-  if (!policy.value || saving.value || !editing.value) return;
-  const current = policy.value.values.intervalSeconds;
-  const match = /^(\d+)\s*(s|min|h)?$/iu.exec(intervalText.value.trim());
-  const units: Record<string, number> = { s: 1, min: 60, h: 3600 };
-  const unit = match?.[2]?.toLowerCase() ?? monitoringInterval(current).split(' ')[1];
-  const seconds = match ? Number(match[1]) * units[unit] : NaN;
-  if (!Number.isSafeInteger(seconds) || seconds < minInterval || seconds > 86400) {
-    intervalError.value = `Enter an interval from ${minInterval} s to 24 h, such as 2 min or 90 s.`;
-    intervalField.value?.focus();
-    return;
-  }
-  if (seconds === current || await change('intervalSeconds', seconds)) await closeInterval();
-}
-async function resetInterval() {
-  if (await change('intervalSeconds', null)) await closeInterval();
 }
 
 function currentThreshold(rule: string, field: MonitoringThresholdField) {
@@ -284,26 +242,9 @@ onBeforeUnmount(() => {
     <p v-if="error" class="problem" role="alert">{{ error }} <RefreshButton :disabled="saving" @click="refreshPolicy">Refresh settings</RefreshButton></p>
     <p v-if="loading" class="hint" role="status">Loading settings…</p>
     <template v-else-if="policy">
-      <div v-if="definition.intervalEditable" class="interval">
-        <span>Check interval</span>
-        <div class="interval-value">
-          <template v-if="editing">
-            <UiInput
-              ref="intervalField" v-model="intervalText" compact class="interval-input" type="text"
-              aria-label="Check interval" :aria-invalid="!!intervalError" :disabled="saving"
-              @input="intervalError = ''" @keydown.enter.prevent="saveInterval" @keydown.esc.stop.prevent="closeInterval"
-            />
-            <button type="button" class="icon-button" aria-label="Apply interval" :disabled="saving" @click="saveInterval"><UiIcon name="check" :size="14"/></button>
-            <button type="button" class="icon-button" aria-label="Cancel interval change" :disabled="saving" @click="closeInterval"><UiIcon name="close" :size="14"/></button>
-          </template>
-          <button v-else ref="intervalButton" type="button" class="link interval-button" :disabled="saving || preview" :aria-label="`Change check interval. Current interval ${monitoringInterval(policy.values.intervalSeconds)}`" @click="openInterval">
-            {{ monitoringInterval(policy.values.intervalSeconds) }}
-          </button>
-          <small>{{ server && hasOverride('intervalSeconds') ? (instance ? 'Connection override' : 'Server override') : scopeOrigin[policy.origins.intervalSeconds] }}</small>
-          <button v-if="hasOverride('intervalSeconds') && !editing" type="button" class="link" :disabled="saving || preview" @click="resetInterval">{{ resetLabel }}</button>
-        </div>
-      </div>
-      <p v-if="intervalError" class="problem" role="alert">{{ intervalError }}</p>
+      <p v-if="['metrics', 'logs', 'service', 'packages', 'apt'].includes(definition.runner)" class="hint">
+        Server polling interval · {{ monitoringInterval(policy.values.intervalSeconds) }}
+      </p>
       <details v-if="definition.thresholds?.length">
         <summary>Alert thresholds</summary>
         <form v-for="rule in definition.thresholds" :key="rule.key" class="threshold" novalidate @submit.prevent="saveThreshold(rule)">
@@ -338,7 +279,7 @@ onBeforeUnmount(() => {
         <button v-if="hasOverride('diagnosticEnabled')" type="button" class="link" :disabled="saving || preview" @click="change('diagnosticEnabled', null)">{{ resetLabel }}</button>
       </div>
       <p v-if="!policy.values.enabled" class="hint">Check disabled. Existing incidents stay open.</p>
-      <p v-else-if="definition.diagnostics && !policy.values.diagnosticEnabled" class="hint">Cyberbot checks whether the service is present every 6 hours.</p>
+      <p v-else-if="definition.diagnostics && !policy.values.diagnosticEnabled" class="hint">Each server poll checks whether the service is present.</p>
       <details v-if="definition.replication">
         <summary>Replication</summary>
         <div class="toggle">
@@ -402,11 +343,8 @@ onBeforeUnmount(() => {
 .details{padding:10px 12px 12px 31px}
 .purpose,.hint{margin:0 0 8px;color:var(--muted)}
 .hint{font-size:12px}
-.interval,.toggle,.connection,.interval-value,.toggle label{display:flex;align-items:center;gap:5px 9px;flex-wrap:wrap}
-.interval,.toggle,.connection{margin:6px 0}
-.interval>span{min-width:120px}
-.interval-value{min-width:0}
-.interval-input{--field-width:86px}
+.toggle,.connection,.toggle label{display:flex;align-items:center;gap:5px 9px;flex-wrap:wrap}
+.toggle,.connection{margin:6px 0}
 .threshold{margin:9px 0}
 .threshold fieldset{min-width:0;margin:0;padding:6px 9px 9px;border:1px solid var(--line);border-radius:6px}
 .threshold legend{padding:0 4px;font-size:13px;font-weight:600}
@@ -417,7 +355,6 @@ onBeforeUnmount(() => {
 .toggle input{margin:0;accent-color:var(--accent)}
 small{color:var(--muted);font-size:12px}
 .link{border:0;padding:0;background:none;color:var(--accent);text-decoration:underline;text-underline-offset:3px;font-size:12px}
-.interval-button{font-weight:600;font-size:13px;font-variant-numeric:tabular-nums}
 .icon-button{display:inline-grid;place-items:center;width:25px;height:25px;padding:0;color:var(--accent);background:var(--surface);border:1px solid var(--line);border-radius:5px}
 .icon-button:hover:not(:disabled){background:var(--hover)}
 .problem{color:var(--danger);background:var(--danger-bg);padding:6px 9px;border-radius:6px}
@@ -434,5 +371,5 @@ pre{font:11px/1.5 ui-monospace,monospace;background:var(--subtle);padding:10px;b
 .history :is(th,td){padding:6px;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
 .history th{color:var(--muted);font-weight:500}
 .failed{color:var(--danger)}
-@media(max-width:650px){.details{padding-left:12px}.interval>span{min-width:0}.contract div{grid-template-columns:1fr;gap:0}}
+@media(max-width:650px){.details{padding-left:12px}.contract div{grid-template-columns:1fr;gap:0}}
 </style>

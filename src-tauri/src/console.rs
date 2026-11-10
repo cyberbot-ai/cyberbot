@@ -89,7 +89,6 @@ struct Terminal {
     input: mpsc::Receiver<Vec<u8>>,
     size: watch::Receiver<Size>,
     ack: watch::Receiver<u32>,
-    submitted: bool,
 }
 
 impl Sessions {
@@ -130,7 +129,6 @@ impl Sessions {
                 input: input_rx,
                 size: size_rx,
                 ack: ack_rx,
-                submitted: false,
             },
         };
         sessions.insert(owner.to_owned(), entry);
@@ -238,7 +236,7 @@ pub(crate) async fn console_open(
     if state.store.server_endpoint(&server_id)? != endpoint {
         return Err("Server connection parameters have changed".into());
     }
-    tauri::async_runtime::spawn(session.run(state.inner().clone(), server_id, endpoint, on_event));
+    tauri::async_runtime::spawn(session.run(endpoint, on_event));
     Ok(id)
 }
 
@@ -258,50 +256,20 @@ pub(crate) fn console_close(window: WebviewWindow, state: State<'_, Arc<AppState
 }
 
 impl Session {
-    async fn run(
-        mut self,
-        state: Arc<AppState>,
-        server_id: String,
-        endpoint: Endpoint,
-        channel: Channel<Event>,
-    ) {
+    async fn run(mut self, endpoint: Endpoint, channel: Channel<Event>) {
         let mut span = activity::begin("ssh", "SSH console", Some(ssh::target(&endpoint)));
-        let session_id = self.id;
         let result = match ssh_pool::global() {
             Ok(pool) => {
                 self.terminal
-                    .connect(
-                        pool,
-                        &endpoint,
-                        &self.cancel,
-                        &self.revoke,
-                        || {
-                            state
-                                .package_refresh
-                                .terminal_submitted(&server_id, &endpoint, session_id);
-                        },
-                        |event| {
-                            channel
-                                .send(event)
-                                .map_err(|_| "Terminal window unavailable".into())
-                        },
-                    )
+                    .connect(pool, &endpoint, &self.cancel, &self.revoke, |event| {
+                        channel
+                            .send(event)
+                            .map_err(|_| "Terminal window unavailable".into())
+                    })
                     .await
             }
             Err(error) => Err(error),
         };
-        if self.terminal.submitted
-            && !self.revoke.is_cancelled()
-            && state
-                .store
-                .server_endpoint(&server_id)
-                .as_ref()
-                .is_ok_and(|current| current == &endpoint)
-        {
-            state
-                .package_refresh
-                .terminal_finished(&server_id, &endpoint, session_id);
-        }
         span.finish(match result {
             Ok(None) => "cancelled",
             Ok(Some(255)) | Err(_) => "failed",
@@ -329,7 +297,6 @@ impl Terminal {
         endpoint: &Endpoint,
         cancel: &CancellationToken,
         revoke: &CancellationToken,
-        on_submission: impl Fn(),
         send: impl Fn(Event) -> Result<(), String>,
     ) -> Result<Option<i32>, String> {
         let revoked = async {
@@ -364,10 +331,7 @@ impl Terminal {
                         .map_err(|_| "Timed out waiting for SSH to exit".to_string())?
                         .map_err(|e| e.to_string())?
                 }
-                result = relay_input(&pty, &mut self.input, || {
-                    self.submitted = true;
-                    on_submission();
-                }) => return result.map(|()| None),
+                result = relay_input(&pty, &mut self.input) => return result.map(|()| None),
                 result = relay_size(&pty, &mut self.size) => return result.map(|()| None),
             };
             exit.code()
@@ -415,16 +379,9 @@ async fn relay_output(
     }
 }
 
-async fn relay_input(
-    pty: &Pty,
-    input: &mut mpsc::Receiver<Vec<u8>>,
-    mut on_submission: impl FnMut(),
-) -> Result<(), String> {
+async fn relay_input(pty: &Pty, input: &mut mpsc::Receiver<Vec<u8>>) -> Result<(), String> {
     while let Some(bytes) = input.recv().await {
         pty.write(&bytes).await.map_err(|e| e.to_string())?;
-        if bytes.iter().any(|b| matches!(b, b'\r' | b'\n')) {
-            on_submission();
-        }
     }
     Ok(())
 }
@@ -477,14 +434,9 @@ mod tests {
         assert_eq!(
             session
                 .terminal
-                .connect(
-                    &pool,
-                    &endpoint(),
-                    &session.cancel,
-                    &session.revoke,
-                    || {},
-                    |_| { panic!("cancelled console sent an event") }
-                )
+                .connect(&pool, &endpoint(), &session.cancel, &session.revoke, |_| {
+                    panic!("cancelled console sent an event")
+                })
                 .await
                 .unwrap(),
             None
@@ -572,8 +524,6 @@ mod tests {
         let (send, mut events) = mpsc::unbounded_channel();
         let fixture_pool = pool.clone();
         let fixture_endpoint = endpoint.clone();
-        let submissions = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let submitted = submissions.clone();
         let task = tokio::spawn(async move {
             session
                 .terminal
@@ -582,9 +532,6 @@ mod tests {
                     &fixture_endpoint,
                     &session.cancel,
                     &session.revoke,
-                    || {
-                        submitted.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    },
                     |event| send.send(event).map_err(|_| "test receiver closed".into()),
                 )
                 .await
@@ -611,7 +558,6 @@ mod tests {
         input(b"printf 'user:%s\\n' \"$(id -un)\"; stty size");
         input(b"\r");
         expect_output(&sessions, id, &mut events, &mut output, "user:ops\r\n27 93").await;
-        assert_eq!(submissions.load(std::sync::atomic::Ordering::Relaxed), 1);
 
         std::fs::write(&scratch, "unrelated to OpenSSH").unwrap();
         pool.retain(std::slice::from_ref(&endpoint));
@@ -699,14 +645,9 @@ mod tests {
             .unwrap();
         let error = rejected
             .terminal
-            .connect(
-                &pool,
-                &endpoint,
-                &rejected.cancel,
-                &rejected.revoke,
-                || {},
-                |_| panic!("untrusted server opened a console"),
-            )
+            .connect(&pool, &endpoint, &rejected.cancel, &rejected.revoke, |_| {
+                panic!("untrusted server opened a console")
+            })
             .await
             .unwrap_err();
         assert!(error.contains("host key"), "{error}");

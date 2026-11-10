@@ -256,7 +256,7 @@ onUnmounted(() => {
 <template>
   <section class="investigation" aria-label="AI chats">
     <template v-if="loaded && ready">
-      <ServerTabBar title="AI chats" :busy="refreshing" @refresh="refresh">
+      <ServerTabBar title="AI chats">
         <span v-if="fleet">Servers · {{ targetCount }}</span>
         <RelativeDate v-if="latest" :at="latest.endedAt ?? latest.startedAt"/>
         <span v-else>New chat</span>

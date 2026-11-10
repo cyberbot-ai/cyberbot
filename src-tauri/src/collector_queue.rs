@@ -37,6 +37,7 @@ impl Activity {
 pub(crate) struct Queue {
     activity: Mutex<Activity>,
     changed: Notify,
+    pub(crate) released: Notify,
 }
 
 impl Queue {
@@ -110,6 +111,7 @@ impl Drop for Guard<'_> {
             activity.running.remove(&self.id);
         }
         self.queue.changed.notify_waiters();
+        self.queue.released.notify_one();
     }
 }
 

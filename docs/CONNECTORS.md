@@ -1,18 +1,18 @@
 # Service connector contract
 
-A server can expose several services simultaneously. Observations use the tuple `(server_id, kind, instance_id)`. Each instance owns its profile, collection schedule, counters, history, and incidents.
+A server can expose several services simultaneously. Observations use the tuple `(server_id, kind, instance_id)`. Each instance owns its profile, counters, history, and incidents. Each enabled connector runs in the shared server poll.
 
 ## Lifecycle
 
 | Operation | Responsibility |
 | --- | --- |
 | Discover | Detect known processes, units, sockets, or standard endpoints. Discovery establishes presence only. |
-| Configure | Validate the local endpoint, diagnostic role, interval, and any supported replication expectations. The service itself is configured by its administrator. |
+| Configure | Validate the local endpoint, diagnostic role and any supported replication expectations. The service itself is configured by its administrator. |
 | Collect | Execute bounded, fixed read operations on the monitored host and return permitted measurements. |
 | Snapshot | Read the stored observation, including freshness, evidence, and missing fields. |
 | Evaluate | Apply deterministic rules and update episodes from the stored observations. |
 
-The shared catalog lives in `collectors/connectors/catalog.json`. The collector uses the `service` route and version 2 of the response envelope. Adapter data goes in `details`. Rust validates the payload and verifies the endpoint and profile revision before persistence. The scheduler limits collection to one active operation per server. All components treat an unavailable field as unknown.
+The shared catalog lives in `collectors/connectors/catalog.json`. Service results in the server poll use version 2 of the connector response envelope. Adapter data goes in `details`. Rust validates the payload and verifies the endpoint and profile revision before persistence. The scheduler limits collection to one active operation per server. All components treat an unavailable field as unknown.
 
 `list_service_instances` provides stable IDs and labels. `get_service_summary` reads a saved summary in the investigation's scope and defaults to the main instance when no ID is supplied. Connection settings and credentials stay outside the MCP response.
 

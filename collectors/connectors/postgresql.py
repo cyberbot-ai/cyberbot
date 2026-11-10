@@ -55,7 +55,7 @@ def pg_config(raw):
     if not isinstance(raw,dict) or set(raw)-set(defaults):raise ValueError('PostgreSQL profile')
     c=dict(defaults,**raw)
     if any(type(c[key])!=bool for key in ('enabled','autoEndpoint','expectReceiver')) or not (c['host'] in PG_ENDPOINTS or literal_ip(c['host'])):raise ValueError('PostgreSQL endpoint')
-    for key,low,high in [('port',1,65535),('intervalSeconds',60,86400),('expectedStreaming',0,64)]:
+    for key,low,high in [('port',1,65535),('intervalSeconds',30,86400),('expectedStreaming',0,64)]:
         if type(c[key])!=int or not low<=c[key]<=high:raise ValueError('PostgreSQL limit')
     for key in ('database','user'):
         if key=='user' and c[key]=='':continue

@@ -188,7 +188,7 @@ pub(crate) async fn run(root: PathBuf, agent: Option<String>) -> Result<Value> {
             .action_propose(&run, spec, json!([]), transport.clone(), frame.hash, now())?
             .0;
         let prepared = runtime::fixture_remote(state.clone(), &request, "prepare").await?;
-        if !state.package_refresh.due().is_empty() {
+        if state.polls.forced(&server.id) {
             return Err("Preparation or Reading Launched Package Verification".into());
         }
         if prepared.get("error").is_some() {
@@ -241,7 +241,7 @@ pub(crate) async fn run(root: PathBuf, agent: Option<String>) -> Result<Value> {
             .store
             .action_transition(&request.id, "queued", "running", now())?;
         let response = runtime::fixture_remote(state.clone(), &request, "execute").await?;
-        if state.package_refresh.due().contains_key(&server.id) != shell {
+        if state.polls.forced(&server.id) != shell {
             return Err(
                 "Unscheduled check of packages does not correspond to the action performed".into(),
             );

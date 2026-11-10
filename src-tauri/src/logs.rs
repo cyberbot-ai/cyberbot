@@ -172,6 +172,15 @@ pub struct LogState {
     cursor: Value,
     baseline: Baseline,
 }
+impl LogState {
+    pub(crate) fn request(&self, policy: &crate::monitoring::Values) -> Value {
+        json!({
+            "kind": "logs", "state": self.cursor, "salt": self.salt,
+            "interval": policy.interval_seconds,
+            "thresholds": thresholds::collector_values("logs", &policy.thresholds)
+        })
+    }
+}
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LogView {
@@ -487,25 +496,6 @@ fn evaluate(
     (findings, !trained, finding_examples)
 }
 impl Store {
-    pub(crate) fn log_schedule(&self, servers: &[Server]) -> Result<BTreeMap<String, i64>> {
-        let mut schedule = {
-            let db = self.0.lock().map_err(err)?;
-            let mut stmt = db
-                .prepare("SELECT server_id,json_extract(payload,'$.nextCheck') FROM log_state")
-                .map_err(err)?;
-            let rows = stmt
-                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
-                .map_err(err)?;
-            rows.collect::<std::result::Result<BTreeMap<_, _>, _>>()
-                .map_err(err)?
-        };
-        for server in servers {
-            if !schedule.contains_key(&server.id) {
-                schedule.insert(server.id.clone(), self.log_state(&server.id)?.next_check);
-            }
-        }
-        Ok(schedule)
-    }
     pub(crate) fn log_statuses(
         db: &rusqlite::Connection,
         _interval: u64,
@@ -1064,7 +1054,7 @@ mod tests {
         db.record_logs(&s, &a, &wire(json!({"oom":1}), true), at)
             .unwrap();
         let i = db.snapshot().unwrap().incidents.remove(0);
-        assert_eq!(i.fresh_until, Some(at + 1230));
+        assert_eq!(i.fresh_until, Some(at + 390));
         assert_eq!(i.check, "logs:oom");
         let ep = i.episode;
         for complete in [true, false, true] {

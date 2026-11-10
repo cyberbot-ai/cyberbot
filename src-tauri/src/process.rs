@@ -4,7 +4,12 @@ use std::{
     sync::{Mutex, OnceLock},
     time::Duration,
 };
-use tokio::{io::AsyncReadExt, io::AsyncWriteExt, process::Command};
+use tokio::{
+    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
+    process::Command,
+};
+
+pub(crate) type FrameReader<'a> = &'a mut (dyn FnMut(&[u8]) -> Result<(), String> + Send);
 
 pub(crate) struct GroupGuard(i32);
 impl GroupGuard {
@@ -66,7 +71,7 @@ pub async fn bounded(
         program,
         "/usr/bin/ssh" | "/usr/bin/rsync" | "/usr/bin/nettop"
     ) {
-        return bounded_inner(program, args, input, seconds, cap, None).await;
+        return bounded_inner(program, args, input, seconds, cap, None, None).await;
     }
     let name = std::path::Path::new(program)
         .file_name()
@@ -79,7 +84,7 @@ pub async fn bounded(
         _ => "Local process",
     };
     let mut event = crate::activity::begin("process", action, None);
-    let result = bounded_inner(program, args, input, seconds, cap, None).await;
+    let result = bounded_inner(program, args, input, seconds, cap, None, None).await;
     event.finish(if result.as_ref().is_ok_and(|o| o.success) {
         "completed"
     } else {
@@ -102,6 +107,24 @@ pub(crate) async fn watched_ssh(
         25,
         cap,
         Some((cancel, sent)),
+        None,
+    )
+    .await
+}
+
+pub(crate) async fn ssh_frames(
+    args: &[String],
+    input: &[u8],
+    frames: FrameReader<'_>,
+) -> Result<Output, String> {
+    bounded_inner(
+        "/usr/bin/ssh",
+        args,
+        Some(input),
+        50,
+        12 * 1024 * 1024,
+        None,
+        Some(frames),
     )
     .await
 }
@@ -206,6 +229,7 @@ async fn bounded_inner(
         &tokio_util::sync::CancellationToken,
         &std::sync::atomic::AtomicBool,
     )>,
+    frames: Option<FrameReader<'_>>,
 ) -> Result<Output, String> {
     let mut command = Command::new(program);
     command
@@ -232,8 +256,30 @@ async fn bounded_inner(
     let stdout = child.stdout.take().ok_or("No stdout")?;
     let stderr = child.stderr.take().ok_or("No stderr")?;
     let mut stdin = child.stdin.take();
+    let streaming = frames.is_some();
     let future = async {
         let read_out = async {
+            if let Some(read_frame) = frames {
+                let mut stdout = BufReader::new(stdout);
+                let mut received = 0;
+                let mut line = Vec::new();
+                loop {
+                    let count = (&mut stdout)
+                        .take(40 * 1024 + 1)
+                        .read_until(b'\n', &mut line)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    if count == 0 {
+                        return Ok(Vec::new());
+                    }
+                    received += count;
+                    if received > cap || count > 40 * 1024 || line.last() != Some(&b'\n') {
+                        return Err("Invalid or oversized collector frame".into());
+                    }
+                    read_frame(&line[..line.len() - 1])?;
+                    line.clear();
+                }
+            }
             let mut data = Vec::new();
             stdout
                 .take(cap as u64 + 1)
@@ -259,7 +305,11 @@ async fn bounded_inner(
         };
         let write = async {
             if let (Some(pipe), Some(input)) = (stdin.as_mut(), input) {
-                pipe.write_all(input).await.map_err(|e| e.to_string())?;
+                if let Err(error) = pipe.write_all(input).await {
+                    if !streaming || error.kind() != std::io::ErrorKind::BrokenPipe {
+                        return Err(error.to_string());
+                    }
+                }
                 if watch.is_none() {
                     pipe.shutdown().await.map_err(|e| e.to_string())?;
                     drop(stdin.take());
@@ -300,7 +350,7 @@ async fn bounded_inner(
     };
     tokio::time::timeout(Duration::from_secs(seconds), future)
         .await
-        .map_err(|_| format!("timemouth {seconds} s: {program}"))?
+        .map_err(|_| format!("Timed out after {seconds} s: {program}"))?
 }
 
 #[cfg(test)]
@@ -321,7 +371,8 @@ mod tests {
             Some(b"frame\n"),
             2,
             100,
-            Some((&cancelled, &sent))
+            Some((&cancelled, &sent)),
+            None,
         )
         .await
         .is_err());
@@ -335,6 +386,7 @@ mod tests {
             2,
             100,
             Some((&live, &sent)),
+            None,
         )
         .await
         .unwrap();
@@ -349,7 +401,8 @@ mod tests {
             Some(b"frame\n"),
             1,
             100,
-            Some((&live, &sent))
+            Some((&live, &sent)),
+            None,
         )
         .await
         .is_err());
@@ -363,6 +416,6 @@ mod tests {
     #[tokio::test]
     async fn bounds_time() {
         let r = bounded("/bin/sleep", &["5".into()], None, 1, 100).await;
-        assert!(r.unwrap_err().contains("timemouth"));
+        assert!(r.unwrap_err().contains("Timed out"));
     }
 }

@@ -536,13 +536,24 @@ fn record(event: Event) {
     }
 }
 pub fn info(category: &str, action: &str, target: Option<String>) {
+    event(category, action, target, "info");
+}
+pub(crate) fn poll_result(target: &str, success: bool) {
+    event(
+        "server",
+        "Server poll result",
+        Some(target.into()),
+        if success { "completed" } else { "failed" },
+    );
+}
+fn event(category: &str, action: &str, target: Option<String>, phase: &str) {
     record(Event {
         ai_action: None,
         id: String::new(),
         at: millis(),
         category: category.into(),
         action: action.into(),
-        phase: "info".into(),
+        phase: phase.into(),
         operation_id: uuid::Uuid::new_v4().to_string(),
         target,
         server: None,

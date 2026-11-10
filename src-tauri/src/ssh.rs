@@ -10,8 +10,12 @@ use std::{
 };
 
 pub const COLLECTOR: &str = include_str!(concat!(env!("OUT_DIR"), "/collector.py"));
+fn digest() -> &'static str {
+    static DIGEST: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    DIGEST.get_or_init(|| format!("{:x}", Sha256::digest(COLLECTOR.as_bytes())))
+}
 pub fn version() -> String {
-    format!("{:x}", Sha256::digest(COLLECTOR.as_bytes()))[..24].into()
+    digest()[..24].into()
 }
 pub fn write_collector(root: &Path) -> Result<PathBuf, String> {
     let dir = root.join("collectors");
@@ -251,7 +255,7 @@ pub async fn deploy(e: &Endpoint, path: &Path) -> Result<(), String> {
     // A hash-named immutable target is activated only after byte verification.
     // A bounded check avoids rsync negotiation on every metric collection.
     let probe = format!("test -f \"$HOME/{remote}\" && sha256sum \"$HOME/{remote}\"");
-    let expected = format!("{:x}", Sha256::digest(COLLECTOR.as_bytes()));
+    let expected = digest();
     let installed = {
         let lease = crate::ssh_pool::global()?.acquire(e).await?;
         command_on_lease(e, &lease, "Check collector version", &probe, None, 1024).await
@@ -260,7 +264,7 @@ pub async fn deploy(e: &Endpoint, path: &Path) -> Result<(), String> {
         if String::from_utf8_lossy(&output.stdout)
             .split_whitespace()
             .next()
-            == Some(expected.as_str())
+            == Some(expected)
         {
             return Ok(());
         }
@@ -316,7 +320,7 @@ pub async fn deploy(e: &Endpoint, path: &Path) -> Result<(), String> {
     if String::from_utf8_lossy(&output.stdout)
         .split_whitespace()
         .next()
-        != Some(expected.as_str())
+        != Some(expected)
     {
         return Err("Collector checksum mismatch".into());
     }
@@ -326,8 +330,15 @@ pub async fn collect(e: &Endpoint, path: &Path) -> Result<Observation, String> {
     let start = Instant::now();
     deploy(e, path).await?;
     let output = run_collector(e, &serde_json::json!({"kind":"metrics"}), 8192).await?;
+    decode_metrics(&output, start)
+}
+
+pub(crate) fn decode_metrics(output: &[u8], start: Instant) -> Result<Observation, String> {
+    if output.len() > 8192 {
+        return Err("Invalid metrics response size".into());
+    }
     let mut observation: Observation =
-        serde_json::from_slice(&output).map_err(|e| format!("Invalid collector response: {e}"))?;
+        serde_json::from_slice(output).map_err(|e| format!("Invalid collector response: {e}"))?;
     if let Some(platform) = &observation.platform {
         platform.validate()?;
     }
@@ -360,6 +371,59 @@ pub async fn collect(e: &Endpoint, path: &Path) -> Result<Observation, String> {
         }
     }
     Ok(observation)
+}
+
+pub(crate) async fn poll_server(
+    endpoint: &Endpoint,
+    collector: &Path,
+    request: &[u8],
+    frames: process::FrameReader<'_>,
+) -> Result<(), String> {
+    if request.len() > 2 * 1024 * 1024 {
+        return Err("Server poll request exceeds the size limit".into());
+    }
+    let lease = crate::ssh_pool::global()?.acquire(endpoint).await?;
+    let remote = format!(
+        "f=\"$HOME/.cache/cyberbot/{}.py\"; sum=$(sha256sum \"$f\" 2>/dev/null) && [ \"${{sum%% *}}\" = '{}' ] || exit 42; exec python3 -I -B \"$f\" --server-poll",
+        version(),
+        digest()
+    );
+    for first in [true, false] {
+        crate::ssh_authorization::check(&lease)?;
+        let mut args = lease.options()?;
+        args.extend(["--".into(), endpoint.host.clone(), remote.clone()]);
+        let mut span = crate::activity::begin("server", "Collect server", Some(target(endpoint)));
+        let mut received = false;
+        let output = process::ssh_frames(&args, request, &mut |line| {
+            if !received {
+                crate::connectivity::ssh_reply();
+                received = true;
+            }
+            frames(line)
+        })
+        .await;
+        if first && !received && output.as_ref().is_ok_and(|out| out.exit_code == Some(42)) {
+            crate::connectivity::ssh_reply();
+            span.finish_as("info", "Collector deployment required");
+            deploy(endpoint, collector).await?;
+            continue;
+        }
+        if output.as_ref().is_ok_and(connected) {
+            crate::connectivity::ssh_reply();
+        } else if !received {
+            lease.invalidate();
+        }
+        let result = output.and_then(|out| {
+            if out.success {
+                Ok(())
+            } else {
+                Err(classify_error(&out.stderr))
+            }
+        });
+        span.result(&result);
+        return result;
+    }
+    Err("Server collector unavailable".into())
 }
 pub async fn run_collector(
     e: &Endpoint,
@@ -405,7 +469,32 @@ pub(crate) async fn service_sample(
     checkpoint: serde_json::Value,
     thresholds: std::collections::BTreeMap<&'static str, u64>,
 ) -> Result<Vec<u8>, String> {
-    use serde_json::{json, Value};
+    let request = service_request(kind, instance, config, checkpoint, thresholds);
+    if request.to_string().len() > 16384 {
+        return Err("Diagnostic status exceeds the limit".into());
+    }
+    let bytes = run_collector(endpoint, &request, 32768).await?;
+    decode_service_sample(kind, instance, &bytes)
+}
+
+pub(crate) fn service_request(
+    kind: &str,
+    instance: &str,
+    config: serde_json::Value,
+    checkpoint: serde_json::Value,
+    thresholds: std::collections::BTreeMap<&'static str, u64>,
+) -> serde_json::Value {
+    serde_json::json!({"kind":"service","state":{
+        "kind":kind,"instanceId":instance,"config":config,"checkpoint":checkpoint,"thresholds":thresholds
+    }})
+}
+
+pub(crate) fn decode_service_sample(
+    kind: &str,
+    instance: &str,
+    bytes: &[u8],
+) -> Result<Vec<u8>, String> {
+    use serde_json::Value;
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase", deny_unknown_fields)]
     struct Response {
@@ -417,14 +506,10 @@ pub(crate) async fn service_sample(
         duration_ms: u64,
         details: Value,
     }
-    let request = json!({"kind":"service","state":{
-        "kind":kind,"instanceId":instance,"config":config,"checkpoint":checkpoint,"thresholds":thresholds
-    }});
-    if request.to_string().len() > 16384 {
-        return Err("Diagnostic status exceeds the limit".into());
+    if bytes.len() > 32768 {
+        return Err("Invalid diagnostics response size".into());
     }
-    let bytes = run_collector(endpoint, &request, 32768).await?;
-    let sample: Response = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+    let sample: Response = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
     let complete = sample.details["complete"]
         .as_bool()
         .or_else(|| sample.details["coverage"].as_bool())

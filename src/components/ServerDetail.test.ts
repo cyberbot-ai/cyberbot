@@ -190,14 +190,17 @@ it('scrolls the AI conversation to the end after loading and after returning to 
  }
 });
 
-it('places refresh above overview and incident content and leaves chat entry in its tab', async () => {
+it('puts one refresh next to the server name in either window and keeps it while switching tabs', async () => {
  const w = mount(ServerDetail, { props: { server, now: 100, interval: 180 } });
  await flushPromises();
  expect(w.get('.detail-content').element.firstElementChild?.classList.contains('tab-bar')).toBe(true);
- expect(w.get('.tab-bar .tab-actions button').text()).toBe('Refresh');
+ expect(w.find('.tab-bar .tab-actions button').exists()).toBe(false);
+ expect(w.get('.server-heading button').text()).toBe('Refresh server');
  expect(w.text()).not.toContain('New dialogue');
  await w.findAll('.detail-tabs button').find(button => button.text() === 'Incidents')!.trigger('click');
+ await w.setProps({ standalone: true });
  expect(w.get('.server-incidents').element.firstElementChild?.classList.contains('tab-bar')).toBe(true);
- expect(w.get('.tab-bar .tab-actions button').text()).toBe('Refresh');
+ expect(w.find('.tab-bar .tab-actions button').exists()).toBe(false);
+ expect(w.get('.server-heading button').text()).toBe('Refresh server');
  w.unmount();
 });

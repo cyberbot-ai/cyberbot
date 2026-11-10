@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import time
 import argparse
@@ -16,6 +17,9 @@ if (options.auto or options.budget_stop) and not options.agent:
     parser.error('--auto/--budget-stop require --agent')
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from collectors.bundle import source as collector_source
+
 buildx = ROOT / ".runtime" / "buildx"
 buildx.mkdir(parents=True, exist_ok=True)
 os.environ.setdefault("BUILDX_CONFIG", str(buildx))
@@ -23,6 +27,38 @@ os.environ.setdefault("BUILDX_CONFIG", str(buildx))
 
 def run(args, **kwargs):
     return subprocess.run(args, check=True, text=True, **kwargs)
+
+
+def verify_partial_poll(folder, port):
+    # Exercise a stalled connector over the same SSH fixture without adding
+    # any test switches to the production collector.
+    script = """
+scope = {{'__name__': 'poll_fixture'}}
+exec({}, scope)
+scope['POLL_TASK_TIMEOUT'] = 1
+scope['metrics'] = lambda: {{'cpuPercent': 10}}
+scope['dispatch_service'] = lambda _: scope['time'].sleep(30)
+scope['server_poll']({{
+    'version': 1,
+    'tasks': [{{'kind': 'metrics'}}, {{'kind': 'service', 'state': {{}}}}],
+}})
+""".format(repr(collector_source()))
+    output = run(
+        [
+            "/usr/bin/ssh", "-F", "/dev/null", "-T", "-p", port,
+            "-i", str(folder / "id_ed25519"), "-oIdentitiesOnly=yes",
+            "-oStrictHostKeyChecking=yes", "-oBatchMode=yes",
+            "-oUserKnownHostsFile=" + str(folder / "known_hosts"),
+            "ops@127.0.0.1", "python3 -I -B -",
+        ],
+        input=script, capture_output=True, timeout=10,
+    )
+    frames = [json.loads(line) for line in output.stdout.splitlines()]
+    assert [(frame["id"], frame["event"]) for frame in frames] == [
+        (0, "data"), (0, "done"), (1, "error"),
+    ], frames
+    assert frames[-1]["payload"] == "check_timeout", frames
+    print("SSH poll emitted metrics before the stalled connector timed out", flush=True)
 
 
 run(["docker", "build", "-t", "cyberbot-ssh-test:local", str(ROOT / "tests/integration")])
@@ -37,10 +73,13 @@ with tempfile.TemporaryDirectory(prefix="cyberbot-ssh-") as temp:
         (folder / "known_hosts").write_text(f"[127.0.0.1]:{port} {host_key}\n")
         env = dict(os.environ, CYBERBOT_TEST_SSH_PORT=port, CYBERBOT_TEST_SSH_DIR=str(folder))
         time.sleep(1)
+        run(["bash", "scripts/cargo.sh", "test", "--manifest-path", "src-tauri/Cargo.toml", "--lib",
+             "server_poll::tests::real_ssh_server_poll", "--", "--ignored", "--nocapture"], cwd=ROOT, env=env)
         run(["bash", "scripts/cargo.sh", "test", "--manifest-path", "src-tauri/Cargo.toml", "--test", "ssh_roundtrip", "--", "--ignored", "--nocapture"], cwd=ROOT, env=env)
         run(["bash", "scripts/cargo.sh", "test", "--manifest-path", "src-tauri/Cargo.toml", "--lib", "console::tests::real_ssh_terminal", "--", "--ignored", "--nocapture"], cwd=ROOT, env=env)
         run(["bash", "scripts/cargo.sh", "test", "--manifest-path", "src-tauri/Cargo.toml", "--lib",
              "fleet_console::tests::real_ssh_fleet_console", "--", "--ignored", "--nocapture"], cwd=ROOT, env=env)
+        verify_partial_poll(folder, port)
         if options.agent:
             run(["bash","scripts/cargo.sh","build","--manifest-path","src-tauri/Cargo.toml"],cwd=ROOT)
             with tempfile.TemporaryDirectory(prefix="cyberbot-investigation-") as state:

@@ -106,6 +106,11 @@ pub struct Checkpoint {
     streaks: BTreeMap<String, u32>,
     card: Card,
 }
+impl Checkpoint {
+    pub(crate) fn poll_checkpoint(&self) -> Value {
+        json!({"state": self.cursor, "salt": self.salt})
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Card {
@@ -649,7 +654,7 @@ impl Store {
         tx.commit().map_err(err)?;
         Ok(summary)
     }
-    fn nginx_error(&self, id: &str, expected: &Checkpoint) -> Result<()> {
+    pub(crate) fn nginx_error(&self, id: &str, expected: &Checkpoint) -> Result<()> {
         let mut db = self.0.lock().map_err(err)?;
         crate::storage::admit(&db)?;
         let tx = db.transaction().map_err(err)?;

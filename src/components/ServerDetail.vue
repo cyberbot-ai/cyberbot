@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { serverAddress, serverDisplayHost, serverHint } from '../serverDirectory';
 import ServerTabBar from './ServerTabBar.vue';
+import RefreshButton from './RefreshButton.vue';
 import MetricValue from './MetricValue.vue';
 import RelativeDate from './RelativeDate.vue';
 import DependenciesPanel from './DependenciesPanel.vue';
@@ -24,13 +25,19 @@ const activeIncidents=computed(()=>serverIncidents.value.filter(i=>i.status==='o
 const showResolved=ref(props.initialShowResolved??false);
 const incidentRows=computed(()=>showResolved.value?serverIncidents.value:activeIncidents.value);
 const showDependencies=ref(false),showUndetected=ref(false);
-const samples=ref<Observation[]>([]);const busy=ref(false);
+const samples = ref<Observation[]>([]);
+const refreshing = ref(new Set<string>());
+const busy = computed(() => refreshing.value.has(props.server.id));
+const refreshMessage = ref('');
 const refreshError = ref('');
-const metricsError = computed(() => refreshError.value
-  || (!props.server.awaitingFirstCheck ? props.server.lastError : null));
-watch([() => props.server.id, () => props.server.observation?.at, () => props.server.networkOffline], () => {
+const refreshRevision = ref(0);
+const metricsError = computed(() => !props.server.awaitingFirstCheck && props.server.lastError !== refreshError.value
+  ? props.server.lastError : null);
+watch(() => props.server.id, () => {
+  refreshMessage.value = '';
   refreshError.value = '';
 });
+watch(() => props.server.observation?.at, () => { refreshError.value = ''; });
 const initialTab=()=>props.initialSection??(activeIncidents.value.length?'incidents':'overview');
 const defaultService = Object.keys(serviceCatalog).find(kind => serviceCatalog[kind].preferred) ?? Object.keys(serviceCatalog)[0];
 const section=ref<string>(initialTab()),service=ref(defaultService);
@@ -50,7 +57,7 @@ const serviceRefreshKey=computed(()=>{
  const {kind,instanceId}=selectedService.value;
  const card=props.server.services?.find(c=>c.kind===kind&&(c.instanceId??'default')===instanceId);
  const scope=`${serviceCatalog[kind]?.incidentNamespace ?? 'service:'}${service.value}:`;
- return JSON.stringify([card?.status,card?.availability,card?.at,activeIncidents.value.filter(i=>i.check.startsWith(scope)).map(i=>i.episode??i.id)]);
+ return JSON.stringify([refreshRevision.value,card?.status,card?.availability,card?.at,activeIncidents.value.filter(i=>i.check.startsWith(scope)).map(i=>i.episode??i.id)]);
 });
 function selectConnection(id:string){service.value=id==='default'?selectedService.value.kind:`${selectedService.value.kind}@${id}`;}
 // Only services seen on the server are shown as chips; the rest stay one click away for manual setup.
@@ -104,33 +111,46 @@ const cpuChart = computed(() => {
   }
   return count >= 2 ? path.join(' ') : '';
 });
-async function refreshMetrics() {
+async function refreshServer() {
   const id = props.server.id;
+  if (refreshing.value.has(id)) return;
   refreshError.value = '';
-  busy.value = true;
+  refreshMessage.value = '';
+  refreshing.value.add(id);
   try {
-    await call('poll_server', { id });
-    emit('updated');
-    if (props.server.id === id && section.value === 'overview') await loadHistory(id);
+    const result = await call<{ updated: number; failed: string[] }>('poll_server', { id });
+    if (props.server.id === id) {
+      refreshRevision.value++;
+      refreshMessage.value = result.failed.length
+        ? `${result.updated} checks updated · ${result.failed.length} incomplete`
+        : 'Server refreshed';
+    }
   } catch (error) {
     if (props.server.id === id) {
+      refreshRevision.value++;
       refreshError.value = String(error).replace(/^Error: /, '');
-      emit('updated');
     }
   } finally {
-    busy.value = false;
+    refreshing.value.delete(id);
+    emit('updated');
   }
 }
+
 </script>
-<template><section class="detail"><header class="server-header"><div class="server-title"><h2 :title="serverHint(server)">{{serverDisplayHost(server.name, server.endpoint.host)}}</h2><p>{{serverAddress(server.endpoint)}}</p>
+<template><section class="detail"><header class="server-header"><div class="server-title"><div class="server-heading">
+  <h2 :title="serverHint(server)">{{serverDisplayHost(server.name, server.endpoint.host)}}</h2>
+  <RefreshButton :disabled="preview || busy" :aria-busy="busy" @click="refreshServer">{{ busy ? 'Refreshing…' : 'Refresh server' }}</RefreshButton>
+</div><p>{{serverAddress(server.endpoint)}}</p>
 <div class="status" :class="status"><span class="state"><i></i>{{serverHealthLabel(server,status)}}</span><span v-if="server.observation?.platform">{{server.observation.platform.distro}} {{server.observation.platform.versionId}}</span></div>
 <div v-if="coverageNote" class="coverage-note">{{ coverageNote }}</div></div>
 <div class="header-actions"><button v-if="!standalone" class="icon-button" :disabled="preview" title="Open in new window" aria-label="Open in new window" @click="emit('detach')"><UiIcon name="external"/></button><button class="icon-button" aria-label="Close server" @click="$emit('close')"><UiIcon name="close"/></button></div></header>
 <p v-if="server.networkOffline" class="notice connectivity-notice" role="status">No internet connection. Server data is temporarily unavailable.</p>
+<p v-if="refreshError" class="poll-message alert" role="alert">{{ refreshError }}</p>
+<p v-else-if="refreshMessage" class="poll-message notice" role="status">{{ refreshMessage }}</p>
 <nav class="detail-tabs" aria-label="Server sections"><button v-for="tab in tabs" :key="tab.id" :class="{active:section===tab.id}" :aria-pressed="section===tab.id" @click="section=tab.id">{{tab.label}}<span v-if="tab.id==='security'&&vulnerabilityCount" class="count" :class="tabMarks.security" :title="`Vulnerabilities confirmed: ${vulnerabilityCount}`">{{vulnerabilityCount}}</span><i v-else-if="tabMarks[tab.id]" class="mark" :class="tabMarks[tab.id]" :title="healthLabel[tabMarks[tab.id] as 'warning'|'critical']"></i></button></nav>
 <div class="detail-content" :class="{'chat-content':section==='investigation','console-content':section==='console'}">
   <template v-if="section==='overview'">
-    <ServerTabBar title="Metrics" :busy="busy" :disabled="preview || server.monitoring?.enabled===false" @refresh="refreshMetrics">
+    <ServerTabBar title="Metrics">
       <RelativeDate :at="currentObservation?.at" empty="Not checked yet"/>
     </ServerTabBar>
     <p v-if="server.awaitingFirstCheck && !server.networkOffline" class="notice" role="status">Waiting for the first check to collect data.</p>
@@ -150,7 +170,7 @@ async function refreshMetrics() {
   <details v-if="currentObservation?.missing.length" class="small"><summary>What’s tested</summary><p>Unavailable data: {{currentObservation.missing.join(', ')}}</p></details>
   <details class="resource-section" @toggle="showDependencies=($event.target as HTMLDetailsElement).open"><summary>Server dependencies</summary><DependenciesPanel v-if="showDependencies" :key="server.id" :server-id="server.id"/></details></template>
   <section v-if="section==='incidents'" class="server-incidents" aria-label="Server incidents">
-    <ServerTabBar title="Incidents" :disabled="preview" @refresh="emit('updated')"><span>Open {{ activeIncidents.length }}</span></ServerTabBar>
+    <ServerTabBar title="Incidents"><span>Open {{ activeIncidents.length }}</span></ServerTabBar>
     <div class="incident-toolbar">
       <label class="incident-history"><input v-model="showResolved" type="checkbox">Show resolved</label>
       <ResolveAllIncidentsButton :incidents="activeIncidents" title="Mark open incidents on this server as resolved"
@@ -161,7 +181,7 @@ async function refreshMetrics() {
   </section>
   <KeepAlive :key="server.id">
     <component :key="section==='services'?service:section" :is="activePanel" v-if="activePanel"
-      v-bind="section==='investigation'?{aiAgent,ask:aiAsk}:section==='security'?{refreshKey:JSON.stringify(server.vulnerabilities)}:section==='services'?{refreshKey:serviceRefreshKey}:{}"
+      v-bind="section==='investigation'?{aiAgent,ask:aiAsk}:section==='security'?{refreshKey:JSON.stringify([refreshRevision,server.vulnerabilities])}:section==='logs'?{refreshKey:JSON.stringify([refreshRevision,server.logStatus])}:section==='services'?{refreshKey:serviceRefreshKey}:{}"
       @ai-settings="emit('aiSettings')" @ask="askAi" :server-id="server.id" :kind="selectedService.kind"
       :initial-instance="selectedService.instanceId" hide-selector :now="now" @select="selectConnection" @updated="emit('updated')">
       <template v-if="section==='services'" #before-content>
@@ -182,7 +202,7 @@ async function refreshMetrics() {
 <style scoped>
 .connectivity-notice{margin:0 18px 8px;color:var(--warning);background:var(--warning-bg);padding:9px 12px;border-radius:7px}
 .server-incidents{margin-bottom:20px}.incident-toolbar{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px 12px;margin-bottom:16px}.incident-history{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--muted)}.incident-history input{accent-color:var(--accent)}
-.detail{display:flex;flex-direction:column;color:var(--text);font:13px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;height:100%;min-width:0;box-sizing:border-box}.server-header{display:flex;justify-content:space-between;gap:16px;padding:22px 28px 0}.server-title{min-width:0}.coverage-note{margin-top:6px;color:var(--muted);font-size:12px;line-height:1.5;overflow-wrap:anywhere}h2{font-size:22px;font-weight:600;margin:4px 0 2px;letter-spacing:-.4px;overflow-wrap:anywhere}.server-header p{font:12px/1.5 ui-monospace,monospace;color:var(--muted);margin:0;overflow-wrap:anywhere}.header-actions{flex-shrink:0;display:flex;align-items:flex-start;gap:4px}button{font:inherit;color:inherit;display:inline-flex;align-items:center;justify-content:center;gap:8px;border:1px solid var(--line);background:var(--surface);border-radius:7px;padding:7px 12px;cursor:pointer;min-height:32px}button:hover{background:var(--hover)}button:disabled{opacity:.45;cursor:default}button:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}.icon-button{border:0;background:none;padding:8px}
+.detail{display:flex;flex-direction:column;color:var(--text);font:13px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;height:100%;min-width:0;box-sizing:border-box}.server-header{display:flex;justify-content:space-between;gap:16px;padding:22px 28px 0}.server-title{min-width:0}.server-heading{display:flex;align-items:center;flex-wrap:wrap;gap:8px 12px}.server-heading button{font-size:12px;padding:4px 9px}.poll-message{margin:8px 28px 0}.coverage-note{margin-top:6px;color:var(--muted);font-size:12px;line-height:1.5;overflow-wrap:anywhere}h2{font-size:22px;font-weight:600;margin:4px 0 2px;letter-spacing:-.4px;overflow-wrap:anywhere}.server-header p{font:12px/1.5 ui-monospace,monospace;color:var(--muted);margin:0;overflow-wrap:anywhere}.header-actions{flex-shrink:0;display:flex;align-items:flex-start;gap:4px}button{font:inherit;color:inherit;display:inline-flex;align-items:center;justify-content:center;gap:8px;border:1px solid var(--line);background:var(--surface);border-radius:7px;padding:7px 12px;cursor:pointer;min-height:32px}button:hover{background:var(--hover)}button:disabled{opacity:.45;cursor:default}button:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}.icon-button{border:0;background:none;padding:8px}
 .status{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px;margin-top:8px;color:var(--muted);font-size:12px}.state{display:inline-flex;align-items:center;gap:6px;padding:1px 9px;border-radius:20px;background:var(--subtle);color:var(--muted)}.status i{width:6px;height:6px;border-radius:50%;background:var(--muted)}.status.healthy .state{background:var(--accent-bg);color:var(--success)}.status.healthy i{background:var(--success)}.status.warning .state{background:var(--warning-bg);color:var(--warning)}.status.warning i{background:var(--warning)}.status.critical .state,.status.unreachable .state{background:var(--danger-bg);color:var(--danger)}.status.critical i,.status.unreachable i{background:var(--danger)}
 .detail-tabs{display:flex;gap:22px;overflow-x:auto;padding:0 28px;margin-top:14px;border-bottom:1px solid var(--line);flex-shrink:0}.detail-tabs button{background:none;border:0;border-bottom:2px solid transparent;border-radius:0;padding:11px 0;color:var(--muted);font-size:13px;white-space:nowrap;gap:6px}.detail-tabs button.active{color:var(--text);border-bottom-color:var(--accent)}.mark{width:6px;height:6px;border-radius:50%}.mark.warning{background:var(--warning)}.mark.critical{background:var(--danger)}.count{font-size:11px;line-height:16px;padding:0 6px;border-radius:9px;background:var(--subtle)}.count.warning{background:var(--warning-bg);color:var(--warning)}.count.critical{background:var(--danger-bg);color:var(--danger)}
 .detail-content{flex:1;min-height:0;overflow:auto;padding:22px 28px 40px;scrollbar-color:var(--line-strong) transparent}

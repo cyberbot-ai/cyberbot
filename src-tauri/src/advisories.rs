@@ -1058,7 +1058,7 @@ async fn update_source(app: &Arc<AppState>, source: &mut Source) -> Result<()> {
     .await;
     _activity_span.result(&_activity_result);
     if _activity_result.is_ok() {
-        app.package_refresh.wake.notify_one();
+        app.advisory_priority.wake.notify_one();
     }
     _activity_result
 }
@@ -1319,7 +1319,7 @@ pub(crate) async fn refresh_prioritized(
     )
     .await;
     if result.as_ref().is_err_and(|error| error == REFRESH_BUSY) {
-        app.package_refresh.defer_advisories(priority);
+        app.advisory_priority.defer_advisories(priority);
     }
     result
 }
@@ -1370,7 +1370,7 @@ async fn refresh_inner(app: Arc<AppState>, force: bool, priority: &BTreeSet<Stri
             app.store.save_source(&source, false)?;
         }
     }
-    app.package_refresh
+    app.advisory_priority
         .defer_advisories(due.filter(|s| priority.contains(&s.id)).map(|s| s.id));
     refresh_cvss(&app).await?;
     prune_classified(&app)?;

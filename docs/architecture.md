@@ -6,7 +6,7 @@ Cyberbot is a macOS desktop app built with Tauri 2, Rust, and Vue 3. The desktop
 
 1. The user adds an SSH endpoint or a [static Ansible inventory](INVENTORY.md). Server identity is local and separate from the endpoint used for access.
 2. Rust schedules checks through bounded queues and an OpenSSH ControlMaster pool. Polling, rsync, and the interactive console reuse compatible connections. Host keys are verified. A busy connection stays available to its active operations while the pool evicts idle connections.
-3. The application bundles the Python collector at build time and uses rsync to deploy a content-addressed copy into the remote user's cache. The collector runs a requested, fixed operation and returns a bounded structured result.
+3. The application bundles the Python collector at build time and uses rsync to deploy a content-addressed copy into the remote user's cache. Each routine server poll verifies and runs the collector in one SSH command. The collector streams bounded results for the enabled checks.
 4. Rust validates the result and records observations. A metric that cannot be read or is too old remains unknown. Deterministic rules evaluate metrics, logs, connector results, and package advisories. An episode retains its own evidence and identity. [Incident correlation](INCIDENT_GROUPS.md) may link episodes without merging their history.
 5. The dashboard and monitoring library show observations, failures, permissions, and coverage. Routine collection and rules work without an AI provider.
 

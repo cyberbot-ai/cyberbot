@@ -34,6 +34,10 @@ fn first_due(id: &str, at: i64) -> i64 {
     at + jitter as i64
 }
 impl Runtime {
+    pub(crate) fn suspended(&self) -> bool {
+        self.suspended
+    }
+
     pub fn reset(&mut self) {
         self.epoch = self.epoch.wrapping_add(1);
         self.suspended = false;

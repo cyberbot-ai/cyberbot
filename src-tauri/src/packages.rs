@@ -1,13 +1,9 @@
-use crate::{model::*, package_refresh, ssh, store::Store, AppState};
+use crate::{model::*, ssh, store::Store, AppState};
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::{
-    collections::BTreeMap,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{collections::BTreeMap, sync::Arc};
 pub type Result<T> = std::result::Result<T, String>;
 fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
@@ -41,6 +37,8 @@ pub struct State {
     pub last_success: Option<i64>,
     pub failures: u32,
     pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub apt_error: Option<String>,
     pub root: Option<String>,
     pub previous: Option<String>,
     pub metadata: Option<Metadata>,
@@ -147,6 +145,7 @@ impl State {
             last_success: None,
             failures: 0,
             error: None,
+            apt_error: None,
             root: None,
             previous: None,
             metadata: None,
@@ -191,6 +190,39 @@ fn saved_state(db: &rusqlite::Connection, id: &str) -> Result<Option<State>> {
         .transpose()
 }
 impl Store {
+    pub(crate) fn package_poll_request(
+        &self,
+        id: &str,
+        state: &State,
+        apt: &[String],
+    ) -> Result<Value> {
+        let mut hashes = vec![None::<String>; 128];
+        if let Some(root) = &state.root {
+            let db = self.0.lock().map_err(err)?;
+            let mut q = db
+                .prepare("SELECT bucket,hash FROM package_buckets WHERE server_id=?1 AND root=?2")
+                .map_err(err)?;
+            let rows = q
+                .query_map(params![id, root], |r| {
+                    Ok((r.get::<_, u8>(0)?, r.get::<_, String>(1)?))
+                })
+                .map_err(err)?;
+            for row in rows {
+                let (bucket, hash) = row.map_err(err)?;
+                let slot = hashes
+                    .get_mut(usize::from(bucket))
+                    .ok_or("Invalid saved package bucket")?;
+                *slot = Some(hash);
+            }
+        }
+        let resume = state
+            .stage
+            .as_ref()
+            .map(|stage| json!({"root":stage.root,"buckets":state.pending,"offset":state.offset}));
+        Ok(
+            json!({"kind":"packages","state":{"root":state.root,"hashes":hashes,"resume":resume,"apt":apt}}),
+        )
+    }
     pub(crate) fn package_state(&self, id: &str) -> Result<State> {
         let db = self.0.lock().map_err(err)?;
         if let Some(state) = saved_state(&db, id)? {
@@ -204,25 +236,6 @@ impl Store {
         .map_err(err)?;
         Ok(state)
     }
-    pub(crate) fn package_schedule(&self, servers: &[Server]) -> Result<BTreeMap<String, i64>> {
-        let mut result = {
-            let db = self.0.lock().map_err(err)?;
-            let mut q = db
-                .prepare("SELECT server_id,json_extract(payload,'$.nextCheck') FROM package_state")
-                .map_err(err)?;
-            let rows = q
-                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
-                .map_err(err)?;
-            rows.collect::<std::result::Result<BTreeMap<_, _>, _>>()
-                .map_err(err)?
-        };
-        for s in servers {
-            if !result.contains_key(&s.id) {
-                result.insert(s.id.clone(), self.package_state(&s.id)?.next_check);
-            }
-        }
-        Ok(result)
-    }
     pub(crate) fn package_snapshot(&self, id: &str) -> Result<(State, Vec<Package>)> {
         let db = self.0.lock().map_err(err)?;
         let state = saved_state(&db, id)?.unwrap_or_else(|| State::new(id));
@@ -234,16 +247,6 @@ impl Store {
     }
     pub(crate) fn cached_package_state(&self, id: &str) -> Result<State> {
         Ok(saved_state(&*self.0.lock().map_err(err)?, id)?.unwrap_or_else(|| State::new(id)))
-    }
-    fn package_transaction_complete(&self, id: &str, state: &State) -> Result<bool> {
-        let db = self.0.lock().map_err(err)?;
-        db.query_row(
-            "SELECT NOT EXISTS(SELECT 1 FROM package_buckets b, json_each(b.payload) p
-             WHERE b.server_id=?1 AND b.root=?2 AND json_extract(p.value,'$.status')!='installed')",
-            params![id, state.root],
-            |r| r.get(0),
-        )
-        .map_err(err)
     }
     pub(crate) fn record_packages(
         &self,
@@ -457,6 +460,7 @@ impl Store {
             state.next_check = at + INTERVAL + server.id.bytes().map(i64::from).sum::<i64>() % 60;
             tx.execute("DELETE FROM package_buckets WHERE server_id=?1 AND root!=coalesce(?2,'') AND root!=coalesce(?3,'')",params![server.id,state.root,state.previous]).map_err(err)?;
             if state.root != old_root {
+                state.apt_error = None;
                 tx.execute(
                     "UPDATE advisory_sources SET payload=json_set(payload,'$.nextCheck',0)
                      WHERE ((?3='debian' AND id='debian') OR (?3='ubuntu' AND id IN ('ubuntu-cve:'||?2,'ubuntu-usn:'||?2)))
@@ -487,7 +491,7 @@ impl Store {
         tx.commit().map_err(err)?;
         Ok(state)
     }
-    fn package_error(&self, id: &str, expected: &State) -> Result<()> {
+    pub(crate) fn package_error(&self, id: &str, expected: &State) -> Result<()> {
         let db = self.0.lock().map_err(err)?;
         crate::monitoring::check_commit(&db)?;
         let raw: Option<String> = db
@@ -523,83 +527,15 @@ impl Store {
         Ok(())
     }
 }
-pub(crate) async fn collect(state: Arc<AppState>, id: String) -> Result<State> {
-    crate::monitoring::run(&state.store, "packages", &id, "", async {
-        collect_inner(state.clone(), id.clone(), false, None)
-            .await
-            .map(|(state, _)| state)
-    })
-    .await
-}
 pub(crate) async fn rescan(state: Arc<AppState>, id: String) -> Result<State> {
     crate::monitoring::run(&state.store, "packages", &id, "", async {
-        collect_inner(state.clone(), id.clone(), true, None)
+        collect_inner(state.clone(), id.clone())
             .await
             .map(|(state, _)| state)
     })
     .await
 }
-const ENDPOINT_CHANGED: &str = "Connection has changed";
-const PAUSED: &str = "Monitoring paused";
-const STORAGE_BLOCKED: &str = "Storage is full";
-
-pub(crate) async fn refresh_after_ssh(state: Arc<AppState>, id: String, job: package_refresh::Job) {
-    use package_refresh::Outcome;
-    let scan = crate::monitoring::run(&state.store, "packages", &id, "", async {
-        collect_inner(state.clone(), id.clone(), true, Some(&job.endpoint)).await
-    })
-    .await;
-    let outcome = match scan {
-        Ok((checkpoint, changed)) => {
-            let stable_change = changed
-                && state
-                    .store
-                    .package_transaction_complete(&id, &checkpoint)
-                    .unwrap_or(false);
-            if stable_change {
-                if let Ok(Some(source)) = state.store.package_scope_source(&checkpoint) {
-                    state.package_refresh.prioritize_advisory(source);
-                }
-            }
-            Outcome::Collected {
-                checks: checkpoint.checks,
-                changed: stable_change,
-            }
-        }
-        Err(error) if error == ENDPOINT_CHANGED || error == "The server is remote" => {
-            Outcome::Obsolete
-        }
-        Err(error)
-            if matches!(
-                error.as_str(),
-                crate::collector_queue::BUSY
-                    | PAUSED
-                    | STORAGE_BLOCKED
-                    | crate::monitoring::POLICY_CHANGED
-            ) =>
-        {
-            Outcome::Contended
-        }
-        Err(error) if error == ssh::PACKAGE_DATABASE_BUSY => Outcome::Busy,
-        Err(_) => {
-            let seconds = state
-                .store
-                .cached_package_state(&id)
-                .map_or(120, |s| (s.next_check - now()).clamp(10, 3600));
-            Outcome::Failed(Duration::from_secs(seconds as u64))
-        }
-    };
-    state
-        .package_refresh
-        .finish(&id, job, outcome, Instant::now());
-}
-
-async fn collect_inner(
-    state: Arc<AppState>,
-    id: String,
-    complete_scan: bool,
-    expected_endpoint: Option<&Endpoint>,
-) -> Result<(State, bool)> {
+async fn collect_inner(state: Arc<AppState>, id: String) -> Result<(State, bool)> {
     let mut _activity_span = crate::activity::begin("server", "packages.collect", Some(id.clone()));
     let _activity_result = (async {
         let _guard = state.collectors.acquire(&id, &state.store).await?;
@@ -609,16 +545,8 @@ async fn collect_inner(
             .into_iter()
             .find(|s| s.id == id)
             .ok_or("The server is remote")?;
-        if let Some(endpoint) = expected_endpoint {
-            if server.endpoint != *endpoint {
-                return Err(ENDPOINT_CHANGED.into());
-            }
-            if snapshot.settings.paused {
-                return Err(PAUSED.into());
-            }
-        }
         if state.store.storage_status()?.blocked {
-            return Err(STORAGE_BLOCKED.into());
+            return Err("Storage is full".into());
         }
         let mut checkpoint = state.store.package_state(&id)?;
         let old_root = checkpoint.root.clone();
@@ -640,13 +568,9 @@ async fn collect_inner(
                 checkpoint = state
                     .store
                     .record_packages(&server, &checkpoint, &bytes, now())?;
-                if !complete_scan {
-                    return Ok((checkpoint.clone(), checkpoint.root != old_root));
-                }
                 if checkpoint.stage.is_none() {
                     match &checkpoint.error {
                         None => return Ok((checkpoint.clone(), checkpoint.root != old_root)),
-                        Some(_) if restarted && expected_endpoint.is_some() => return Err(ssh::PACKAGE_DATABASE_BUSY.into()),
                         Some(error) if restarted => return Err(error.clone()),
                         Some(_) => restarted = true,
                     }
@@ -655,7 +579,7 @@ async fn collect_inner(
             Err("Failed to complete the transfer of the package list in one check".into())
         }
         .await;
-        if result.as_ref().is_err_and(|error| expected_endpoint.is_none() || !matches!(error.as_str(), ssh::PACKAGE_DATABASE_BUSY | ENDPOINT_CHANGED | crate::monitoring::POLICY_CHANGED)) {
+        if result.is_err() {
             state.store.package_error(&id, &checkpoint)?;
         }
         result
@@ -685,9 +609,19 @@ impl Store {
     pub(crate) fn apt_targets(&self, id: &str) -> Result<Vec<String>> {
         let state = self.package_state(id)?;
         let db = self.0.lock().map_err(err)?;
-        let mut q=db.prepare("SELECT DISTINCT json_extract(p.value,'$.name') AS name FROM vulnerability_groups f,json_each(f.payload,'$.packages') p WHERE f.server_id=?1 AND f.hidden_at IS NULL AND json_extract(f.payload,'$.state')='affected' AND NOT EXISTS(SELECT 1 FROM vulnerability_apt a WHERE a.server_id=?1 AND a.package=json_extract(p.value,'$.name') AND a.root=?2 AND a.at>?3) LIMIT 8").map_err(err)?;
+        let mut q = db.prepare(
+            "SELECT DISTINCT json_extract(p.value,'$.name') AS name
+             FROM vulnerability_groups f JOIN vulnerability_evaluations e USING(server_id)
+             JOIN json_each(f.payload,'$.packages') p
+             LEFT JOIN vulnerability_apt a ON a.server_id=f.server_id
+                AND a.root=?2 AND a.package=json_extract(p.value,'$.name')
+             WHERE f.server_id=?1 AND f.hidden_at IS NULL
+                AND json_extract(e.payload,'$.root')=?2 AND json_extract(e.payload,'$.error') IS NULL
+                AND json_extract(f.payload,'$.state')='affected'
+             ORDER BY a.at ASC, name ASC LIMIT 8"
+        ).map_err(err)?;
         let rows = q
-            .query_map(params![id, state.root, now() - 21600], |r| r.get(0))
+            .query_map(params![id, state.root], |r| r.get(0))
             .map_err(err)?;
         rows.collect::<std::result::Result<Vec<_>, _>>()
             .map_err(err)
@@ -709,118 +643,111 @@ impl Store {
         .collect()
     }
 }
-pub(crate) async fn collect_apt(app: Arc<AppState>, id: String) -> Result<()> {
-    crate::monitoring::run(
-        &app.store,
-        "apt",
-        &id,
-        "",
-        collect_apt_inner(app.clone(), id.clone()),
-    )
-    .await
-}
-async fn collect_apt_inner(app: Arc<AppState>, id: String) -> Result<()> {
-    let mut _activity_span =
-        crate::activity::begin("server", "packages.collect_apt", Some(id.clone()));
-    let _activity_result=(async {
-    let _guard = app.collectors.acquire(&id, &app.store).await?;
-    let snapshot = app.store.snapshot()?;
-    let server = snapshot
-        .servers
-        .into_iter()
-        .find(|s| s.id == id)
-        .ok_or("The server is remote")?;
-    let expected = app.store.package_state(&id)?;
-    if expected.stage.is_some() {
-        return Err("Wait for the installed package scan to finish.".into());
-    }
-    if expected.root.is_none() {
-        return Err("First, rescan the list of installed packages.".into());
-    }
-    let targets = app.store.apt_targets(&id)?;
-    if targets.is_empty() {
-        return Ok(());
-    }
-    ssh::deploy(&server.endpoint, &app.collector).await?;
-    let bytes = ssh::run_collector(
-        &server.endpoint,
-        &json!({"kind":"packages","state":{"root":expected.root,"apt":targets}}),
-        32768,
-    )
-    .await?;
-    let reply: Reply = serde_json::from_slice(&bytes).map_err(err)?;
-    if reply.kind == "changed" {
-        return Err("Installed packages changed on the server. Rescan them before checking for updates.".into());
-    }
-    if reply.kind != "apt"
-        || reply.version != 1
-        || Some(&reply.root) != expected.root.as_ref()
-        || Some(&reply.metadata) != expected.metadata.as_ref()
-        || reply.candidates.len() > targets.len()
-    {
-        return Err("The server returned an unexpected APT check result.".into());
-    }
-    let mut candidates = BTreeMap::new();
-    for c in reply.candidates {
-        let c: Candidate = serde_json::from_value(c).map_err(err)?;
-        if !targets.contains(&c.package)
-            || c.version
-                .as_ref()
-                .is_some_and(|v| crate::debversion::compare(v, v).is_none())
-            || c.source_version
-                .as_ref()
-                .is_some_and(|v| crate::debversion::compare(v, v).is_none())
-            || c.source.as_ref().is_some_and(|s| {
-                s.len() > 200
-                    || !s.bytes().all(|b| {
-                        b.is_ascii_lowercase() || b.is_ascii_digit() || b"+.-".contains(&b)
-                    })
-            })
-        {
-            return Err("Incorrect APT candidate".into());
+impl Store {
+    pub(crate) fn record_apt_error(&self, server: &Server, expected: &State) -> Result<()> {
+        let db = self.0.lock().map_err(err)?;
+        crate::storage::admit(&db)?;
+        crate::monitoring::check_commit(&db)?;
+        if Store::read_server(&db, &server.id)?.endpoint != server.endpoint {
+            return Err("Connection has changed".into());
         }
-        candidates.insert(c.package.clone(), c);
+        db.execute(
+            "UPDATE package_state SET payload=json_set(payload,'$.aptError',?4)
+             WHERE server_id=?1 AND json_extract(payload,'$.token')=?2 AND json_extract(payload,'$.revision')=?3",
+            params![server.id, expected.token, expected.revision, "Could not read available fixes from the server's APT cache."],
+        ).map_err(err)?;
+        Ok(())
     }
-    let mut db = app.store.0.lock().map_err(err)?;
-    crate::storage::admit(&db)?;
-    let tx = db.transaction().map_err(err)?;
+
+    pub(crate) fn record_apt(
+        &self,
+        server: &Server,
+        expected: &State,
+        targets: &[String],
+        bytes: &[u8],
+    ) -> Result<()> {
+        if bytes.len() > 32768 {
+            return Err("Invalid APT response size".into());
+        }
+        let id = &server.id;
+        let reply: Reply = serde_json::from_slice(bytes).map_err(err)?;
+        if reply.kind == "changed" {
+            return Err("Installed packages changed on the server. Rescan them before checking for updates.".into());
+        }
+        if reply.kind != "apt"
+            || reply.version != 1
+            || Some(&reply.root) != expected.root.as_ref()
+            || Some(&reply.metadata) != expected.metadata.as_ref()
+            || reply.candidates.len() > targets.len()
+        {
+            return Err("The server returned an unexpected APT check result.".into());
+        }
+        let mut candidates = BTreeMap::new();
+        for c in reply.candidates {
+            let c: Candidate = serde_json::from_value(c).map_err(err)?;
+            if !targets.contains(&c.package)
+                || c.version
+                    .as_ref()
+                    .is_some_and(|v| crate::debversion::compare(v, v).is_none())
+                || c.source_version
+                    .as_ref()
+                    .is_some_and(|v| crate::debversion::compare(v, v).is_none())
+                || c.source.as_ref().is_some_and(|s| {
+                    s.len() > 200
+                        || !s.bytes().all(|b| {
+                            b.is_ascii_lowercase() || b.is_ascii_digit() || b"+.-".contains(&b)
+                        })
+                })
+            {
+                return Err("Incorrect APT candidate".into());
+            }
+            candidates.insert(c.package.clone(), c);
+        }
+        let mut db = self.0.lock().map_err(err)?;
+        crate::storage::admit(&db)?;
+        let tx = db.transaction().map_err(err)?;
         crate::monitoring::check_commit(&tx)?;
-    let raw: String = tx
-        .query_row(
-            "SELECT payload FROM package_state WHERE server_id=?1",
-            [&id],
-            |r| r.get(0),
+        if Store::read_server(&tx, id)?.endpoint != server.endpoint {
+            return Err("Connection has changed".into());
+        }
+        let raw: String = tx
+            .query_row(
+                "SELECT payload FROM package_state WHERE server_id=?1",
+                [id],
+                |r| r.get(0),
+            )
+            .map_err(err)?;
+        let current: State = serde_json::from_str(&raw).map_err(err)?;
+        if current.token != expected.token || current.revision != expected.revision {
+            return Err("Package snapshot replaced".into());
+        }
+        for name in targets {
+            let candidate = candidates.remove(name).unwrap_or(Candidate {
+                package: name.clone(),
+                version: None,
+                source: None,
+                source_version: None,
+            });
+            let entry = Apt {
+                candidate,
+                cache_at: reply.cache_at.filter(|t| *t <= now() + 300),
+                at: now(),
+                root: reply.root.clone(),
+            };
+            tx.execute("INSERT INTO vulnerability_apt VALUES(?1,?2,?3,?4,?5) ON CONFLICT(server_id,package) DO UPDATE SET root=excluded.root,at=excluded.at,payload=excluded.payload",params![id,name,reply.root,entry.at,serde_json::to_string(&entry).map_err(err)?]).map_err(err)?;
+        }
+        tx.execute(
+            "DELETE FROM vulnerability_apt WHERE server_id=?1 AND root!=?2",
+            params![id, reply.root],
         )
         .map_err(err)?;
-    let current: State = serde_json::from_str(&raw).map_err(err)?;
-    if current.token != expected.token || current.revision != expected.revision {
-        return Err("Package snapshot replaced".into());
+        tx.execute(
+            "UPDATE package_state SET payload=json_remove(payload,'$.aptError') WHERE server_id=?1",
+            [id],
+        )
+        .map_err(err)?;
+        tx.commit().map_err(err)
     }
-    for name in targets {
-        let candidate = candidates.remove(&name).unwrap_or(Candidate {
-            package: name.clone(),
-            version: None,
-            source: None,
-            source_version: None,
-        });
-        let entry = Apt {
-            candidate,
-            cache_at: reply.cache_at.filter(|t| *t <= now() + 300),
-            at: now(),
-            root: reply.root.clone(),
-        };
-        tx.execute("INSERT INTO vulnerability_apt VALUES(?1,?2,?3,?4,?5) ON CONFLICT(server_id,package) DO UPDATE SET root=excluded.root,at=excluded.at,payload=excluded.payload",params![id,name,reply.root,entry.at,serde_json::to_string(&entry).map_err(err)?]).map_err(err)?;
-    }
-    tx.execute(
-        "DELETE FROM vulnerability_apt WHERE server_id=?1 AND root!=?2",
-        params![id, reply.root],
-    )
-    .map_err(err)?;
-    tx.commit().map_err(err)
-
-    }).await;
-    _activity_span.result(&_activity_result);
-    _activity_result
 }
 
 #[cfg(test)]

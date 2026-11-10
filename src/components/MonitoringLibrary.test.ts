@@ -12,7 +12,7 @@ vi.mock('../api', () => ({ preview: false, call: mocks.call }));
 const metrics: MonitoringDefinition = {
   id: 'metrics', name: 'OS resources', category: 'System system', runner: 'metrics', place: 'On the server',
   purpose: 'CPU and memory', reads: '/proc', commands: 'python3 -I <collector>', writes: 'Assembler’s catalog',
-  rights: 'Reading', limits: '8 KiB', schedule: 'Every 3 min', configurable: true, intervalEditable: true,
+  rights: 'Reading', limits: '8 KiB', schedule: 'Every 3 min', configurable: true, intervalEditable: false,
   diagnostics: false, replication: false, factoryInterval: 180, version: 'version-hash',
 };
 const definitions = [
@@ -29,7 +29,7 @@ const definitions = [
   { ...metrics, id: 'transport', name: 'SSH and delivery', runner: 'local', configurable: false, intervalEditable: false },
   { ...metrics, id: 'custom', runner: 'custom', configurable: false, intervalEditable: false },
 ];
-const defaults = { enabled: true, intervalSeconds: 180, diagnosticEnabled: false, expectedPeers: 0, expectReplica: false };
+const defaults = { enabled: true, intervalSeconds: 300, diagnosticEnabled: false, expectedPeers: 0, expectReplica: false };
 const origins = { enabled: 'factory', intervalSeconds: 'factory', diagnosticEnabled: 'factory', expectedPeers: 'factory', expectReplica: 'factory' };
 const endpoint = { user: 'ops', port: 22, identityFile: null, jumpHost: null };
 const servers = [{ id: 'a', name: 'one' }, { id: 'b', name: 'two' }].map(server => ({ ...server, endpoint: { ...endpoint, host: server.name + '.example' } })) as Server[];
@@ -41,8 +41,6 @@ async function selectServer(wrapper: VueWrapper, host: string) {
   await wrapper.findAll('[role="option"]').find(option => option.get('.option-label > span').text() === host)!.trigger('click');
 }
 const row = (wrapper: VueWrapper, name: string) => wrapper.findAll('.row').find(item => item.get('th').text() === name)!;
-const interval = (wrapper: VueWrapper) => wrapper.get('input[aria-label="Check interval"]');
-const openInterval = (wrapper: VueWrapper) => wrapper.get('.interval-button').trigger('click');
 const openTab = (wrapper: VueWrapper, name: string) => wrapper.findAll('.tabs button').find(item => item.text() === name)!.trigger('click');
 const key = (scope: MonitoringScope) => [scope.definitionId, scope.serverId ?? '', scope.instanceId ?? ''].join('/');
 let overrides: Map<string, MonitoringOverrides>;
@@ -77,7 +75,7 @@ function policy(scope: MonitoringScope): MonitoringPolicy {
 }
 beforeEach(() => {
   vi.clearAllMocks();
-  overrides = new Map([['redis//', { intervalSeconds: 300 }]]);
+  overrides = new Map();
   revision = 1;
   mocks.call.mockImplementation(async (command, args) => {
     if (command === 'monitoring_catalog') return definitions;
@@ -111,7 +109,7 @@ beforeEach(() => {
 });
 
 it('saves a threshold pair together and resets only that rule at a connection', async () => {
-  overrides.set('redis/a/second', { intervalSeconds: 120 });
+  overrides.set('redis/a/second', { diagnosticEnabled: false });
   const wrapper = mountLibrary({ definitionId: 'redis', serverId: 'a', instanceId: 'second' });
   await flushPromises();
   const rule = wrapper.get('.threshold');
@@ -128,7 +126,7 @@ it('saves a threshold pair together and resets only that rule at a connection', 
   await flushPromises();
   expect(mocks.call).toHaveBeenCalledWith('configure_monitoring', {
     scope: { definitionId: 'redis', serverId: 'a', instanceId: 'second' },
-    overrides: { intervalSeconds: 120, thresholds: { memoryUsage: { warning: 99, critical: 100 } } },
+    overrides: { diagnosticEnabled: false, thresholds: { memoryUsage: { warning: 99, critical: 100 } } },
     expectedRevision: 1,
   });
   expect(rule.text()).toContain('Connection override');
@@ -136,7 +134,7 @@ it('saves a threshold pair together and resets only that rule at a connection', 
   await flushPromises();
   expect(warning.element.value).toBe('90');
   expect(critical.element.value).toBe('98');
-  expect(overrides.get('redis/a/second')).toEqual({ intervalSeconds: 120 });
+  expect(overrides.get('redis/a/second')).toEqual({ diagnosticEnabled: false });
   wrapper.unmount();
 });
 
@@ -210,7 +208,7 @@ it('opens the CVE catalog independently and keeps all server links under a filte
 });
 
 it('starts at common settings and reads a selected server without per-row calls', async () => {
-  overrides.set('redis/a/', { intervalSeconds: 120 });
+  overrides.set('redis/a/', { diagnosticEnabled: false });
   const wrapper = mountLibrary();
   await flushPromises();
   expect(serverPicker(wrapper).text()).toBe('All servers');
@@ -220,7 +218,7 @@ it('starts at common settings and reads a selected server without per-row calls'
   await selectServer(wrapper, 'one.example');
   await flushPromises();
   expect(wrapper.findAll('.row')).toHaveLength(1);
-  expect(row(wrapper, 'Redis').text()).toContain('2 min');
+  expect(row(wrapper, 'Redis').text()).toContain('5 min');
   await selectServer(wrapper, 'two.example');
   await flushPromises();
   expect(wrapper.text()).toContain('This server uses global settings for all checks');
@@ -231,35 +229,23 @@ it('starts at common settings and reads a selected server without per-row calls'
   wrapper.unmount();
 });
 
-it('validates an inline edit and saves only the selected connection with full second precision', async () => {
+it('shows the shared interval as read-only for a service connection', async () => {
   overrides.set('redis/a/second', { diagnosticEnabled: false });
   const wrapper = mountLibrary({ definitionId: 'redis', serverId: 'a', instanceId: 'second' });
   await flushPromises();
-  expect(wrapper.get('.interval-button').text()).toBe('5 min');
-  await openInterval(wrapper);
-  await interval(wrapper).setValue('2 s');
-  await interval(wrapper).trigger('keydown.enter');
-  expect(wrapper.text()).toContain('Enter an interval');
-  expect(mocks.call.mock.calls.some(([command]) => command === 'configure_monitoring')).toBe(false);
-  await interval(wrapper).setValue('90 s');
-  await interval(wrapper).trigger('keydown.enter');
-  await flushPromises();
-  expect(mocks.call).toHaveBeenCalledWith('configure_monitoring', {
-    scope: { definitionId: 'redis', serverId: 'a', instanceId: 'second' },
-    overrides: { diagnosticEnabled: false, intervalSeconds: 90 }, expectedRevision: 1,
-  });
-  expect(wrapper.get('.interval-button').text()).toBe('90 s');
-  expect(row(wrapper, 'Redis').text()).toContain('6 h');
+  expect(wrapper.text()).toContain('Server polling interval · 5 min');
+  expect(wrapper.find('input[aria-label="Check interval"]').exists()).toBe(false);
+  expect(row(wrapper, 'Redis').text()).toContain('5 min');
   wrapper.unmount();
 });
 
 it('opens an instance-only exception and removes the row when the last override is reset', async () => {
-  overrides.set('redis/a/second', { intervalSeconds: 120 });
+  overrides.set('redis/a/second', { diagnosticEnabled: false });
   const wrapper = mountLibrary();
   await flushPromises();
   await selectServer(wrapper, 'one.example');
   await flushPromises();
-  expect(row(wrapper, 'Redis').text()).toContain('2 min');
+  expect(row(wrapper, 'Redis').text()).toContain('5 min');
   expect(row(wrapper, 'Redis').text()).toContain('Connection override');
   await row(wrapper, 'Redis').get('button').trigger('click');
   await flushPromises();
@@ -268,7 +254,7 @@ it('opens an instance-only exception and removes the row when the last override 
   await flushPromises();
   expect(mocks.call).toHaveBeenCalledWith('configure_monitoring', {
     scope: { definitionId: 'redis', serverId: 'a', instanceId: 'second' },
-    overrides: { intervalSeconds: null }, expectedRevision: 1,
+    overrides: { diagnosticEnabled: null }, expectedRevision: 1,
   });
   expect(wrapper.text()).toContain('This server uses global settings for all checks');
   expect(wrapper.find('.row').exists()).toBe(false);
@@ -295,16 +281,13 @@ it('shows a write error and does not publish an uncommitted edit', async () => {
   const wrapper = mountLibrary({ definitionId: 'metrics' });
   await flushPromises();
   mocks.call.mockRejectedValueOnce(new Error('Settings changed in another window'));
-  await openInterval(wrapper);
-  await interval(wrapper).setValue('2 min');
-  await interval(wrapper).trigger('keydown.enter');
+  const toggle = wrapper.get('input[type="checkbox"]');
+  await toggle.setValue(false);
   await flushPromises();
   expect(wrapper.text()).toContain('Settings changed in another window');
-  expect(row(wrapper, 'OS resources').text()).toContain('Every 3 min');
+  expect(row(wrapper, 'OS resources').text()).toContain('Every 5 min');
   expect(wrapper.emitted('updated')).toBeUndefined();
-  expect(interval(wrapper).element).toHaveProperty('value', '2 min');
-  await interval(wrapper).trigger('keydown.esc');
-  expect(wrapper.get('.interval-button').text()).toBe('3 min');
+  expect(toggle.element).toHaveProperty('checked', true);
   wrapper.unmount();
 });
 

@@ -23,7 +23,6 @@ pub(crate) fn install(app: tauri::AppHandle, state: std::sync::Arc<crate::AppSta
     let center = NSWorkspace::sharedWorkspace().notificationCenter();
     let callback = RcBlock::new(move |_: NonNull<NSNotification>| {
         let mut span = crate::activity::begin("app", "monitoring_wake", None);
-        state.startup_cancel.cancel();
         let epoch = match state.store.suspend_metrics_checks() {
             Ok(epoch) => epoch,
             Err(error) => {
@@ -32,6 +31,7 @@ pub(crate) fn install(app: tauri::AppHandle, state: std::sync::Arc<crate::AppSta
             }
         };
         state.wake_reset.store(true, Ordering::Release);
+        state.polls.reset();
         let _ = app.emit("state-changed", ());
         let state = state.clone();
         let app = app.clone();
@@ -39,6 +39,7 @@ pub(crate) fn install(app: tauri::AppHandle, state: std::sync::Arc<crate::AppSta
             // Closing a bounded pool can wait on dead mux sockets; never block WebView.
             crate::ssh_pool::reset_global();
             let result = state.store.resume_metrics_checks(epoch);
+            state.polls.wake.notify_one();
             span.result(&result);
             let _ = app.emit("state-changed", ());
         });

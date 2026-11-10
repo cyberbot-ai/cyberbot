@@ -42,6 +42,7 @@ fn main() {
             "actions.py",
             "remote_read.py",
             "system.py",
+            "server_poll.py",
         ]
         .map(|part| root.join(part)),
     );

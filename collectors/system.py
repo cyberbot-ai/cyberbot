@@ -609,9 +609,7 @@ def package_rows():
 def package_digest(value):
     return hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':'),ensure_ascii=True).encode()).hexdigest()
 
-def packages(request):
-    state=request.get('state',{})
-    if not isinstance(state,dict) or set(state)-{'root','buckets','offset','apt'}:raise ValueError('Package request')
+def package_inventory():
     meta=package_metadata()
     try:
         rows=package_rows()
@@ -628,6 +626,19 @@ def packages(request):
     hashes=[package_digest(b) for b in buckets]
     root=package_digest({'metadata':meta,'hashes':hashes})
     result={'version':1,'at':int(time.time()),'metadata':meta,'root':root,'count':len(rows)}
+    return result, hashes, buckets, rows
+
+
+def packages(request):
+    state=request.get('state',{})
+    if not isinstance(state,dict) or set(state)-{'root','buckets','offset','apt'}:raise ValueError('Package request')
+    return package_reply(state, package_inventory())
+
+
+def package_reply(state, inventory):
+    result, hashes, buckets, rows = inventory
+    result = dict(result)
+    root = result['root']
     if 'apt' in state:
         adapter = linux_package_adapter()
         if "candidates" not in adapter: raise PackageError("apt_unsupported")
@@ -643,16 +654,20 @@ def packages(request):
         start=offset if index==0 else 0
         if start>len(buckets[bucket]):raise ValueError('Package offset')
         group={'bucket':bucket,'offset':start,'rows':[],'complete':False};result['groups'].append(group)
+        size = len(json.dumps(result, separators=(',', ':')).encode())
         for row_index in range(start,len(buckets[bucket])):
-            group['rows'].append(buckets[bucket][row_index])
-            if len(json.dumps(result,separators=(',',':')).encode())>30000:
-                group['rows'].pop();result['next']={'buckets':wanted[index:],'offset':row_index};return result
+            row = buckets[bucket][row_index]
+            size += len(json.dumps(row, separators=(',', ':')).encode()) + bool(group['rows'])
+            if size > 30000:
+                result['next']={'buckets':wanted[index:],'offset':row_index};return result
+            group['rows'].append(row)
         group['complete']=True
     return result
 
 
 def main():
     watched = sys.argv[1:] == ['--watched-action']
+    polling = sys.argv[1:] == ['--server-poll']
     if not watched:
         resource.setrlimit(resource.RLIMIT_CPU, (8, 8))
         resource.setrlimit(resource.RLIMIT_AS, (96*1024*1024, 96*1024*1024))
@@ -665,6 +680,16 @@ def main():
         if not frame.endswith(b'\n'):
             raise ValueError('Incomplete action frame')
         data = frame[:-1]
+    elif polling:
+        data = sys.stdin.buffer.read(POLL_INPUT_LIMIT + 1)
+        if len(data) > POLL_INPUT_LIMIT:
+            raise ValueError("Poll input limit")
+        def stop_poll(_signal, _frame):
+            raise SystemExit(1)
+        signal.signal(signal.SIGHUP, stop_poll)
+        signal.signal(signal.SIGTERM, stop_poll)
+        server_poll(load_collector_json(data))
+        return
     else:
         data = sys.stdin.buffer.read(49153)
     if len(data)>49152: raise ValueError("Input limit")

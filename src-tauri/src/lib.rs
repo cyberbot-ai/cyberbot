@@ -11,7 +11,6 @@ mod check_engine;
 mod check_runtime;
 mod checks;
 mod collector_queue;
-mod collector_schedule;
 mod connectivity;
 mod console;
 mod correlation;
@@ -35,12 +34,12 @@ mod packages;
 mod platform;
 mod power;
 mod process;
+mod server_poll;
 mod service_migration;
 mod services;
 pub mod ssh;
 mod ssh_authorization;
 pub mod ssh_pool;
-mod startup_monitoring;
 mod storage;
 pub mod store;
 mod vulnerabilities;
@@ -72,26 +71,23 @@ struct AppState {
     store: Store,
     collector: PathBuf,
     collectors: collector_queue::Queue,
-    package_refresh: package_refresh::Queue,
+    advisory_priority: package_refresh::Queue,
+    polls: server_poll::Queue,
     fleet_console: fleet_console::Console,
     consoles: console::Sessions,
     stop: AtomicBool,
     advisory_refresh: tokio::sync::Mutex<()>,
     wake_reset: AtomicBool,
-    startup_cancel: tokio_util::sync::CancellationToken,
     check_runtime: check_runtime::Runtime,
     actions: ai_actions::Runtime,
 }
 
 impl AppState {
-    fn package_refresh_after_command(&self, id: &str, endpoint: &Endpoint) {
-        if self
-            .store
-            .server_endpoint(id)
-            .as_ref()
-            .is_ok_and(|current| current == endpoint)
-        {
-            self.package_refresh.command_finished(id, endpoint);
+    fn poll_after_action(&self, id: &str, endpoint: &Endpoint) {
+        if let Ok(server) = self.store.server(id) {
+            if &server.endpoint == endpoint {
+                self.polls.force(&server);
+            }
         }
     }
 }
@@ -158,6 +154,7 @@ fn configure_monitoring(
         .set_monitoring(&scope, overrides, expected_revision);
     span.result(&result);
     if result.is_ok() {
+        state.polls.wake.notify_one();
         let _ = app.emit("state-changed", ());
     }
     result
@@ -301,7 +298,7 @@ async fn sync_source_inner(state: &AppState, source: &Source) -> Result<usize, S
         let snapshot = state.store.snapshot()?;
         activity::set_servers(&snapshot.servers);
         state.consoles.retain(&snapshot.servers);
-        state.package_refresh.retain(&snapshot.servers, |_| true);
+        state.polls.wake.notify_one();
         ssh_pool::maintain_global(
             &snapshot
                 .servers
@@ -348,7 +345,7 @@ fn delete_source(state: State<'_, Arc<AppState>>, id: String) -> Result<(), Stri
         let snapshot = state.store.snapshot()?;
         activity::set_servers(&snapshot.servers);
         state.consoles.retain(&snapshot.servers);
-        state.package_refresh.retain(&snapshot.servers, |_| true);
+        state.polls.wake.notify_one();
         ssh_pool::maintain_global(
             &snapshot
                 .servers
@@ -374,6 +371,7 @@ fn update_settings(
             .lock()
             .map_err(|e| e.to_string())?;
         let settings = state.store.update_settings(patch)?;
+        state.polls.wake.notify_one();
         if settings.mode != "auto" || settings.paused {
             state.investigator.cancel_auto();
         }
@@ -387,50 +385,15 @@ fn history(state: State<'_, Arc<AppState>>, id: String) -> Result<Vec<Observatio
     state.store.history(&id)
 }
 
-async fn poll(state: Arc<AppState>, id: String, app: tauri::AppHandle) -> Result<(), String> {
-    monitoring::run(
-        &state.store,
-        "metrics",
-        &id,
-        "",
-        poll_inner(state.clone(), id.clone(), app),
-    )
-    .await
-}
-async fn poll_inner(state: Arc<AppState>, id: String, app: tauri::AppHandle) -> Result<(), String> {
-    let mut _activity_span =
-        crate::activity::begin("server", "poll", crate::activity::id_target(&id));
-    let _activity_result = (async {
-        let _guard = state.collectors.acquire(&id, &state.store).await?;
-        let snapshot = state.store.snapshot()?;
-        let server = snapshot
-            .servers
-            .into_iter()
-            .find(|s| s.id == id)
-            .ok_or("The server is remote")?;
-        let result = collect_metrics(&state, &server).await;
-        let _ = app.emit("state-changed", ());
-        result.map(|_| ())
-    })
-    .await;
-    _activity_span.result(&_activity_result);
-    _activity_result
-}
 async fn collect_metrics(state: &AppState, server: &Server) -> Result<Observation, String> {
     let attempt = state.store.begin_metrics_check(server)?;
     let network = state.store.connectivity();
     let ticket = network.ticket();
-    let startup = monitoring::context().is_some_and(|e| e.trigger == startup_monitoring::TRIGGER);
-    let result = connectivity::observe_ssh(network.clone(), ticket, async {
-        // Keep the same pool entry alive across deployment and collection even
-        // if the connection cap falls while the check is running.
-        let _pin = if startup {
-            Some(ssh_pool::global()?.acquire(&server.endpoint).await?)
-        } else {
-            None
-        };
-        ssh::collect(&server.endpoint, &state.collector).await
-    })
+    let result = connectivity::observe_ssh(
+        network.clone(),
+        ticket,
+        ssh::collect(&server.endpoint, &state.collector),
+    )
     .await;
     let confirmed = if result.is_err() {
         Box::pin(network.confirm_failure(ticket)).await
@@ -440,10 +403,8 @@ async fn collect_metrics(state: &AppState, server: &Server) -> Result<Observatio
     state
         .store
         .record_network_metrics(&attempt, server, result.clone(), confirmed)?;
-    if !startup {
-        if let Some(app) = state.app.get() {
-            let _ = app.emit("state-changed", ());
-        }
+    if let Some(app) = state.app.get() {
+        let _ = app.emit("state-changed", ());
     }
     result
 }
@@ -460,7 +421,7 @@ async fn monitor_connectivity(app: tauri::AppHandle, state: Arc<AppState>) {
                 let current = *updates.borrow_and_update();
                 if !current.offline && current.recoveries != status.recoveries {
                     let _ = state.store.reschedule_metrics_checks();
-                    state.package_refresh.wake.notify_one();
+                    state.polls.reset();
                 }
                 if current.offline != status.offline || current.recoveries != status.recoveries {
                     let _ = app.emit("state-changed", ());
@@ -488,34 +449,14 @@ async fn monitor_connectivity(app: tauri::AppHandle, state: Arc<AppState>) {
 #[tauri::command]
 async fn poll_server(
     state: State<'_, Arc<AppState>>,
-    app: tauri::AppHandle,
     id: String,
-) -> Result<(), String> {
-    let mut _activity_span =
-        crate::activity::begin("app", "poll_server", crate::activity::id_target(&id));
-    let _activity_result = (async { poll(state.inner().clone(), id, app).await }).await;
-    _activity_span.result(&_activity_result);
-    _activity_result
+) -> Result<server_poll::Report, String> {
+    let mut span = activity::begin("app", "poll_server", activity::id_target(&id));
+    let result = server_poll::refresh(state.inner().clone(), id).await;
+    span.result(&result);
+    result
 }
 
-#[tauri::command]
-async fn diagnose(
-    state: State<'_, Arc<AppState>>,
-    id: String,
-    kind: String,
-) -> Result<serde_json::Value, String> {
-    let mut _activity_span =
-        crate::activity::begin("app", "diagnose", crate::activity::id_target(&id));
-    let _activity_result = (async {
-        if kind != "logs" {
-            return Err("Unknown check".into());
-        }
-        serde_json::to_value(logs::collect(state.inner().clone(), id).await?).map_err(err_string)
-    })
-    .await;
-    _activity_span.result(&_activity_result);
-    _activity_result
-}
 #[tauri::command]
 fn storage_status(state: State<'_, Arc<AppState>>) -> Result<storage::Status, String> {
     state.store.storage_status()
@@ -585,32 +526,6 @@ fn set_vulnerability_hidden(
     })();
     span.result(&result);
     result
-}
-#[tauri::command]
-async fn refresh_packages(state: State<'_, Arc<AppState>>, id: String) -> Result<(), String> {
-    let mut _activity_span =
-        crate::activity::begin("app", "refresh_packages", crate::activity::id_target(&id));
-    let _activity_result = (async {
-        let app = state.inner().clone();
-        packages::rescan(app.clone(), id.clone()).await?;
-        tokio::task::spawn_blocking(move || {
-            app.store
-                .evaluate_vulnerabilities(&id, &app.root.join("advisories"))
-        })
-        .await
-        .map_err(err_string)?
-    })
-    .await;
-    _activity_span.result(&_activity_result);
-    _activity_result
-}
-#[tauri::command]
-async fn refresh_apt(state: State<'_, Arc<AppState>>, id: String) -> Result<(), String> {
-    let mut _activity_span =
-        crate::activity::begin("app", "refresh_apt", crate::activity::id_target(&id));
-    let _activity_result = (async { packages::collect_apt(state.inner().clone(), id).await }).await;
-    _activity_span.result(&_activity_result);
-    _activity_result
 }
 #[tauri::command]
 fn advisory_status(state: State<'_, Arc<AppState>>) -> Result<Vec<advisories::Source>, String> {
@@ -703,28 +618,6 @@ fn configure_service(
             config,
         )
     })();
-    _activity_span.result(&_activity_result);
-    _activity_result
-}
-#[tauri::command]
-async fn refresh_service(
-    state: State<'_, Arc<AppState>>,
-    id: String,
-    kind: String,
-    instance_id: Option<String>,
-) -> Result<serde_json::Value, String> {
-    let mut _activity_span =
-        crate::activity::begin("app", "refresh_service", crate::activity::id_target(&id));
-    let _activity_result = (async {
-        services::refresh_for(
-            state.inner().clone(),
-            id,
-            kind,
-            instance_id.unwrap_or_else(instances::default_id),
-        )
-        .await
-    })
-    .await;
     _activity_span.result(&_activity_result);
     _activity_result
 }
@@ -1359,13 +1252,13 @@ fn create_state(root: PathBuf) -> Result<Arc<AppState>, String> {
         store,
         investigator: agents::Investigator::restore(runs),
         collectors: collector_queue::Queue::default(),
-        package_refresh: package_refresh::Queue::default(),
+        advisory_priority: package_refresh::Queue::default(),
+        polls: server_poll::Queue::default(),
         fleet_console: fleet_console::Console::default(),
         consoles: console::Sessions::default(),
         stop: AtomicBool::new(false),
         advisory_refresh: tokio::sync::Mutex::new(()),
         wake_reset: AtomicBool::new(false),
-        startup_cancel: tokio_util::sync::CancellationToken::new(),
         check_runtime: check_runtime::Runtime::default(),
         actions: ai_actions::Runtime::default(),
     });
@@ -1687,14 +1580,7 @@ fn open_server(
 
 fn background(app: tauri::AppHandle, state: Arc<AppState>) {
     tauri::async_runtime::spawn(monitor_connectivity(app.clone(), state.clone()));
-    let startup_deadline = Instant::now() + startup_monitoring::WINDOW;
-    tauri::async_runtime::spawn(startup_monitoring::run(
-        app.clone(),
-        state.clone(),
-        startup_deadline,
-    ));
     tauri::async_runtime::spawn(async move {
-        let mut jobs = tokio::task::JoinSet::new();
         let mut inventory_at = now() + 60;
         let mut reconcile_at = 0;
         let mut maintenance_at = 0;
@@ -1702,19 +1588,20 @@ fn background(app: tauri::AppHandle, state: Arc<AppState>) {
         let mut advisory_job: Option<tokio::task::JoinHandle<()>> = None;
         let mut matching_job: Option<tokio::task::JoinHandle<()>> = None;
         let mut checks_job: Option<tokio::task::JoinHandle<()>> = None;
+        let mut pool_at = 0;
         let mut ssh_refresh: Option<tokio::task::JoinHandle<()>> = None;
         let mut last_tick = now();
         loop {
             let tick = now();
             let native_wake = state.wake_reset.swap(false, Ordering::AcqRel);
             if !native_wake && (tick < last_tick || tick - last_tick > 30) {
-                state.startup_cancel.cancel();
+                state.polls.reset();
+                let _ = state.store.reset_metrics_checks();
                 state.store.connectivity().recheck();
                 ssh_pool::reset_global();
             }
             last_tick = tick;
             if state.stop.load(Ordering::Relaxed) {
-                jobs.abort_all();
                 if let Some(job) = checks_job.take() {
                     job.abort();
                 }
@@ -1729,7 +1616,6 @@ fn background(app: tauri::AppHandle, state: Arc<AppState>) {
                 }
                 break;
             }
-            while jobs.try_join_next().is_some() {}
             if now() >= maintenance_at {
                 let maintenance = monitoring::sync(&state.store, "storage", "schedule", || {
                     let mut span = activity::begin("app", "storage_cleanup", None);
@@ -1760,7 +1646,7 @@ fn background(app: tauri::AppHandle, state: Arc<AppState>) {
                     }));
                 }
                 if advisory_job.as_ref().is_none_or(|j| j.is_finished()) {
-                    let priority = state.package_refresh.take_advisories();
+                    let priority = state.advisory_priority.take_advisories();
                     if !priority.is_empty() || now() >= advisory_at {
                         let state = state.clone();
                         let handle = app.clone();
@@ -1784,7 +1670,7 @@ fn background(app: tauri::AppHandle, state: Arc<AppState>) {
                             .unwrap_or(false)
                         {
                             let _ = handle.emit("state-changed", ());
-                            state.package_refresh.wake.notify_one();
+                            state.polls.wake.notify_one();
                         }
                     }));
                 }
@@ -1816,131 +1702,63 @@ fn background(app: tauri::AppHandle, state: Arc<AppState>) {
                     let _ = state.store.block_auto(&error);
                 }
             }
-            if let Ok(snapshot) = state.store.snapshot() {
-                state.package_refresh.retain(&snapshot.servers, |_| true);
-                ssh_pool::maintain_global(
-                    &snapshot
-                        .servers
-                        .iter()
-                        .map(|s| s.endpoint.clone())
-                        .collect::<Vec<_>>(),
-                );
-                if ssh_refresh.as_ref().is_none_or(|job| job.is_finished()) {
-                    if let Ok(pool) = ssh_pool::global() {
-                        ssh_refresh = Some(tokio::spawn(pool.refresh_changed_directories()));
+            let mut next = Instant::now() + Duration::from_secs(5);
+            if let Ok((servers, settings)) = state.store.poll_targets() {
+                if now() >= pool_at {
+                    pool_at = now() + 5;
+                    ssh_pool::maintain_global(
+                        &servers
+                            .iter()
+                            .map(|s| s.endpoint.clone())
+                            .collect::<Vec<_>>(),
+                    );
+                    if ssh_refresh.as_ref().is_none_or(|job| job.is_finished()) {
+                        if let Ok(pool) = ssh_pool::global() {
+                            ssh_refresh = Some(tokio::spawn(pool.refresh_changed_directories()));
+                        }
                     }
                 }
-                if !snapshot.settings.paused && storage_ok {
-                    let active = state.collectors.snapshot().unwrap_or_default();
-                    let book = state.store.monitoring_book().unwrap_or_default();
-                    state.package_refresh.retain(&snapshot.servers, |id| {
-                        book.enabled("packages", id, "default")
-                    });
-                    state
-                        .package_refresh
-                        .reconcile_assessments(&state.store, Instant::now());
-                    let schedule = collector_schedule::Schedule {
-                        logs: state
-                            .store
-                            .log_schedule(&snapshot.servers)
-                            .unwrap_or_default(),
-                        packages: state
-                            .store
-                            .package_schedule(&snapshot.servers)
-                            .unwrap_or_default(),
-                        services: state
-                            .store
-                            .service_schedule(&snapshot.servers)
-                            .unwrap_or_default(),
-                        after_ssh: state.package_refresh.due(),
-                    };
-                    let startup =
-                        startup_monitoring::active(startup_deadline, &state.startup_cancel);
-                    let awaiting: std::collections::HashSet<_> =
-                        snapshot.awaiting_first_check.iter().collect();
-                    let eligible = snapshot.servers.iter().filter(|server| {
-                        if active.occupied(&server.id) {
-                            return false;
-                        }
-                        !(startup
-                            && awaiting.contains(&server.id)
-                            && book.enabled("metrics", &server.id, ""))
-                    });
-                    let mut slots = snapshot
-                        .settings
-                        .concurrency
-                        .saturating_sub(active.background_count());
-                    for (server, work) in schedule.due(eligible, &book, now(), Instant::now()) {
-                        if slots == 0 {
-                            break;
-                        }
-                        let state = state.clone();
-                        let app = app.clone();
-                        let id = server.id.clone();
-                        match work {
-                            collector_schedule::Work::AfterSsh => {
-                                let Some(job) = state.package_refresh.claim(
-                                    &id,
-                                    &server.endpoint,
-                                    Instant::now(),
-                                ) else {
-                                    continue;
-                                };
-                                jobs.spawn(monitoring::trigger("schedule", async move {
-                                    packages::refresh_after_ssh(state, id, job).await;
-                                    let _ = app.emit("state-changed", ());
-                                }));
+                if !settings.paused && storage_ok && !state.store.polls_suspended() {
+                    if let Ok(active) = state.collectors.snapshot() {
+                        let slots = settings
+                            .concurrency
+                            .saturating_sub(active.background_count());
+                        if slots != 0 {
+                            let (ready, deadline) = state.polls.due(
+                                &servers,
+                                &active,
+                                Duration::from_secs(settings.poll_seconds),
+                                Instant::now(),
+                            );
+                            for server in ready.into_iter().take(slots) {
+                                let _ = state.polls.start(state.clone(), server.clone(), false);
                             }
-                            collector_schedule::Work::Scheduled { kind, instance } => {
-                                jobs.spawn(monitoring::trigger("schedule", async move {
-                                    match monitoring::definition(&kind).map(|d| d.runner) {
-                                        Ok(monitoring::Runner::Metrics) => {
-                                            let _ = poll(state, id, app.clone()).await;
-                                        }
-                                        Ok(monitoring::Runner::Logs) => {
-                                            let _ = logs::collect(state, id).await;
-                                        }
-                                        Ok(monitoring::Runner::Packages) => {
-                                            let _ = packages::collect(state, id).await;
-                                        }
-                                        Ok(monitoring::Runner::Service) => {
-                                            let _ =
-                                                services::refresh_for(state, id, kind, instance)
-                                                    .await;
-                                        }
-                                        _ => (),
-                                    }
-                                    let _ = app.emit("state-changed", ());
-                                }));
+                            if let Some(deadline) = deadline {
+                                next = next.min(deadline);
                             }
                         }
-                        slots -= 1;
                     }
                     if now() >= inventory_at {
-                        for source in snapshot.sources.iter().filter(|s| s.kind == "ansible") {
-                            if let Err(error) =
-                                monitoring::trigger("schedule", sync_source(&state, source)).await
-                            {
-                                let _ = state.store.source_error(source, error);
+                        if let Ok(snapshot) = state.store.snapshot() {
+                            for source in snapshot.sources.iter().filter(|s| s.kind == "ansible") {
+                                if let Err(error) =
+                                    monitoring::trigger("schedule", sync_source(&state, source))
+                                        .await
+                                {
+                                    let _ = state.store.source_error(source, error);
+                                }
                             }
+                            let _ = app.emit("state-changed", ());
                         }
                         inventory_at = now() + 300;
-                        let _ = app.emit("state-changed", ());
                     }
                 }
             }
-            let time = Instant::now();
-            let next = state
-                .package_refresh
-                .due()
-                .into_values()
-                .filter(|at| *at > time)
-                .min()
-                .unwrap_or(time + Duration::from_secs(5))
-                .min(time + Duration::from_secs(5));
             tokio::select! {
                 _ = tokio::time::sleep_until(next.into()) => (),
-                _ = state.package_refresh.wake.notified() => (),
+                _ = state.polls.wake.notified() => (),
+                _ = state.advisory_priority.wake.notified() => (),
+                _ = state.collectors.released.notified() => (),
             }
         }
     });
@@ -1990,7 +1808,6 @@ pub fn run() {
             update_settings,
             history,
             poll_server,
-            diagnose,
             log_summary,
             list_service_instances,
             add_service_instance,
@@ -1998,14 +1815,11 @@ pub fn run() {
             service_catalog,
             service_summary,
             configure_service,
-            refresh_service,
             storage_status,
             vulnerability_summary,
             vulnerability_catalog,
             vulnerability_catalog_detail,
             set_vulnerability_hidden,
-            refresh_packages,
-            refresh_apt,
             advisory_status,
             refresh_advisories,
             action_requests,
@@ -2106,7 +1920,7 @@ pub fn run() {
                     "quit" => {
                         let state = app.state::<Arc<AppState>>();
                         state.stop.store(true, Ordering::Relaxed);
-                        state.startup_cancel.cancel();
+                        state.polls.wake.notify_one();
                         state.fleet_console.shutdown();
                         ssh_pool::shutdown_global();
                         process::kill_all();
@@ -2150,7 +1964,7 @@ pub fn run() {
             activity::info("app", "shutdown", None);
             if let Some(state) = app.try_state::<Arc<AppState>>() {
                 state.stop.store(true, Ordering::Relaxed);
-                state.startup_cancel.cancel();
+                state.polls.wake.notify_one();
                 state.fleet_console.shutdown();
             }
             ssh_pool::shutdown_global();

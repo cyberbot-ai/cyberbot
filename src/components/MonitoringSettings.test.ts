@@ -44,8 +44,8 @@ describe('monitoring autosave',()=>{
     const w=mount(MonitoringSettings,{props:{settings:{...stored}}});
     for (const value of ['', '1', '86401', '30.5']) {await w.findAll('input')[0].setValue(value);await settle();}
     expect(mocks.call).not.toHaveBeenCalled();expect(stored.pollSeconds).toBe(180);
-    await w.findAll('input')[1].setValue('1200');await settle();
-    expect(mocks.call).toHaveBeenCalledWith('update_settings',{patch:{logPollSeconds:1200}});
+    await w.findAll('input')[1].setValue('12');await settle();
+    expect(mocks.call).toHaveBeenCalledWith('update_settings',{patch:{concurrency:12}});
     expect(w.get('[role="alert"]').text()).toContain('Server polling');
     await w.findAll('input')[0].setValue('900');await settle();expect(stored.pollSeconds).toBe(900);
     expect(w.find('[role="alert"]').exists()).toBe(false);w.unmount();

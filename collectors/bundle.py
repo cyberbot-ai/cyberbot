@@ -20,6 +20,7 @@ def source():
         "actions.py",
         "remote_read.py",
         "system.py",
+        "server_poll.py",
         *(f"connectors/{stem}.py" for stem in stems),
     ]
     bindings = ", ".join(f"{json.dumps(kind)}: {spec['python'].upper()}_ADAPTER" for kind, spec in sorted(services.items()))
