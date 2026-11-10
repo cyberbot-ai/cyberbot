@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.0
+
+- Set alert thresholds for built-in resource, service, and log checks across the fleet, per server, or per service connection.
+
 ## 0.9.0
 
 - Show the Servers page as a list only. The card view and the view switch are removed.

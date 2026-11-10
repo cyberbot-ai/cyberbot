@@ -7,6 +7,19 @@ import type { Investigation, Observation, Server } from '../types';
 vi.mock('../api',()=>({preview:true,call:vi.fn().mockResolvedValue([])}));
 const server={id:'s',name:'db-01',sourceId:'source',endpoint:{host:'localhost',user:'ops',port:22,identityFile:null,jumpHost:null},observation:null,lastError:null,lastAttempt:null,nextCheck:0,failures:0};
 const stateful={template:'<div class="module"><input aria-label="draft" /></div>'};
+it('uses separate configured thresholds for CPU and disk pressure in the overview', () => {
+ const observation: Observation = {
+  at: 100, cpuPercent: 98, memoryPercent: 20, swapPercent: 0, load: 1, uptime: 1000,
+  disks: [{ mount: '/', usedPercent: 98, inodePercent: null }], services: [], missing: [], bytesReceived: 100, durationMs: 10,
+ };
+ const monitoring = { enabled: true, intervalSeconds: 180, diagnosticEnabled: false, expectedPeers: 0, expectReplica: false,
+  thresholds: { cpu: { warning: 99, critical: 100 }, disk: { warning: 95, critical: 99 } } };
+ const w = mount(ServerDetail, { props: { server: { ...server, observation, monitoring }, now: 100, interval: 180 } });
+ expect(w.get('.metrics > div:first-child').classes()).toEqual([]);
+ expect(w.get('.disk .value').classes()).toContain('warning');
+ expect(w.get('.status').classes()).toContain('warning');
+ w.unmount();
+});
 it('plots CPU by timestamp, breaks missing and overdue samples, and refreshes after a background measurement', async () => {
  const sample = (at: number, cpuPercent: number | null): Observation => ({
   at, cpuPercent, memoryPercent: 20, swapPercent: 0, load: 1, uptime: 1000,

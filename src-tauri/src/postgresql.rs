@@ -1,5 +1,6 @@
 //! PostgreSQL catalog diagnostics. No SQL or credentials enter the agent interface.
 use crate::instances::{self, DEFAULT};
+use crate::monitoring::thresholds::{self, Thresholds};
 use crate::{inventory::stable_id, model::*, ssh, store::Store, AppState};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -319,7 +320,7 @@ pub(crate) const RULES: &[(&str, &str, &str)] = &[
     ("slots", "PostgreSQL: replication slot backlog", "warning"),
 ];
 // None is incomplete coverage, never a healthy sample. Unknown/idle lag is not zero.
-fn signals(w: &Wire, c: &Config) -> BTreeMap<&'static str, Option<f64>> {
+fn signals(w: &Wire, c: &Config, thresholds: &Thresholds) -> BTreeMap<&'static str, Option<f64>> {
     let mut out = RULES
         .iter()
         .map(|(k, _, _)| (*k, None))
@@ -329,7 +330,7 @@ fn signals(w: &Wire, c: &Config) -> BTreeMap<&'static str, Option<f64>> {
     };
     out.insert(
         "freeze_age",
-        Some(if m.xid_age >= 1_000_000_000 {
+        Some(if m.xid_age as f64 >= thresholds["freeze_age"]["warning"] {
             m.xid_age as f64
         } else {
             0.
@@ -337,26 +338,24 @@ fn signals(w: &Wire, c: &Config) -> BTreeMap<&'static str, Option<f64>> {
     );
     out.insert(
         "connections",
-        Some(
-            if m.connections as f64 / (m.max_connections - m.reserved_connections) as f64 >= 0.9 {
-                100. * m.connections as f64 / (m.max_connections - m.reserved_connections) as f64
-            } else {
-                0.
-            },
-        ),
+        Some(100. * m.connections as f64 / (m.max_connections - m.reserved_connections) as f64),
     );
     if m.track_activities && m.disabled_activities == 0 {
-        out.insert("long_queries", Some(m.long_queries as f64));
-        out.insert("idle_transactions", Some(m.idle_transactions as f64));
+        for (rule, count) in [
+            ("long_queries", m.long_queries),
+            ("idle_transactions", m.idle_transactions),
+        ] {
+            let count = count as f64;
+            let value = if count >= thresholds[rule]["warning"] { count } else { 0. };
+            out.insert(rule, Some(value));
+        }
     }
     if m.unknown_waits == 0 {
+        let limits = &thresholds["locks"];
+        let bad = m.max_wait_seconds >= limits["seconds"] && m.blocked as f64 >= limits["warning"];
         out.insert(
             "locks",
-            Some(if m.max_wait_seconds >= 30. {
-                m.blocked as f64
-            } else {
-                0.
-            }),
+            Some(if bad { m.blocked as f64 } else { 0. }),
         );
     }
     let backlog = if m.recovery {
@@ -366,10 +365,8 @@ fn signals(w: &Wire, c: &Config) -> BTreeMap<&'static str, Option<f64>> {
     } else {
         Some(m.replica_backlog_bytes.unwrap_or(0.))
     };
-    out.insert(
-        "replication",
-        backlog.map(|b| if b >= 64. * 1024. * 1024. { b } else { 0. }),
-    );
+    let replication_minimum = thresholds["replication"]["warning"] * 1024. * 1024.;
+    out.insert("replication", backlog.map(|b| if b >= replication_minimum { b } else { 0. }));
     out.insert(
         "streaming",
         Some(
@@ -403,13 +400,22 @@ fn signals(w: &Wire, c: &Config) -> BTreeMap<&'static str, Option<f64>> {
         } else {
             Some(
                 m.slot_retained_bytes
-                    .filter(|b| *b >= 1024. * 1024. * 1024.)
+                    .filter(|b| *b >= thresholds["slots"]["warning"] * 1024. * 1024.)
                     .unwrap_or(0.),
             )
         },
     );
     out
 }
+
+fn breached(key: &str, value: f64, thresholds: &Thresholds) -> bool {
+    if key == "connections" {
+        value >= thresholds[key]["warning"]
+    } else {
+        value > 0.
+    }
+}
+
 fn read_state(db: &Connection, id: &str, instance: &str) -> Result<Checkpoint> {
     let raw: String = db
         .query_row(
@@ -454,6 +460,7 @@ fn card_status(
     state: &Checkpoint,
     summary: Option<&Summary>,
     fresh: bool,
+    thresholds: &Thresholds,
 ) -> Result<&'static str> {
     if !fresh {
         return Ok("unknown");
@@ -482,9 +489,9 @@ fn card_status(
     if !incidents.is_empty() {
         return Ok("unknown");
     }
-    if signals(&s.data, &state.config)
-        .values()
-        .any(|v| v.is_some_and(|v| v > 0.))
+    if signals(&s.data, &state.config, thresholds)
+        .iter()
+        .any(|(key, value)| value.is_some_and(|v| breached(key, v, thresholds)))
     {
         return Ok("warning");
     }
@@ -586,6 +593,7 @@ impl Store {
             diagnostic_enabled: config.enabled,
             expected_peers: config.expected_streaming,
             expect_replica: config.expect_receiver,
+            ..old.clone()
         };
         crate::monitoring::legacy_service(&tx, "postgresql", id, instance, &old, &new)?;
         s.config = config;
@@ -612,10 +620,8 @@ impl Store {
         let mut summary: Option<Summary> = raw
             .map(|s| serde_json::from_str(&s).map_err(err))
             .transpose()?;
-        let fresh = crate::monitoring::effective(&db, "postgresql", id, instance)?
-            .values
-            .enabled
-            && fresh(&s, summary.as_ref());
+        let monitoring = crate::monitoring::effective(&db, "postgresql", id, instance)?.values;
+        let fresh = monitoring.enabled && fresh(&s, summary.as_ref());
         let incidents = open_incidents(&db, Some(id))?
             .into_iter()
             .filter(|i| {
@@ -628,6 +634,7 @@ impl Store {
             &s,
             summary.as_ref(),
             fresh,
+            &monitoring.thresholds,
         )?;
         let mut q=db.prepare("SELECT payload FROM service_summaries WHERE kind='postgresql' AND instance_id=?2 AND id IN (SELECT e.summary_id FROM service_evidence e JOIN incidents i ON i.id=e.incident_id WHERE i.server_id=?1 AND json_extract(i.payload,'$.status')='open') ORDER BY at DESC,rowid DESC LIMIT 5").map_err(err)?;
         let mut evidence = q
@@ -642,7 +649,7 @@ impl Store {
             }
         }
         Ok(View {
-            monitoring: crate::monitoring::effective(&db, "postgresql", id, instance)?.values,
+            monitoring,
             config: s.config,
             summary,
             evidence,
@@ -691,7 +698,7 @@ impl Store {
                 .iter()
                 .filter(|i| i.server_id == id && i.check.starts_with(&key))
                 .collect::<Vec<_>>();
-            let status = card_status(&selected, &state, summary.as_ref(), fresh)?;
+            let status = card_status(&selected, &state, summary.as_ref(), fresh, &policy.thresholds)?;
             let name = names.name(&id, "postgresql", &instance);
             Ok((
                 id,
@@ -736,6 +743,8 @@ impl Store {
         let current: Server = serde_json::from_str(&raw).map_err(err)?;
         let instance = &expected.instance_id;
         let mut s = read_state(&tx, &server.id, instance)?;
+        let policy = crate::monitoring::effective(&tx, "postgresql", &server.id, instance)?;
+        let thresholds = &policy.values.thresholds;
         if serde_json::to_value(current.endpoint).map_err(err)?
             != serde_json::to_value(&server.endpoint).map_err(err)?
             || s.epoch != expected.epoch
@@ -754,7 +763,7 @@ impl Store {
             s.generation = generation;
         }
         let advance = s.last_sample.is_none_or(|t| at - t >= 60);
-        let values = signals(&wire, &s.config);
+        let values = signals(&wire, &s.config, thresholds);
         let id = uuid::Uuid::new_v4().to_string();
         let mut findings = vec![];
         for (key, title, severity) in RULES {
@@ -764,42 +773,37 @@ impl Store {
                 1,
             );
             let title = &instance_title.as_str();
-            let value = values[key];
             let check = format!("{}:{key}", instances::scope("postgresql", instance));
             let iid = stable_id(&server.id, &check);
-            if value.is_none() {
+            let Some(value) = values[key] else {
                 s.streaks.remove(*key);
                 stale(&tx, &server.id, instance, Some(&check))?;
                 continue;
-            }
-            let value = value.unwrap();
-            if value == 0. {
+            };
+            let bad = breached(key, value, thresholds);
+            if !bad {
                 s.streaks.insert((*key).into(), 0);
                 if !advance {
                     stale(&tx, &server.id, instance, Some(&check))?;
                 }
             }
             if advance {
-                let n = if value > 0. {
+                let n = if bad {
                     s.streaks.get(*key).copied().unwrap_or(0).saturating_add(1)
                 } else {
                     0
                 };
                 s.streaks.insert((*key).into(), n);
             }
-            let firing = value > 0. && s.streaks.get(*key).copied().unwrap_or(0) >= 2;
+            let firing = bad && s.streaks.get(*key).copied().unwrap_or(0) >= 2;
             if firing {
+                let severity = thresholds
+                    .get(*key)
+                    .map_or(*severity, |limits| thresholds::severity(limits, value));
                 findings.push(Finding {
                     key: check.clone(),
                     title: (*title).into(),
-                    severity: if (*key == "connections" && value >= 97.)
-                        || (*key == "freeze_age" && value >= 1_500_000_000.)
-                    {
-                        "critical"
-                    } else {
-                        severity
-                    }
-                    .into(),
+                    severity: severity.into(),
                     value,
                 });
             }
@@ -807,7 +811,7 @@ impl Store {
             if !advance {
                 continue;
             }
-            if firing || value == 0. && open {
+            if firing || !bad && open {
                 let sev = findings
                     .last()
                     .filter(|f| f.key == check)
@@ -931,6 +935,7 @@ async fn collect_for_inner(state: Arc<AppState>, id: String, instance: String) -
             .find(|s| s.id == id)
             .ok_or("The server is remote")?;
         let checkpoint = state.store.postgresql_state_for(&id, &instance)?;
+        let policy = crate::monitoring::effective_values(&state.store, "postgresql", &id, &instance)?;
         let result = async {
             ssh::deploy(&server.endpoint, &state.collector).await?;
             let bytes = ssh::service_sample(
@@ -939,6 +944,7 @@ async fn collect_for_inner(state: Arc<AppState>, id: String, instance: String) -
                 &instance,
                 json!(checkpoint.config),
                 serde_json::Value::Null,
+                thresholds::collector_values("postgresql", &policy.thresholds),
             )
             .await?;
             state
@@ -1280,24 +1286,43 @@ mod tests {
     fn replication_is_not_idle_elapsed_time_and_expectations_are_explicit() {
         let v: Wire = serde_json::from_value(wire(1)).unwrap();
         let c = Config::default();
-        let signal = signals(&v, &c);
+        let thresholds = crate::monitoring::Book::default().resolve(&crate::monitoring::scope("postgresql", None, None)).unwrap().values.thresholds;
+        let signal = signals(&v, &c, &thresholds);
         assert_eq!(signal["replication"], Some(0.));
         assert_eq!(signal["streaming"], Some(0.));
         let c = Config {
             expected_streaming: 2,
             ..c
         };
-        assert_eq!(signals(&v, &c)["streaming"], Some(2.));
+        assert_eq!(signals(&v, &c, &thresholds)["streaming"], Some(2.));
         let mut v = v;
         v.meta.as_mut().unwrap().recovery = true;
         let m = v.metrics.as_mut().unwrap();
         m.recovery = true;
         m.replay_backlog_bytes = None;
-        assert_eq!(signals(&v, &c)["replication"], None);
+        assert_eq!(signals(&v, &c, &thresholds)["replication"], None);
         v.metrics.as_mut().unwrap().replay_backlog_bytes = Some(0.);
-        assert_eq!(signals(&v, &c)["replication"], Some(0.));
+        assert_eq!(signals(&v, &c, &thresholds)["replication"], Some(0.));
         v.metrics.as_mut().unwrap().replay_backlog_bytes = Some(100. * 1024. * 1024.);
-        assert!(signals(&v, &c)["replication"].unwrap() > 0.);
+        assert!(signals(&v, &c, &thresholds)["replication"].unwrap() > 0.);
+    }
+    #[test]
+    fn configured_connection_limits_apply_to_the_card_and_confirmed_incidents() {
+        let (db, server) = fixture();
+        let scope = crate::monitoring::scope("postgresql", Some(&server.id), Some(DEFAULT));
+        let policy = db.monitoring_policy(&scope).unwrap();
+        db.set_monitoring(&scope, crate::monitoring::Overrides {
+            thresholds: [("connections".into(), [("warning".into(), 99.), ("critical".into(), 100.)].into())].into(),
+            ..policy.overrides
+        }, policy.revision).unwrap();
+        let at = now();
+        record(&db, &server, wire(95), at);
+        assert_eq!(db.postgresql_view(&server.id).unwrap().status, "healthy");
+        record(&db, &server, wire(97), at + 60);
+        assert_eq!(db.postgresql_view(&server.id).unwrap().status, "warning");
+        record(&db, &server, wire(97), at + 120);
+        assert_eq!(db.postgresql_view(&server.id).unwrap().status, "critical");
+        assert_eq!(db.snapshot().unwrap().incidents[0].severity, "critical");
     }
     #[test]
     fn connection_failures_back_off_and_freeze_age_is_actionable() {

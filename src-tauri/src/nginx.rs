@@ -7,6 +7,7 @@ use crate::{
     store::Store,
     AppState,
 };
+use crate::monitoring::thresholds::{self, Thresholds};
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -340,22 +341,23 @@ fn validate(w: &Wire) -> Result<()> {
     }
     Ok(())
 }
-fn evaluate(w: &Wire, state: &mut Checkpoint) -> Vec<LogFinding> {
+fn evaluate(w: &Wire, state: &mut Checkpoint, thresholds: &Thresholds) -> Vec<LogFinding> {
     let count = |k: &str| w.counts.get(k).copied().unwrap_or(0);
     let mut findings = Vec::new();
     for (key, title, severity) in RULES {
         let (bad, complete, n, required) = match *key {
             "service_failed" => (w.service == "failed", w.service == "active", 1, 1),
-            "capacity" | "critical_error" => (count(key) > 0, w.error_complete, count(key), 1),
+            "capacity" | "critical_error" => (count(key) as f64 >= thresholds[*key]["critical"], w.error_complete, count(key), 1),
             "http_5xx" => (
-                count("5xx") >= 10 && count("5xx") as f64 / count("requests").max(1) as f64 >= 0.05,
+                count("5xx") as f64 >= thresholds["http_5xx"]["warning"]
+                    && count("5xx") as f64 / count("requests").max(1) as f64 >= thresholds["http_5xx"]["share"] / 100.,
                 w.access_complete,
                 count("5xx"),
                 2,
             ),
             "latency" => (
-                w.request_time.slow >= 20
-                    && w.request_time.slow as f64 / w.request_time.samples.max(1) as f64 >= 0.2,
+                w.request_time.slow as f64 >= thresholds["latency"]["warning"]
+                    && w.request_time.slow as f64 / w.request_time.samples.max(1) as f64 >= thresholds["latency"]["share"] / 100.,
                 w.access_complete && w.request_time.samples > 0,
                 w.request_time.slow,
                 2,
@@ -364,7 +366,7 @@ fn evaluate(w: &Wire, state: &mut Checkpoint) -> Vec<LogFinding> {
                 let n = count("upstream_timeout")
                     + count("upstream_connect")
                     + count("upstream_unavailable");
-                (n >= 5, w.error_complete, n, 2)
+                (n as f64 >= thresholds["upstream"]["warning"], w.error_complete, n, 2)
             }
         };
         let eligible = required == 1 || complete && !w.coverage.initial && w.window_seconds >= 60;
@@ -528,10 +530,9 @@ impl Store {
         if state.revision != expected.revision || state.salt != expected.salt {
             return Err("Nginx log position has already changed".into());
         }
-        let interval = crate::monitoring::effective(&tx, "nginx", &server.id, "")?
-            .values
-            .interval_seconds;
-        let findings = evaluate(&wire, &mut state);
+        let policy = crate::monitoring::effective(&tx, "nginx", &server.id, "")?.values;
+        let interval = policy.interval_seconds;
+        let findings = evaluate(&wire, &mut state, &policy.thresholds);
         state.cursor = std::mem::replace(&mut wire.next_state, json!({})); // never expose private checkpoint via MCP/UI
         let summary = Summary {
             id: uuid::Uuid::new_v4().to_string(),
@@ -705,6 +706,7 @@ async fn collect_inner(state: Arc<AppState>, id: String) -> Result<Summary> {
             .find(|s| s.id == id)
             .ok_or("The server is remote")?;
         let checkpoint = state.store.nginx_state(&id)?;
+        let policy = crate::monitoring::effective_values(&state.store, "nginx", &id, "")?;
         let result = async {
             ssh::deploy(&server.endpoint, &state.collector).await?;
             let bytes = ssh::service_sample(
@@ -713,6 +715,7 @@ async fn collect_inner(state: Arc<AppState>, id: String) -> Result<Summary> {
                 crate::instances::DEFAULT,
                 Value::Null,
                 json!({"state":checkpoint.cursor,"salt":checkpoint.salt}),
+                thresholds::collector_values("nginx", &policy.thresholds),
             )
             .await?;
             state
@@ -987,20 +990,36 @@ mod tests {
         };
         w.counts.insert("upstream_timeout".into(), 10);
         let mut s = Checkpoint::new("s");
-        assert!(evaluate(&w, &mut s).is_empty());
-        let f = evaluate(&w, &mut s);
+        let thresholds = crate::monitoring::Book::default().resolve(&crate::monitoring::scope("nginx", None, None)).unwrap().values.thresholds;
+        assert!(evaluate(&w, &mut s, &thresholds).is_empty());
+        let f = evaluate(&w, &mut s, &thresholds);
         assert_eq!(f.len(), 2);
         assert!(f.iter().any(|f| f.check == "nginx:latency"));
         w.access_complete = false;
         w.error_complete = false;
-        assert!(evaluate(&w, &mut s).is_empty());
+        assert!(evaluate(&w, &mut s, &thresholds).is_empty());
         w.access_complete = true;
         w.error_complete = true;
-        assert!(evaluate(&w, &mut s).is_empty());
+        assert!(evaluate(&w, &mut s, &thresholds).is_empty());
         w.service = "failed".into();
-        assert!(evaluate(&w, &mut s)
+        assert!(evaluate(&w, &mut s, &thresholds)
             .iter()
             .any(|f| f.check == "nginx:service_failed"));
+    }
+    #[test]
+    fn http_error_alert_uses_both_configured_boundaries() {
+        let (db, server) = fixture();
+        let scope = crate::monitoring::scope("nginx", Some(&server.id), None);
+        let policy = db.monitoring_policy(&scope).unwrap();
+        db.set_monitoring(&scope, crate::monitoring::Overrides {
+            thresholds: [("http_5xx".into(), [("warning".into(), 7.), ("share".into(), 9.)].into())].into(),
+            ..policy.overrides
+        }, policy.revision).unwrap();
+        let at = now();
+        for (offset, count) in [(0, 8), (60, 8), (120, 9)] {
+            assert!(record(&db, &server, count, at + offset).findings.is_empty());
+        }
+        assert_eq!(record(&db, &server, 9, at + 180).findings[0].check, "nginx:http_5xx");
     }
     #[test]
     fn duplicate_response_endpoint_change_and_rollback_do_not_advance() {

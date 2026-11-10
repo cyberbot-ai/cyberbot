@@ -196,6 +196,7 @@ def event_time(line, fallback):
 class LogAnalysis:
     def __init__(self, request, clock=None):
         self.now = int(time.time()) if clock is None else clock
+        self.thresholds = collector_thresholds("logs", request.get("thresholds", {}))
         self.started = time.monotonic()
         self.state = request.get("state", {})
         if not isinstance(self.state, dict):
@@ -322,9 +323,9 @@ class LogAnalysis:
                 user, addr = success.groups()
                 ip = self.pseudonym(addr); account = self.pseudonym(user)
                 bins = self.recent.get(ip+":"+account, [])
-                # Conservative bucket inclusion avoids claiming failures older than 30m.
-                n = sum(n for t, n in bins if when-1800 <= t <= when)
-                if n >= 10 and timestamp_known:
+                # Conservative bucket inclusion avoids claiming failures older than the window.
+                n = sum(n for t, n in bins if when-self.thresholds["sshLookbackSeconds"] <= t <= when)
+                if n >= self.thresholds["sshFailedAttempts"] and timestamp_known:
                     self.finding("ssh_suspicious_success", when, ip, account)
             elif any(s in lower for s in ("invalid user", "authentication failure", "preauth", "connection closed", "connection reset", "unable to negotiate", "disconnect")):
                 self.counts["ssh_noise"] += 1
@@ -641,9 +642,11 @@ def main():
         data = sys.stdin.buffer.read(49153)
     if len(data)>49152: raise ValueError("Input limit")
     request = load_collector_json(data)
-    if not isinstance(request, dict) or set(request) - {"kind", "cursors", "state", "salt", "interval"}:
+    if not isinstance(request, dict) or set(request) - {"kind", "cursors", "state", "salt", "interval", "thresholds"}:
         raise ValueError("Unsupported input")
     kind = request.get("kind")
+    if kind != "logs" and "thresholds" in request:
+        raise ValueError("Unexpected collector thresholds")
     if kind != "action" and len(data)>16384: raise ValueError("Input limit")
     state = request.get("state")
     shell_execute = (kind == 'action' and isinstance(state, dict)

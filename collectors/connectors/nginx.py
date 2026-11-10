@@ -126,21 +126,22 @@ def nginx_latency():
     return {'samples': 0, 'sumMs': 0.0, 'maxMs': 0.0, 'slow': 0, 'histogram': [0]*14}
 
 
-def add_latency(stats, raw):
+def add_latency(stats, raw, slow_request_ms):
     try:
         value = float(raw)*1000
         if not __import__('math').isfinite(value) or not 0<=value<=86400000: return False
     except (ValueError, TypeError): return False
     stats['samples'] += 1; stats['sumMs'] += value; stats['maxMs'] = max(stats['maxMs'], value)
-    stats['slow'] += int(value>=1000)
+    stats['slow'] += int(value>=slow_request_ms)
     index = next((i for i,bound in enumerate(LATENCY_BUCKETS) if value<=bound),13)
     stats['histogram'][index] += 1
     return True
 
 
 class NginxAnalysis(LogAnalysis):
-    def __init__(self, request, clock=None):
+    def __init__(self, request, clock=None, *, slow_request_ms=1000):
         super().__init__(request, clock)
+        self.slow_request_ms = slow_request_ms
         self.statuses = collections.Counter(); self.request_time = nginx_latency(); self.upstream_time = nginx_latency()
         self.format = COMBINED
 
@@ -163,11 +164,11 @@ class NginxAnalysis(LogAnalysis):
                     return
                 self.statuses[str(status)] += 1; self.counts['requests'] += 1
                 self.counts[str(status//100)+'xx'] += 1
-                if 'request_time' in fields and not add_latency(self.request_time, fields['request_time']):
+                if 'request_time' in fields and not add_latency(self.request_time, fields['request_time'], self.slow_request_ms):
                     self.gap('timing_unavailable', source)
                 if 'upstream_response_time' in fields:
                     for value in re.split(r'[, :]+', fields['upstream_response_time'])[:32]:
-                        if value and value!='-' and not add_latency(self.upstream_time, value): self.gap('timing_unavailable',source)
+                        if value and value!='-' and not add_latency(self.upstream_time, value, self.slow_request_ms): self.gap('timing_unavailable',source)
             except (ValueError, KeyError, OverflowError):
                 self.counts['unparsed'] += 1; self.gap('unknown_format', source)
         else:
@@ -241,8 +242,8 @@ def nginx_detection():
     return present, service, generation
 
 
-def analyze_nginx(request):
-    a = NginxAnalysis(request)
+def analyze_nginx(request, *, slow_request_ms=1000):
+    a = NginxAnalysis(request, slow_request_ms=slow_request_ms)
     detected, service, generation = nginx_detection()
     config = nginx_configuration() if detected else {'access':None,'error':None,'format':None,'endpoint':None,'issues':[],'bytes':0}
     a.bytes_read += min(config['bytes'],131073)
@@ -283,7 +284,8 @@ def collect_nginx(state):
     checkpoint = state.get('checkpoint')
     if state.get('config') is not None or not isinstance(checkpoint, dict) or set(checkpoint) - {'salt', 'interval', 'state'}:
         raise ValueError('Invalid log checkpoint')
-    return analyze_nginx(checkpoint)
+    limits = collector_thresholds('nginx', state.get('thresholds', {}))
+    return analyze_nginx(checkpoint, slow_request_ms=limits['slowRequestMs'])
 
 
 def parse_access_status(line):

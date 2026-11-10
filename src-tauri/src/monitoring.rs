@@ -3,6 +3,8 @@ use crate::{instances, model::now, services, ssh, store::Store};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, future::Future, sync::LazyLock};
+pub(crate) mod thresholds;
+use thresholds::{ThresholdRule, Thresholds};
 type Result<T> = std::result::Result<T, String>;
 fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
@@ -39,6 +41,7 @@ pub struct Definition {
     pub diagnostics: bool,
     pub replication: bool,
     pub factory_interval: u64,
+    pub thresholds: Vec<ThresholdRule>,
     pub version: String,
 }
 static REGISTRY: LazyLock<Vec<Definition>> = LazyLock::new(build_catalog);
@@ -56,6 +59,7 @@ fn build_catalog() -> Vec<Definition> {
         include_str!("packages.rs"),
         include_str!("checks.rs"),
         include_str!("monitoring.rs"),
+        include_str!("monitoring/thresholds.rs"),
         include_str!("advisories.rs"),
         include_str!("inventory.rs"),
         include_str!("storage.rs"),
@@ -83,9 +87,10 @@ fn build_catalog() -> Vec<Definition> {
       ("storage","Cleaning up local storage","Official",Runner::Local,60,"Limit the size of the database, evidence, cache, queues, and activity log","Local SQLite, cache, activity log","Fixed SQL cleanup, WAL checkpointing, and JSONL log rotation","Access only to application data","SQLite up to 1 GiB; action log up to 30 MiB; storage rules in settings","Once a minute"),
       ("transport","SSH and collector deployment","Official",Runner::Local,0,"Verify host keys and deploy immutable collector versions by hash over a bounded SSH connection pool","The SSH process uses local configuration, keys, and known_hosts","OpenSSH; test -f; sha256sum; mkdir; rsync --checksum; python3 -I","Uses the configured SSH user and host-key checks","Pool 32; keepalive 60s, idle 15 min; strict host key check; timeouts/limits required","Before an authorized check, Cyberbot transfers the collector only if the required version is missing or changed"),
     ] {
-      out.push(Definition{id:id.into(),name:name.into(),category:category.into(),runner,place:if matches!(runner,Runner::Custom|Runner::Local){"On the computer"}else{"Data collection on the server, incident rules on this computer"}.into(),purpose:purpose.into(),reads:reads.into(),commands:commands.into(),writes:if matches!(runner,Runner::Custom|Runner::Local){"Limited application state on this computer"}else{"Versioned collector files under ~/.cache/cyberbot"}.into(),rights:rights.into(),limits:limits.into(),schedule:schedule.into(),configurable:!matches!(runner,Runner::Custom|Runner::Local),interval_editable:matches!(runner,Runner::Metrics|Runner::Logs),diagnostics:false,replication:false,factory_interval:interval,version:version.clone()});
+      out.push(Definition{id:id.into(),name:name.into(),category:category.into(),runner,place:if matches!(runner,Runner::Custom|Runner::Local){"On the computer"}else{"Data collection on the server, incident rules on this computer"}.into(),purpose:purpose.into(),reads:reads.into(),commands:commands.into(),writes:if matches!(runner,Runner::Custom|Runner::Local){"Limited application state on this computer"}else{"Versioned collector files under ~/.cache/cyberbot"}.into(),rights:rights.into(),limits:limits.into(),schedule:schedule.into(),configurable:!matches!(runner,Runner::Custom|Runner::Local),interval_editable:matches!(runner,Runner::Metrics|Runner::Logs),diagnostics:false,replication:false,factory_interval:interval,thresholds:thresholds::for_definition(id, &[]),version:version.clone()});
     }
     for (id, spec) in catalog {
+        let thresholds = thresholds::for_definition(&id, &spec.metrics);
         let description = spec.monitoring.unwrap_or_else(|| services::ServiceDescription {
             purpose: spec.metrics.iter().map(|m| m.label.as_str()).collect::<Vec<_>>().join(", "),
             reads: "Available local service status and statistics".into(),
@@ -112,6 +117,7 @@ fn build_catalog() -> Vec<Definition> {
             diagnostics: spec.actions.iter().any(|action| action == "configure"),
             replication: spec.replication,
             factory_interval: spec.factory_interval,
+            thresholds,
             version: version.clone(),
         });
     }
@@ -132,6 +138,8 @@ pub struct Overrides {
     pub diagnostic_enabled: Option<bool>,
     pub expected_peers: Option<u32>,
     pub expect_replica: Option<bool>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub thresholds: Thresholds,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -148,6 +156,7 @@ pub struct Values {
     pub diagnostic_enabled: bool,
     pub expected_peers: u32,
     pub expect_replica: bool,
+    pub thresholds: Thresholds,
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -155,6 +164,7 @@ pub struct Policy {
     pub values: Values,
     pub inherited: Values,
     pub origins: BTreeMap<String, String>,
+    pub threshold_origins: BTreeMap<String, String>,
     pub overrides: Overrides,
     pub revision: i64,
 }
@@ -220,10 +230,20 @@ impl Book {
             diagnostic_enabled: d.diagnostics,
             expected_peers: 0,
             expect_replica: false,
+            thresholds: d
+                .thresholds
+                .iter()
+                .map(|rule| (rule.key.clone(), rule.defaults()))
+                .collect(),
         };
         let mut p = Policy {
             values: factory.clone(),
             inherited: factory,
+            threshold_origins: d
+                .thresholds
+                .iter()
+                .map(|rule| (rule.key.clone(), "factory".into()))
+                .collect(),
             origins: [
                 "enabled",
                 "intervalSeconds",
@@ -271,6 +291,10 @@ impl Book {
                 field!(diagnostic_enabled, "diagnosticEnabled");
                 field!(expected_peers, "expectedPeers");
                 field!(expect_replica, "expectReplica");
+                for (rule, fields) in &v.thresholds {
+                    p.values.thresholds.insert(rule.clone(), fields.clone());
+                    p.threshold_origins.insert(rule.clone(), origin.into());
+                }
             }
         }
         Ok(p)
@@ -325,12 +349,13 @@ fn validate_scope(db: &Connection, s: &Scope) -> Result<&'static Definition> {
     }
     Ok(d)
 }
-pub fn interval(store: &Store, kind: &str, server: &str, instance: &str) -> Result<u64> {
-    Ok(
-        effective(&*store.0.lock().map_err(err)?, kind, server, instance)?
-            .values
-            .interval_seconds,
-    )
+pub(crate) fn effective_values(
+    store: &Store,
+    kind: &str,
+    server: &str,
+    instance: &str,
+) -> Result<Values> {
+    Ok(effective(&*store.0.lock().map_err(err)?, kind, server, instance)?.values)
 }
 pub fn enabled(store: &Store, kind: &str, server: &str, instance: &str) -> Result<bool> {
     Ok(
@@ -461,13 +486,19 @@ impl Store {
         {
             return Err("Invalid check settings".into());
         }
+        if !thresholds::validate(&d.thresholds, &o.thresholds) {
+            return Err("Invalid alert thresholds for this check".into());
+        }
         let book = Book::load(&tx)?;
         if book.revision != expected_revision {
             return Err("Settings changed in another window. Reload them and try again.".into());
         }
-        if book.resolve(s)?.overrides != o {
+        let previous = book.resolve(s)?.overrides;
+        if previous != o {
             put(&tx, s, &o)?;
-            invalidate(&tx, s)?;
+            let pattern_limit_changed = previous.thresholds.get("new_error_pattern")
+                != o.thresholds.get("new_error_pattern");
+            invalidate(&tx, s, pattern_limit_changed)?;
         }
         let policy = Book::load(&tx)?.resolve(s)?;
         tx.commit().map_err(err)?;
@@ -475,7 +506,7 @@ impl Store {
     }
 }
 // Configuration changes invalidate proofs, never resolve incidents. All pending results carry a revision.
-fn invalidate(db: &Connection, s: &Scope) -> Result<()> {
+fn invalidate(db: &Connection, s: &Scope, pattern_limit_changed: bool) -> Result<()> {
     db.execute(
         "UPDATE monitoring_control SET revision=revision+1 WHERE id=1",
         [],
@@ -536,6 +567,10 @@ fn invalidate(db: &Connection, s: &Scope) -> Result<()> {
                     if let Some(patterns) = v["baseline"]["patterns"].as_object_mut() {
                         for p in patterns.values_mut() {
                             p["streak"] = 0.into();
+                            if pattern_limit_changed && p["alerted"] == true {
+                                p["alerted"] = false.into();
+                                p["candidate"] = true.into();
+                            }
                         }
                     }
                     db.execute(
@@ -596,7 +631,7 @@ pub fn legacy_intervals(
             let mut o = Book::load(db)?.resolve(&s)?.overrides;
             o.interval_seconds = Some(after);
             put(db, &s, &o)?;
-            invalidate(db, &s)?;
+            invalidate(db, &s, false)?;
         }
     }
     Ok(())
@@ -624,7 +659,7 @@ pub fn legacy_service(
         o.expect_replica = Some(new.expect_replica);
     }
     put(db, &s, &o)?;
-    invalidate(db, &s)
+    invalidate(db, &s, false)
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -792,6 +827,133 @@ mod tests {
         db.set_monitoring(s, o, revision).unwrap()
     }
     #[test]
+    fn thresholds_inherit_and_reset_as_independent_rules() {
+        let (db, id) = fixture();
+        let fleet = scope("redis", None, None);
+        let server = scope("redis", Some(&id), None);
+        let connection = scope("redis", Some(&id), Some("default"));
+        let other = db.add_service_instance(&id, "redis", None).unwrap();
+        let other = scope("redis", Some(&id), Some(&other.id));
+        let pair =
+            |warning, critical| [("warning".into(), warning), ("critical".into(), critical)].into();
+        let defaults = db.monitoring_policy(&connection).unwrap();
+        assert_eq!(defaults.values.thresholds["memoryUsage"], pair(90., 98.));
+        assert_eq!(defaults.threshold_origins["memoryUsage"], "factory");
+        let legacy: Overrides = serde_json::from_str(r#"{"intervalSeconds":300}"#).unwrap();
+        change(
+            &db,
+            &fleet,
+            Overrides {
+                thresholds: [("memoryUsage".into(), pair(95., 99.))].into(),
+                ..legacy
+            },
+        );
+        change(
+            &db,
+            &server,
+            Overrides {
+                thresholds: [("blocked".into(), [("warning".into(), 3.)].into())].into(),
+                ..Default::default()
+            },
+        );
+        let changed = change(
+            &db,
+            &connection,
+            Overrides {
+                thresholds: [("memoryUsage".into(), pair(99., 100.))].into(),
+                ..Default::default()
+            },
+        );
+        assert_eq!(changed.values.interval_seconds, 300);
+        assert_eq!(changed.values.thresholds["blocked"]["warning"], 3.);
+        assert_eq!(changed.inherited.thresholds["memoryUsage"], pair(95., 99.));
+        assert_eq!(changed.threshold_origins["blocked"], "server");
+        assert_eq!(changed.threshold_origins["memoryUsage"], "instance");
+        assert_eq!(
+            db.monitoring_policy(&other).unwrap().values.thresholds["memoryUsage"],
+            pair(95., 99.)
+        );
+        for invalid in [
+            pair(99., 98.),
+            pair(99., 99.),
+            pair(99., 101.),
+            [("warning".into(), 99.)].into(),
+        ] {
+            let result = db.set_monitoring(
+                &connection,
+                Overrides {
+                    thresholds: [("memoryUsage".into(), invalid)].into(),
+                    ..Default::default()
+                },
+                changed.revision,
+            );
+            assert!(result.unwrap_err().contains("thresholds"));
+        }
+        let invalid = Overrides {
+            thresholds: [("memory".into(), pair(90., 98.))].into(),
+            ..Default::default()
+        };
+        assert!(db
+            .set_monitoring(&connection, invalid, changed.revision)
+            .is_err());
+        let reset = change(&db, &connection, Overrides::default());
+        assert_eq!(reset.values.thresholds["memoryUsage"], pair(95., 99.));
+        assert_eq!(reset.threshold_origins["memoryUsage"], "global");
+    }
+    #[test]
+    fn resource_incidents_keep_their_severity_rules_with_custom_thresholds() {
+        let (db, id) = fixture();
+        let metrics = scope("metrics", Some(&id), None);
+        change(
+            &db,
+            &metrics,
+            Overrides {
+                thresholds: [
+                    (
+                        "cpu".into(),
+                        [("warning".into(), 97.), ("critical".into(), 98.)].into(),
+                    ),
+                    (
+                        "memory".into(),
+                        [("warning".into(), 99.), ("critical".into(), 100.)].into(),
+                    ),
+                    (
+                        "disk".into(),
+                        [("warning".into(), 96.), ("critical".into(), 98.)].into(),
+                    ),
+                ]
+                .into(),
+                ..Default::default()
+            },
+        );
+        let server = db.snapshot().unwrap().servers.remove(0);
+        let observation = serde_json::from_value(serde_json::json!({
+            "at": now(), "cpuPercent": 98, "memoryPercent": 98.9,
+            "disks": [{"mount": "/", "usedPercent": 98, "inodePercent": null}],
+            "services": [], "missing": [], "bytesReceived": 100, "durationMs": 1,
+        }))
+        .unwrap();
+        db.record(&server, Ok(observation), 180).unwrap();
+        let snapshot = db.snapshot().unwrap();
+        let incidents: BTreeMap<_, _> = snapshot
+            .incidents
+            .into_iter()
+            .map(|i| (i.check, i.severity))
+            .collect();
+        assert_eq!(
+            incidents,
+            [
+                ("cpu".into(), "warning".into()),
+                ("disk:/".into(), "critical".into())
+            ]
+            .into()
+        );
+        assert_eq!(
+            snapshot.monitoring[&id].thresholds["memory"]["warning"],
+            99.
+        );
+    }
+    #[test]
     fn library_lists_only_exceptions_at_the_selected_server_and_its_connections() {
         let (db, id) = fixture();
         change(
@@ -928,8 +1090,18 @@ mod tests {
             serde_json::from_str(r#"{"pollSeconds":480,"logPollSeconds":900}"#).unwrap(),
         )
         .unwrap();
-        assert_eq!(interval(&db, "metrics", &id, "").unwrap(), 480);
-        assert_eq!(interval(&db, "nginx", &id, "").unwrap(), 900);
+        assert_eq!(
+            effective_values(&db, "metrics", &id, "")
+                .unwrap()
+                .interval_seconds,
+            480
+        );
+        assert_eq!(
+            effective_values(&db, "nginx", &id, "")
+                .unwrap()
+                .interval_seconds,
+            900
+        );
         let mut c = db
             .service_state_for(&id, "redis", "default")
             .unwrap()
@@ -1074,7 +1246,7 @@ mod tests {
                     &db,
                     &scope("logs", Some(&id), None),
                     Overrides {
-                        enabled: Some(false),
+                        thresholds: [("oom".into(), [("critical".into(), 2.)].into())].into(),
                         ..Default::default()
                     },
                 );
@@ -1131,7 +1303,12 @@ mod tests {
         drop(db);
         let db = Store::open(&file).unwrap();
         assert_eq!(db.settings().unwrap().poll_seconds, 450);
-        assert_eq!(interval(&db, "nginx", &id, "").unwrap(), 1200);
+        assert_eq!(
+            effective_values(&db, "nginx", &id, "")
+                .unwrap()
+                .interval_seconds,
+            1200
+        );
         let cp = db.service_state_for(&id, "redis", "default").unwrap();
         assert!(cp.config.enabled);
         assert_eq!(cp.config.interval_seconds, 360);

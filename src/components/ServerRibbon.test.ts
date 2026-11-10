@@ -46,6 +46,16 @@ describe('server ribbon', () => {
     expect(unknown.get('[data-metric="cpu"]').text()).toContain('—');
     expect(unknown.get('.coverage').attributes('title')).toContain('cpu');
   });
+  it('uses the scoped disk threshold for both the indicator and server status', () => {
+    const row = render({
+      ...base,
+      monitoring: { enabled: true, intervalSeconds: 180, diagnosticEnabled: false, expectedPeers: 0, expectReplica: false,
+        thresholds: { disk: { warning: 99, critical: 100 } } },
+    });
+    expect(row.get('[data-metric="disk:/data"]').classes()).toContain('healthy');
+    expect(row.classes()).toContain('healthy');
+    row.unmount();
+  });
   it('red stale and failed rows hide cached measurements without claiming proven offline', () => {
     const stale = render(base, 2000);
     expect(stale.classes()).toContain('stale');

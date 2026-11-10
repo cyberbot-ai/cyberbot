@@ -31,6 +31,17 @@ class NginxTests(unittest.TestCase):
         self.assertEqual(a.request_time['slow'],1);self.assertEqual(a.request_time['sumMs'],1250)
         self.assertEqual(a.upstream_time['samples'],2);self.assertEqual(len(a.request_time['histogram']),14)
         a.event(access(200,' rt=nan urt=inf'),'access');self.assertTrue(a.gaps)
+    def test_slow_request_boundary_is_configurable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / 'access.log'
+            path.write_text(access(200, ' rt=1.250') + access(200, ' rt=2.000'))
+            config = {'access': (str(path), 'timed'), 'error': None, 'format': c.COMBINED + ' rt=$request_time',
+                      'endpoint': None, 'issues': [], 'bytes': 100}
+            state = {'checkpoint': {'salt': 'a' * 64}, 'thresholds': {'slowRequestMs': 2000}}
+            with patch.object(c, 'nginx_detection', return_value=(True, 'active', 'g')), \
+                 patch.object(c, 'nginx_configuration', return_value=config), patch.object(c.time, 'time', return_value=NOW):
+                timing = c.collect_nginx(state)['requestTime']
+                self.assertEqual((timing['samples'], timing['slow'], timing['sumMs']), (2, 1, 3250))
     def test_json_format_and_unknown_are_not_guessed(self):
         a=self.analysis();a.format='{"t":"$time_iso8601","code":$status,"rt":$request_time}'
         stamp=datetime.datetime.fromtimestamp(NOW,datetime.timezone.utc).isoformat()

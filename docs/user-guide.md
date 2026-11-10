@@ -25,6 +25,10 @@ System and SSH log summaries use incremental reading and limited evidence. Sourc
 
 The monitoring library lists built-in checks, their sources and operations, and the settings that apply. Configuration inherits from factory defaults through the fleet, server, and service instance. Disabling a check stops new observations and automatic investigations from its evidence. Existing history is retained.
 
+Open **Library → Built-in checks**, choose the fleet or a server, then open a check and expand **Alert thresholds**. On a server, clear **Overrides only** to see checks with inherited settings. For services with multiple connections, choose a connection to tune it separately. Each rule shows where its current values come from and can be reset to the inherited values.
+
+For example, under **Redis → Memory limit usage**, enter **99%** for **Warning** and **100%** for **Critical**, then save the rule. The new limits apply to fresh observations. Open incidents still require confirmed recovery.
+
 ## Use AI investigations
 
 1. Install and authenticate the Codex or Claude CLI with its own login flow.

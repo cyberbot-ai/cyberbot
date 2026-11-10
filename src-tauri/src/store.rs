@@ -553,9 +553,8 @@ impl Store {
         crate::storage::admit(&db)?;
         let tx = db.transaction().map_err(err)?;
         crate::monitoring::check_commit(&tx)?;
-        let interval = crate::monitoring::effective(&tx, "metrics", &original.id, "")?
-            .values
-            .interval_seconds;
+        let policy = crate::monitoring::effective(&tx, "metrics", &original.id, "")?.values;
+        let interval = policy.interval_seconds;
         let current: Option<String> = tx
             .query_row(
                 "SELECT payload FROM servers WHERE id=?1",
@@ -626,10 +625,8 @@ impl Store {
                 )
                 .map_err(err)?;
                 Self::incident(&tx, &s.id, "connection", None, "Connection", "critical", at)?;
-                for (check, value, threshold) in [
-                    ("cpu", o.cpu_percent, 90.0),
-                    ("memory", o.memory_percent, 90.0),
-                ] {
+                for (check, value) in [("cpu", o.cpu_percent), ("memory", o.memory_percent)] {
+                    let threshold = policy.thresholds[check]["warning"];
                     if let Some(v) = value {
                         Self::incident(
                             &tx,
@@ -650,22 +647,19 @@ impl Store {
                         )?;
                     }
                 }
+                let limits = &policy.thresholds["disk"];
                 for d in &o.disks {
                     Self::incident(
                         &tx,
                         &s.id,
                         &format!("disk:{}", d.mount),
-                        if d.used_percent >= 90.0 {
+                        if d.used_percent >= limits["warning"] {
                             Some(format!("{}: {:.1}% busy", d.mount, d.used_percent))
                         } else {
                             None
                         },
                         "The disk is filling up",
-                        if d.used_percent >= 97.0 {
-                            "critical"
-                        } else {
-                            "warning"
-                        },
+                        crate::monitoring::thresholds::severity(limits, d.used_percent),
                         at,
                     )?;
                 }

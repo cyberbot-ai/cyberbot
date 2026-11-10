@@ -1,3 +1,4 @@
+use crate::monitoring::thresholds::{self, Thresholds};
 use crate::{inventory::stable_id, model::*, ssh, store::Store, AppState};
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -302,7 +303,12 @@ fn median(v: &[f64]) -> f64 {
     v.sort_by(f64::total_cmp);
     v[v.len() / 2]
 }
-fn evaluate(w: &WireSummary, b: &mut Baseline, at: i64) -> (Vec<LogFinding>, bool) {
+fn evaluate(
+    w: &WireSummary,
+    b: &mut Baseline,
+    at: i64,
+    thresholds: &Thresholds,
+) -> (Vec<LogFinding>, bool) {
     b.patterns.retain(|_, v| v.seen >= at - 7 * 86400);
     let trained = b.windows >= 72 && b.since.is_some_and(|s| at - s >= 86400);
     let complete = w.coverage.complete
@@ -320,13 +326,19 @@ fn evaluate(w: &WireSummary, b: &mut Baseline, at: i64) -> (Vec<LogFinding>, boo
             .map(|v| (v - middle).abs())
             .collect::<Vec<_>>(),
     );
-    let spike = trained && rate > 20.0_f64.max(middle * 5.0).max(middle + 6.0 * mad.max(1.0));
+    let spike_limits = &thresholds["system_error_spike"];
+    let spike = trained
+        && rate
+            > spike_limits["rate"]
+                .max(middle * spike_limits["medianMultiplier"])
+                .max(middle + spike_limits["deviationMultiplier"] * mad.max(1.0));
     b.spike = if complete && spike {
         b.spike.saturating_add(1)
     } else {
         0
     };
     let mut novelty = 0;
+    let pattern_minimum = thresholds["new_error_pattern"]["warning"] as u64;
     if complete {
         for (hash, n) in &w.patterns {
             // A known dangerous event must not teach new fingerprints as normal.
@@ -349,17 +361,17 @@ fn evaluate(w: &WireSummary, b: &mut Baseline, at: i64) -> (Vec<LogFinding>, boo
                 streak: 0,
                 alerted: false,
             });
-            if p.candidate && *n >= 5 {
+            if p.candidate && *n >= pattern_minimum {
                 p.streak = p.streak.saturating_add(1);
                 if p.streak >= 2 {
                     p.alerted = true;
                     p.candidate = false;
                 }
-            } else if *n < 5 {
+            } else if *n < pattern_minimum {
                 p.streak = 0;
                 p.alerted = false;
             }
-            if p.alerted && *n >= 5 {
+            if p.alerted && *n >= pattern_minimum {
                 novelty += *n;
             }
             p.seen = at;
@@ -396,7 +408,12 @@ fn evaluate(w: &WireSummary, b: &mut Baseline, at: i64) -> (Vec<LogFinding>, boo
                     }
                 }
                 "new_error_pattern" => novelty,
-                _ => w.counts.get(*key).copied().unwrap_or(0),
+                _ => w
+                    .counts
+                    .get(*key)
+                    .copied()
+                    .filter(|n| *n as f64 >= thresholds::activation(&thresholds[*key]))
+                    .unwrap_or(0),
             };
             (count > 0).then(|| LogFinding {
                 check: format!("logs:{key}"),
@@ -587,10 +604,9 @@ impl Store {
         if state.revision != expected.revision || state.salt != expected.salt {
             return Err("The summary was already applied or the log position changed".into());
         }
-        let interval = crate::monitoring::effective(&tx, "logs", &server.id, "")?
-            .values
-            .interval_seconds;
-        let (findings, learning) = evaluate(&wire, &mut state.baseline, at);
+        let policy = crate::monitoring::effective(&tx, "logs", &server.id, "")?.values;
+        let interval = policy.interval_seconds;
+        let (findings, learning) = evaluate(&wire, &mut state.baseline, at, &policy.thresholds);
         let summary = LogSummary {
             id: uuid::Uuid::new_v4().to_string(),
             at,
@@ -787,10 +803,12 @@ async fn collect_inner(state: Arc<AppState>, id: String) -> Result<LogSummary> {
         .into_iter()
         .find(|s| s.id == id)
         .ok_or("The server is remote")?;
-    let interval=crate::monitoring::interval(&state.store,"logs",&id,"")?;
+    let policy = crate::monitoring::effective_values(&state.store, "logs", &id, "")?;
+    let interval = policy.interval_seconds;
+    let limits = thresholds::collector_values("logs", &policy.thresholds);
     let checkpoint = state.store.log_state(&id)?;
     let result=async{ssh::deploy(&server.endpoint,&state.collector).await?;
-        let request=json!({"kind":"logs","state":checkpoint.cursor,"salt":checkpoint.salt,"interval":interval});
+        let request=json!({"kind":"logs","state":checkpoint.cursor,"salt":checkpoint.salt,"interval":interval,"thresholds":limits});
         if request.to_string().len()>16384{return Err("Log state exceeds the request size limit".into());}
         let bytes=ssh::run_collector(&server.endpoint,&request,32768).await?;
         state.store.record_logs(&server,&checkpoint,&bytes,now())
@@ -1056,33 +1074,43 @@ mod tests {
     }
     #[test]
     fn baseline_warmup_and_two_window_anomalies() {
+        let thresholds = crate::monitoring::Book::default()
+            .resolve(&crate::monitoring::scope("logs", None, None))
+            .unwrap()
+            .values
+            .thresholds;
         let mut b = Baseline::default();
         let normal: WireSummary =
             serde_json::from_slice(&wire(json!({"system_error":1}), true)).unwrap();
         for n in 0..145 {
-            assert!(evaluate(&normal, &mut b, n * 600).0.is_empty());
+            assert!(evaluate(&normal, &mut b, n * 600, &thresholds).0.is_empty());
         }
         let mut high: WireSummary =
             serde_json::from_slice(&wire(json!({"system_error":50}), true)).unwrap();
         high.patterns.insert("a".repeat(24), 10);
-        assert!(evaluate(&high, &mut b, 87000).0.is_empty());
-        let f = evaluate(&high, &mut b, 87600).0;
+        assert!(evaluate(&high, &mut b, 87000, &thresholds).0.is_empty());
+        let f = evaluate(&high, &mut b, 87600, &thresholds).0;
         assert!(f.iter().any(|f| f.check == "logs:system_error_spike"));
         assert!(f.iter().any(|f| f.check == "logs:new_error_pattern"));
         let trained = b.windows;
         high.coverage.complete = false;
-        assert!(evaluate(&high, &mut b, 88200).0.is_empty());
+        assert!(evaluate(&high, &mut b, 88200, &thresholds).0.is_empty());
         assert_eq!(b.windows, trained);
-        assert!(evaluate(&high, &mut b, 88800).0.is_empty());
+        assert!(evaluate(&high, &mut b, 88800, &thresholds).0.is_empty());
         let mut dangerous = normal.clone();
         dangerous.counts.insert("oom".into(), 1);
         dangerous.patterns.insert("c".repeat(24), 1);
-        evaluate(&dangerous, &mut b, 89400);
+        evaluate(&dangerous, &mut b, 89400, &thresholds);
         assert_eq!(b.windows, trained);
         assert!(!b.patterns.contains_key(&"c".repeat(24)));
     }
     #[test]
     fn known_error_does_not_become_new_again_after_recovery() {
+        let thresholds = crate::monitoring::Book::default()
+            .resolve(&crate::monitoring::scope("logs", None, None))
+            .unwrap()
+            .values
+            .thresholds;
         let mut b = Baseline {
             since: Some(0),
             windows: 72,
@@ -1091,20 +1119,67 @@ mod tests {
         let quiet: WireSummary = serde_json::from_slice(&wire(json!({}), true)).unwrap();
         let mut error = quiet.clone();
         error.patterns.insert("b".repeat(24), 5);
-        assert!(evaluate(&error, &mut b, 90000).0.is_empty());
-        assert_eq!(evaluate(&error, &mut b, 90600).0.len(), 1);
-        assert_eq!(evaluate(&error, &mut b, 91200).0.len(), 1);
-        evaluate(&quiet, &mut b, 91800);
-        evaluate(&quiet, &mut b, 92400);
-        assert!(evaluate(&error, &mut b, 93000).0.is_empty());
-        assert!(evaluate(&error, &mut b, 93600).0.is_empty());
+        assert!(evaluate(&error, &mut b, 90000, &thresholds).0.is_empty());
+        assert_eq!(evaluate(&error, &mut b, 90600, &thresholds).0.len(), 1);
+        assert_eq!(evaluate(&error, &mut b, 91200, &thresholds).0.len(), 1);
+        evaluate(&quiet, &mut b, 91800, &thresholds);
+        evaluate(&quiet, &mut b, 92400, &thresholds);
+        assert!(evaluate(&error, &mut b, 93000, &thresholds).0.is_empty());
+        assert!(evaluate(&error, &mut b, 93600, &thresholds).0.is_empty());
         for n in 0..520 {
             error.patterns.clear();
             error.patterns.insert(format!("{n:024x}"), 1);
-            evaluate(&error, &mut b, 94200 + n);
+            evaluate(&error, &mut b, 94200 + n, &thresholds);
         }
         assert_eq!(b.patterns.len(), 512);
         assert!(b.patterns.contains_key(&format!("{:024x}", 519)));
+    }
+    #[test]
+    fn configured_counts_and_anomaly_limits_gate_findings() {
+        let mut thresholds = crate::monitoring::Book::default()
+            .resolve(&crate::monitoring::scope("logs", None, None))
+            .unwrap()
+            .values
+            .thresholds;
+        thresholds
+            .get_mut("oom")
+            .unwrap()
+            .insert("critical".into(), 2.);
+        thresholds
+            .get_mut("system_error_spike")
+            .unwrap()
+            .insert("rate".into(), 100.);
+        let mut baseline = Baseline {
+            since: Some(0),
+            windows: 72,
+            rates: vec![1.; 72],
+            ..Default::default()
+        };
+        let sample = |oom, errors| {
+            serde_json::from_slice(&wire(json!({"oom":oom,"system_error":errors}), true)).unwrap()
+        };
+        assert!(evaluate(&sample(1, 99), &mut baseline, 90000, &thresholds)
+            .0
+            .is_empty());
+        assert!(evaluate(&sample(1, 100), &mut baseline, 90600, &thresholds)
+            .0
+            .is_empty());
+        let findings = evaluate(&sample(2, 101), &mut baseline, 91200, &thresholds).0;
+        assert_eq!(
+            findings
+                .iter()
+                .map(|f| f.check.as_str())
+                .collect::<Vec<_>>(),
+            ["logs:oom"]
+        );
+        let findings = evaluate(&sample(0, 101), &mut baseline, 91800, &thresholds).0;
+        assert_eq!(
+            findings
+                .iter()
+                .map(|f| f.check.as_str())
+                .collect::<Vec<_>>(),
+            ["logs:system_error_spike"]
+        );
     }
     #[test]
     fn unknown_messages_cannot_leak_through_examples() {

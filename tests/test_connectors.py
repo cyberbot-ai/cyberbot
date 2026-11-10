@@ -207,6 +207,8 @@ class ConnectorTests(unittest.TestCase):
             self.assertIn("readonly=1", path)
             if b"system.replicas" in body:
                 raise ValueError("source_unavailable")
+            if b"system.processes" in body:
+                self.assertIn(b"elapsed>75", body)
             data = {
                 "queries": 2,
                 "longQueries": 1,
@@ -219,11 +221,47 @@ class ConnectorTests(unittest.TestCase):
         with patch.dict(
             self.n, service_http=http, service_credentials=lambda k, *args: {}
         ):
-            r = self.collect("clickhouse")
+            r = self.n["collect_service"]({"state": {
+                "kind": "clickhouse", "config": {"enabled": True}, "thresholds": {"longQuerySeconds": 75},
+            }})
         self.assertTrue(r["connected"])
         self.assertFalse(r["complete"])
         self.assertEqual(r["metrics"]["longQueries"], 1)
         self.assertIsNone(r["metrics"]["replicationErrors"])
+
+    def test_collector_rejects_unknown_and_out_of_range_thresholds(self):
+        for kind, fields in [
+            ("redis", {"longQuerySeconds": 120}),
+            ("mysql", {"longTransactionSeconds": 86401}),
+            ("clickhouse", {"longQuerySeconds": True}),
+            ("postgresql", {"longQuerySeconds": "120"}),
+            ("nginx", {"slowRequestMs": 1.5}),
+        ]:
+            with self.subTest(kind=kind), self.assertRaises(ValueError):
+                self.n["collector_thresholds"](kind, fields)
+
+    def test_mysql_duration_thresholds_reach_fixed_aggregates(self):
+        statements = []
+
+        def query(config, sql, family, deadline):
+            statements.append(sql)
+            if sql == self.n["MY_META"]:
+                return [dict(version="8.0.37", serverId="1", maxConnections=100,
+                             slowThresholdSeconds=10, slowLogEnabled=0)]
+            if "INNODB_TRX" in sql:
+                return [dict(blocked=0, unknownWaits=0, maxWaitSeconds=0, longTransactions=2)]
+            if "PROCESSLIST" in sql:
+                return [dict(active=4, longQueries=1, longestQuerySeconds=120, replicaSenders=0)]
+            return []
+
+        with patch.dict(self.n, mysql_query=query), patch("os.path.isfile", return_value=True):
+            result = self.n["collect_service"]({"state": {
+                "kind": "mysql", "config": {"enabled": True},
+                "thresholds": {"longQuerySeconds": 120, "longTransactionSeconds": 900},
+            }})
+        self.assertEqual((result["metrics"]["longQueries"], result["metrics"]["longTransactions"]), (1, 2))
+        self.assertTrue(any("TIME>=120" in sql for sql in statements))
+        self.assertTrue(any("INTERVAL 900 SECOND" in sql for sql in statements))
 
     def test_cockroach_fixed_query_no_sql_text(self):
         def process(args, **kw):

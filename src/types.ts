@@ -55,12 +55,16 @@ export interface ActivityPage {events:ActivityEvent[];next:string|null;expired:b
 
 export interface ActivityQuery {definitionId?:string|null;before?:string|null;category?:string|null;phase?:string|null;search?:string|null}
 
-export interface MonitoringValues {enabled:boolean;intervalSeconds:number;diagnosticEnabled:boolean;expectedPeers:number;expectReplica:boolean}
-export type MonitoringOverrides = {[K in keyof MonitoringValues]?:MonitoringValues[K]|null};
+export type MonitoringThresholds = Record<string, Record<string, number>>;
+export interface MonitoringThresholdField {key:string;label:string;unit:string;default:number;min:number;max:number;integer:boolean}
+export interface MonitoringThresholdRule {key:string;label:string;fields:MonitoringThresholdField[]}
+export interface MonitoringValues {enabled:boolean;intervalSeconds:number;diagnosticEnabled:boolean;expectedPeers:number;expectReplica:boolean;thresholds?:MonitoringThresholds}
+export type MonitoringScalarField = Exclude<keyof MonitoringValues, 'thresholds'>;
+export type MonitoringOverrides = {[K in MonitoringScalarField]?:MonitoringValues[K]|null} & {thresholds?:MonitoringThresholds};
 export interface MonitoringScope {definitionId:string;serverId:string|null;instanceId:string|null}
-export interface MonitoringPolicy {inherited?:MonitoringValues;values:MonitoringValues;overrides:MonitoringOverrides;origins:Record<keyof MonitoringValues,string>;revision:number}
+export interface MonitoringPolicy {inherited?:MonitoringValues;values:MonitoringValues;overrides:MonitoringOverrides;origins:Record<MonitoringScalarField,string>;thresholdOrigins?:Record<string,string>;revision:number}
 export interface MonitoringLibraryEntry {values:MonitoringValues;serverOverride:boolean;instanceOverrides:Record<string,MonitoringValues>}
-export interface MonitoringDefinition {id:string;name:string;category:string;runner:string;place:string;purpose:string;reads:string;commands:string;writes:string;rights:string;limits:string;schedule:string;configurable:boolean;intervalEditable:boolean;diagnostics:boolean;replication:boolean;factoryInterval:number;version:string}
+export interface MonitoringDefinition {id:string;name:string;category:string;runner:string;place:string;purpose:string;reads:string;commands:string;writes:string;rights:string;limits:string;schedule:string;configurable:boolean;intervalEditable:boolean;diagnostics:boolean;replication:boolean;factoryInterval:number;version:string;thresholds?:MonitoringThresholdRule[]}
 export interface MonitoringExecution {serverId?:string|null;definitionId:string;version:string;trigger:string;instanceId:string|null;revision:number}
 export interface MonitoringTarget {definitionId:string;serverId?:string|null;instanceId?:string|null}
 

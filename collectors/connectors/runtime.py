@@ -19,6 +19,28 @@ SERVICE_ISSUES = (
     "replication_lag_unknown",
 )
 
+# Collector-side bounds for numbers used to classify observations.
+COLLECTOR_THRESHOLDS = {
+    "mysql": {"longQuerySeconds": (60, 1, 86400), "longTransactionSeconds": (300, 1, 86400)},
+    "clickhouse": {"longQuerySeconds": (60, 1, 86400)},
+    "postgresql": {"longQuerySeconds": (60, 1, 86400), "idleTransactionSeconds": (300, 1, 86400)},
+    "nginx": {"slowRequestMs": (1000, 1, 86400000)},
+    "logs": {"sshFailedAttempts": (10, 1, 2097152), "sshLookbackSeconds": (1800, 300, 1800)},
+}
+
+
+def collector_thresholds(kind, raw):
+    fields = COLLECTOR_THRESHOLDS.get(kind, {})
+    if not isinstance(raw, dict) or set(raw) - fields.keys():
+        raise ValueError("Invalid collector thresholds")
+    values = {}
+    for key, (default, low, high) in fields.items():
+        value = raw.get(key, default)
+        if type(value) is not int or not low <= value <= high:
+            raise ValueError("Invalid collector threshold")
+        values[key] = value
+    return values
+
 
 class ServiceAdapter:
     def __init__(self, identity, collect, *, prepare=None, structured=False, coverage=None, actions=()):
@@ -40,7 +62,7 @@ def register_service_actions(adapters):
 
 def dispatch_service(request):
     state = request.get('state')
-    if not isinstance(state, dict) or set(state) - {'kind', 'instanceId', 'config', 'checkpoint'}:
+    if not isinstance(state, dict) or set(state) - {'kind', 'instanceId', 'config', 'checkpoint', 'thresholds'}:
         raise ValueError('Invalid service request')
     kind = state.get('kind')
     if not isinstance(kind, str) or kind not in SERVICE_ADAPTERS:
@@ -467,7 +489,7 @@ def service_prometheus(body, names):
 def collect_service(request):
     state = request.get("state", {})
     if not isinstance(state, dict) or (
-        set(state) - {"kind", "config", "instanceId", "checkpoint"}
+        set(state) - {"kind", "config", "instanceId", "checkpoint", "thresholds"}
         or not {"kind", "config"} <= set(state)
     ):
         raise ValueError("Invalid service request")
@@ -477,6 +499,7 @@ def collect_service(request):
     spec = CONNECTOR_CATALOG[kind]
     config = service_profile(kind, state["config"])
     config["_instanceId"] = service_instance_id(state.get("instanceId", "default"))
+    config["_thresholds"] = collector_thresholds(kind, state.get("thresholds", {}))
     started = time.monotonic()
     result = {
         "version": 1,
