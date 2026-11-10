@@ -880,7 +880,12 @@ it('opens the correct server sidebar from an old UUID in Library history', async
     await flushPromises();
     await app.get('.sidebar button[title="Library"]').trigger('click');
     await flushPromises();
-    expect(app.findAll('select[aria-label="Servers"] option').map(option => option.text())).toEqual(['All servers', 'db.example.net', 'db.example.net']);
+    await app.get('.server-picker button').trigger('click');
+    expect(app.findAll('[role="option"] .option-label > span').map(option => option.text())).toEqual(['All servers', 'db.example.net', 'db.example.net']);
+    const serverSearch = app.get('input[aria-label="Find a server"]');
+    await serverSearch.setValue('inventory-db-1');
+    expect(app.get('[role="option"]').attributes('title')).toBe('inventory-db-1 · ops@db.example.net:23');
+    await serverSearch.trigger('keydown', { key: 'Escape' });
     await app.get('.row-button').trigger('click');
     await flushPromises();
     const details = app.findAll('details').find(item => item.get('summary').text() === 'Recent runs')!;

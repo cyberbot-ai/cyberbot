@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.0
+
+- Search for servers by name or SSH address in the Library's server filters.
+
 ## 0.10.2
 
 - Show a matching log excerpt with its source and timestamp under findings in the Logs tab.

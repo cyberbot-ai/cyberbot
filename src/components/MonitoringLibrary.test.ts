@@ -33,9 +33,13 @@ const defaults = { enabled: true, intervalSeconds: 180, diagnosticEnabled: false
 const origins = { enabled: 'factory', intervalSeconds: 'factory', diagnosticEnabled: 'factory', expectedPeers: 'factory', expectReplica: 'factory' };
 const endpoint = { user: 'ops', port: 22, identityFile: null, jumpHost: null };
 const servers = [{ id: 'a', name: 'one' }, { id: 'b', name: 'two' }].map(server => ({ ...server, endpoint: { ...endpoint, host: server.name + '.example' } })) as Server[];
-const mountLibrary = (initial?: { definitionId: string; serverId?: string; instanceId?: string }) =>
-  mount(MonitoringLibrary, { props: { servers, now: 100, initial }, global: { stubs: { ServicePanel: true, PostgresqlPanel: true, CheckPanel: true } } });
-const selector = (wrapper: VueWrapper) => wrapper.get('select[aria-label="Servers"]');
+const mountLibrary = (initial?: { definitionId: string; serverId?: string; instanceId?: string }, attachTo?: HTMLElement) =>
+  mount(MonitoringLibrary, { attachTo, props: { servers, now: 100, initial }, global: { stubs: { ServicePanel: true, PostgresqlPanel: true, CheckPanel: true } } });
+const serverPicker = (wrapper: VueWrapper) => wrapper.get('.server-picker button');
+async function selectServer(wrapper: VueWrapper, host: string) {
+  await serverPicker(wrapper).trigger('click');
+  await wrapper.findAll('[role="option"]').find(option => option.get('.option-label > span').text() === host)!.trigger('click');
+}
 const row = (wrapper: VueWrapper, name: string) => wrapper.findAll('.row').find(item => item.get('th').text() === name)!;
 const interval = (wrapper: VueWrapper) => wrapper.get('input[aria-label="Check interval"]');
 const openInterval = (wrapper: VueWrapper) => wrapper.get('.interval-button').trigger('click');
@@ -177,7 +181,12 @@ it('opens the CVE catalog independently and keeps all server links under a filte
     expect(mocks.call).toHaveBeenLastCalledWith('vulnerability_catalog', {
       query: { search: '', serverId: null, status: null, offset: 20 },
     });
-    await selector(wrapper).setValue('a');
+    await serverPicker(wrapper).trigger('click');
+    await wrapper.get('input[aria-label="Find a server"]').setValue('OPS@ONE.EXAMPLE:22');
+    expect(mocks.call).toHaveBeenLastCalledWith('vulnerability_catalog', {
+      query: { search: '', serverId: null, status: null, offset: 20 },
+    });
+    await wrapper.get('[role="option"]').trigger('click');
     await wrapper.get('select[aria-label="Finding status"]').setValue('hidden');
     await flushPromises();
     expect(mocks.call).toHaveBeenLastCalledWith('vulnerability_catalog', {
@@ -204,16 +213,15 @@ it('starts at common settings and reads a selected server without per-row calls'
   overrides.set('redis/a/', { intervalSeconds: 120 });
   const wrapper = mountLibrary();
   await flushPromises();
-  expect(selector(wrapper).get('option').text()).toBe('All servers');
-  expect(selector(wrapper).element).toHaveProperty('value', '');
+  expect(serverPicker(wrapper).text()).toBe('All servers');
   expect(wrapper.findAll('thead th').map(item => item.text())).toEqual(['Check', 'Schedule']);
   expect(row(wrapper, 'Redis').text()).toContain('5 min');
   expect(mocks.call.mock.calls).toEqual([['monitoring_catalog'], ['monitoring_library', { serverId: null }]]);
-  await selector(wrapper).setValue('a');
+  await selectServer(wrapper, 'one.example');
   await flushPromises();
   expect(wrapper.findAll('.row')).toHaveLength(1);
   expect(row(wrapper, 'Redis').text()).toContain('2 min');
-  await selector(wrapper).setValue('b');
+  await selectServer(wrapper, 'two.example');
   await flushPromises();
   expect(wrapper.text()).toContain('This server uses global settings for all checks');
   expect(wrapper.find('.row').exists()).toBe(false);
@@ -249,7 +257,7 @@ it('opens an instance-only exception and removes the row when the last override 
   overrides.set('redis/a/second', { intervalSeconds: 120 });
   const wrapper = mountLibrary();
   await flushPromises();
-  await selector(wrapper).setValue('a');
+  await selectServer(wrapper, 'one.example');
   await flushPromises();
   expect(row(wrapper, 'Redis').text()).toContain('2 min');
   expect(row(wrapper, 'Redis').text()).toContain('Connection override');
@@ -316,18 +324,43 @@ it('keeps technical details lazy and separates custom checks and service jobs', 
   await row(wrapper, 'SSH and delivery').get('button').trigger('click');
   expect(wrapper.find('.interval-button').exists()).toBe(false);
   await openTab(wrapper, 'My checks');
-  await selector(wrapper).setValue('b');
+  await selectServer(wrapper, 'two.example');
   expect(wrapper.getComponent(CheckPanel).props('serverId')).toBe('b');
   wrapper.unmount();
 });
 
-it('keeps the 500-server selector read-only without fetching when its options update', async () => {
-  const wrapper = mountLibrary();
-  await flushPromises();
-  mocks.call.mockClear();
-  await wrapper.setProps({ servers: Array.from({ length: 500 }, (_, i) => ({ id: String(i), name: `server-${i}`, endpoint: { ...endpoint, host: `server-${i}.example` } })) as Server[] });
-  await flushPromises();
-  expect(selector(wrapper).findAll('option')).toHaveLength(501);
-  expect(mocks.call).not.toHaveBeenCalled();
-  wrapper.unmount();
+it('searches 500 servers locally and changes scope only after a selection', async () => {
+  const wrapper = mountLibrary(undefined, document.body);
+  try {
+    await flushPromises();
+    mocks.call.mockClear();
+    await wrapper.setProps({ servers: Array.from({ length: 500 }, (_, i) => ({ id: String(i), name: `server-${i}`, endpoint: { ...endpoint, host: `server-${i}.example` } })) as Server[] });
+    const trigger = serverPicker(wrapper);
+    await trigger.trigger('click');
+    expect(wrapper.findAll('[role="option"]')).toHaveLength(501);
+    const search = wrapper.get('input[aria-label="Find a server"]');
+    expect(document.activeElement).toBe(search.element);
+    await search.setValue('missing');
+    expect(wrapper.get('[role="status"]').text()).toBe('No servers found');
+    await search.trigger('keydown', { key: 'Enter' });
+    expect(mocks.call).not.toHaveBeenCalled();
+    await search.setValue('SERVER-49  .EXAMPLE');
+    expect(wrapper.findAll('[role="option"]')).toHaveLength(11);
+    await search.trigger('keydown', { key: 'ArrowDown' });
+    await search.trigger('keydown', { key: 'Enter' });
+    expect(trigger.text()).toBe('server-490.example');
+    expect(document.activeElement).toBe(trigger.element);
+    expect(mocks.call.mock.calls).toEqual([['monitoring_library', { serverId: '490' }]]);
+    await trigger.trigger('click');
+    const reopened = wrapper.get<HTMLInputElement>('input[aria-label="Find a server"]');
+    expect(reopened.element.value).toBe('');
+    await reopened.setValue('missing');
+    await reopened.trigger('keydown', { key: 'Escape' });
+    expect(trigger.text()).toBe('server-490.example');
+    expect(document.activeElement).toBe(trigger.element);
+    await selectServer(wrapper, 'All servers');
+    expect(mocks.call).toHaveBeenLastCalledWith('monitoring_library', { serverId: null });
+  } finally {
+    wrapper.unmount();
+  }
 });

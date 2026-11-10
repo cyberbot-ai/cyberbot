@@ -1,16 +1,15 @@
 <script setup lang="ts">
 import ServerLink from './ServerLink.vue';
-import { serverDisplayHost, serverHint } from '../serverDirectory';
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import { call } from '../api';
 import type { MonitoringDefinition, MonitoringLibraryEntry, MonitoringTarget, Server } from '../types';
 import { monitoringInterval } from '../monitoring';
 import CheckPanel from './CheckPanel.vue';
+import LibraryServerPicker from './LibraryServerPicker.vue';
 import MonitoringLibraryDetails from './MonitoringLibraryDetails.vue';
 import RefreshButton from './RefreshButton.vue';
 import UiIcon from './UiIcon.vue';
 import UiInput from './UiInput.vue';
-import UiSelect from './UiSelect.vue';
 import VulnerabilityCatalog from './VulnerabilityCatalog.vue';
 
 const props = defineProps<{ servers: Server[]; now: number; initial?: MonitoringTarget }>();
@@ -142,10 +141,7 @@ onBeforeUnmount(() => { generation++; });
     <p v-else-if="catalogError" class="problem" role="alert">{{ catalogError }} <RefreshButton @click="loadCatalog">Load catalog</RefreshButton></p>
     <template v-else-if="catalog.length">
       <div v-if="tab !== 'jobs'" class="toolbar">
-        <UiSelect v-model="server" aria-label="Servers" :disabled="busy" @change="changeServer">
-          <option value="">All servers</option>
-          <option v-for="item in servers" :key="item.id" :value="item.id" :title="serverHint(item)">{{ serverDisplayHost(item.name, item.endpoint.host) }}</option>
-        </UiSelect>
+        <LibraryServerPicker v-model="server" :servers="servers" :disabled="busy" @change="changeServer"/>
         <label v-if="tab === 'builtin' && server" class="filter"><input ref="filter" v-model="onlyExceptions" type="checkbox" :disabled="busy"> Overrides only</label>
         <UiInput v-if="tab === 'builtin'" v-model="query" type="search" placeholder="Find a check" aria-label="Search checks" :disabled="busy"/>
       </div>
