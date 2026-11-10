@@ -98,10 +98,20 @@ async fn command(
     cap: usize,
 ) -> Result<process::Output, String> {
     let lease = crate::ssh_pool::global()?.acquire(e).await?;
-    crate::ssh_authorization::check(&lease)?;
+    command_on_lease(e, &lease, action, remote, input, cap).await
+}
+async fn command_on_lease(
+    e: &Endpoint,
+    lease: &crate::ssh_pool::Lease,
+    action: &str,
+    remote: &str,
+    input: Option<&[u8]>,
+    cap: usize,
+) -> Result<process::Output, String> {
+    crate::ssh_authorization::check(lease)?;
     let mut args = lease.options()?;
     args.extend(["--".into(), e.host.clone(), remote.into()]);
-    transport(e, action, &args, input, cap, Some(&lease), None).await
+    transport(e, action, &args, input, cap, Some(lease), None).await
 }
 async fn transport(
     e: &Endpoint,
@@ -242,7 +252,11 @@ pub async fn deploy(e: &Endpoint, path: &Path) -> Result<(), String> {
     // A bounded check avoids rsync negotiation on every metric collection.
     let probe = format!("test -f \"$HOME/{remote}\" && sha256sum \"$HOME/{remote}\"");
     let expected = format!("{:x}", Sha256::digest(COLLECTOR.as_bytes()));
-    if let Ok(output) = command(e, "Check collector version", &probe, None, 1024).await {
+    let installed = {
+        let lease = crate::ssh_pool::global()?.acquire(e).await?;
+        command_on_lease(e, &lease, "Check collector version", &probe, None, 1024).await
+    };
+    if let Ok(output) = installed {
         if String::from_utf8_lossy(&output.stdout)
             .split_whitespace()
             .next()

@@ -153,7 +153,7 @@ describe('fleet ribbon integration', () => {
     expect(fleetList().props('servers')).toHaveLength(4);
     app.unmount();
   });
-  it('shows fresh metrics as healthy after a manual poll and keeps log gaps in the log tab', async () => {
+  it('keeps a failed manual poll in the server details and clears it after recovery', async () => {
     apiState.preview = false;
     vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
     const now = Date.now() / 1000;
@@ -175,8 +175,21 @@ describe('fleet ribbon integration', () => {
         counts: {}, examples: [], findings: [], learning: true, bytesRead: 100, bytesReceived: 100, durationMs: 10,
       },
     };
+    const failure = 'Checking the SSH connection: Resource temporarily unavailable';
+    let failPoll: () => void = () => { throw new Error('No poll in progress'); };
     vi.mocked(call).mockImplementation(async command => {
-      if (command === 'poll_server') observation.at = now;
+      if (command === 'poll_server') {
+        if (!server.lastError) {
+          return new Promise((_resolve, reject) => {
+            failPoll = () => {
+              server.lastError = failure;
+              reject(new Error(failure));
+            };
+          });
+        }
+        observation.at = now;
+        server.lastError = null;
+      }
       if (command === 'history') return [];
       if (command === 'log_summary') return logs;
       if (command === 'snapshot') return {
@@ -190,9 +203,19 @@ describe('fleet ribbon integration', () => {
     await flushPromises();
     await app.get('button.ribbon.stale').trigger('click');
     await flushPromises();
-    await app.findAll('.detail-dialog button').find(button => button.text() === 'Refresh')!.trigger('click');
+    const refresh = () => app.findAll('.detail-dialog button').find(button => button.text() === 'Refresh')!;
+    await refresh().trigger('click');
+    await flushPromises();
+    expect(app.get('.detail-dialog button[aria-busy="true"]').text()).toBe('Update…');
+    expect(app.find('.detail-dialog [role="alert"]').exists()).toBe(false);
+    failPoll();
+    await flushPromises();
+    expect(app.findAll('.detail-dialog [role="alert"]').map(alert => alert.text())).toEqual([failure]);
+    expect(app.find('main > .error').exists()).toBe(false);
+    await refresh().trigger('click');
     await flushPromises();
     expect(call).toHaveBeenCalledWith('poll_server', { id: 'vpn' });
+    expect(app.find('.detail-dialog [role="alert"]').exists()).toBe(false);
     expect(app.get('.detail-dialog .status.healthy .state').text()).toBe('Healthy');
     expect(app.get('button.ribbon.healthy').text()).toContain('Logs');
     await app.findAll('.detail-dialog .detail-tabs button').find(button => button.text() === 'Logs')!.trigger('click');

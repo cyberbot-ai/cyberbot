@@ -3,7 +3,7 @@ use crate::{activity, model::Endpoint, process, ssh, ssh_authorization};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeSet, HashMap},
-    io::{Read, Write},
+    io::{self, ErrorKind, Read, Write},
     os::unix::{
         fs::{DirBuilderExt, MetadataExt},
         net::UnixStream,
@@ -15,14 +15,19 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use tokio::sync::{Mutex as AsyncMutex, Notify};
+use tokio::sync::{Mutex as AsyncMutex, Notify, Semaphore};
 
 pub const KEEPALIVE_SECONDS: u64 = 60;
 pub const IDLE_SECONDS: u64 = 15 * 60;
 pub const DEFAULT_LIMIT: usize = 32;
 const STARTUP_LIMIT: usize = 64;
+const OPEN_LIMIT: usize = 16;
+const WAIT_TIMEOUT: Duration = Duration::from_secs(25);
+const MUX_RETRY_DELAYS_MS: [u64; 2] = [100, 250];
+const OPEN_RETRY_DELAYS_MS: [u64; 2] = [500, 1000];
 const SETTINGS_CHANGED: &str = "SSH: server or settings have changed";
 const CONNECTION_SETTINGS_CHANGED: &str = "SSH settings have changed during connection";
+const WITHDRAWN: &str = "SSH connection withdrawn";
 static GLOBAL: OnceLock<Result<Pool, String>> = OnceLock::new();
 
 pub fn install(pool: Pool) -> Result<(), String> {
@@ -69,6 +74,7 @@ struct Inner {
     config: Option<PathBuf>,
     state: Mutex<State>,
     changed: Notify,
+    opening: Semaphore,
     opened: AtomicU64,
     reused: AtomicU64,
     evicted: AtomicU64,
@@ -169,16 +175,6 @@ pub(crate) fn fingerprint(paths: &[PathBuf]) -> Vec<u8> {
     hash.finalize().to_vec()
 }
 impl Entry {
-    fn check_master(&self) -> Result<u32, String> {
-        let pid = control(&self.socket, false)?;
-        #[cfg(target_os = "macos")]
-        if let Ok(mut master) = self.master.lock() {
-            if master.is_none_or(|process| process.pid != pid) {
-                *master = crate::local_resources::process_identity(pid);
-            }
-        }
-        Ok(pid)
-    }
     fn files_unchanged(&self) -> bool {
         self.files.lock().is_ok_and(|files| {
             files.as_ref().is_none_or(|f| {
@@ -193,7 +189,11 @@ impl Entry {
         }
         self.cancel.cancel();
         // Address only our private socket, never an old PID that the OS may reuse.
-        if control(&self.socket, true).is_ok() {
+        let terminated = match control(&self.socket, true) {
+            Ok(_) => true,
+            Err(error) => error.kind() == ErrorKind::ConnectionRefused,
+        };
+        if terminated {
             let _ = std::fs::remove_file(&self.socket);
         } else {
             // OpenSSH may exit before its queued termination reply is flushed.
@@ -248,6 +248,7 @@ impl Pool {
             config,
             state: Mutex::new(State::default()),
             changed: Notify::new(),
+            opening: Semaphore::new(OPEN_LIMIT),
             opened: AtomicU64::new(0),
             reused: AtomicU64::new(0),
             evicted: AtomicU64::new(0),
@@ -478,7 +479,7 @@ impl Pool {
     }
     pub async fn acquire(&self, endpoint: &Endpoint) -> Result<Lease, String> {
         crate::inventory::validate_endpoint(endpoint)?;
-        let result = tokio::time::timeout(Duration::from_secs(25), self.reserve(endpoint))
+        let result = tokio::time::timeout(WAIT_TIMEOUT, self.reserve(endpoint))
             .await
             .map_err(|_| "Timed out waiting for an SSH connection from the pool".to_string())??;
         result.ready().await?;
@@ -626,44 +627,89 @@ impl Lease {
         Ok(args)
     }
     async fn ready(&self) -> Result<(), String> {
-        let _gate = self.entry.gate.lock().await;
+        tokio::select! {
+            biased;
+            _ = self.entry.cancel.cancelled() => Err(WITHDRAWN.into()),
+            result = async {
+                let _gate = self.entry.gate.lock().await;
+                self.ready_under_gate().await
+            } => result,
+        }
+    }
+    async fn ready_under_gate(&self) -> Result<(), String> {
         if self.entry.closed.load(Ordering::SeqCst) {
-            return Err("SSH connection withdrawn".into());
+            return Err(WITHDRAWN.into());
         }
-        if self.entry.check_master().is_ok() {
-            self.pool.verify_configuration(&self.entry).await?;
-            self.pool.0.reused.fetch_add(1, Ordering::Relaxed);
-            activity::info(
-                "ssh",
-                "Reuse of SSH",
-                Some(ssh::target(&self.entry.endpoint)),
-            );
-            return Ok(());
-        }
-        if self.entry.socket.exists() {
-            return Err("Existing SSH connection not responding; new channel not open".into());
+        if self.entry.socket.try_exists().map_err(|e| e.to_string())? {
+            match self.check_master(false).await {
+                Ok(()) => {
+                    self.pool.verify_configuration(&self.entry).await?;
+                    self.pool.0.reused.fetch_add(1, Ordering::Relaxed);
+                    activity::info(
+                        "ssh",
+                        "Reuse of SSH",
+                        Some(ssh::target(&self.entry.endpoint)),
+                    );
+                    return Ok(());
+                }
+                Err(error) if error.kind() == ErrorKind::ConnectionRefused => {
+                    // The gate prevents another opener from binding this path.
+                    if let Err(error) = std::fs::remove_file(&self.entry.socket) {
+                        if error.kind() != ErrorKind::NotFound {
+                            return Err(format!("Removing the stale SSH socket: {error}"));
+                        }
+                    }
+                }
+                Err(error) if error.kind() == ErrorKind::NotFound => {}
+                Err(error) => return Err(format!("Checking the existing SSH connection: {error}")),
+            }
         }
         let mut event = activity::begin(
             "ssh",
             "SSH connection",
             Some(ssh::target(&self.entry.endpoint)),
         );
-        let result = tokio::select! {
-            _=self.entry.cancel.cancelled()=>Err("SSH connection withdrawn".into()),
-            result=self.open()=>result,
-        };
+        let result = self.open().await;
         if result.is_err() {
             self.invalidate();
         }
         event.result(&result);
         result
     }
-    async fn open(&self) -> Result<(), String> {
-        let files = self.pool.configuration(&self.entry.endpoint).await?;
-        *self.entry.files.lock().map_err(|e| e.to_string())? = Some(files);
-        if self.entry.closed.load(Ordering::SeqCst) {
-            return Err("SSH connection withdrawn".into());
+    async fn check_master(&self, starting: bool) -> io::Result<()> {
+        let mut delays = MUX_RETRY_DELAYS_MS.into_iter();
+        loop {
+            let socket = self.entry.socket.clone();
+            match tokio::task::spawn_blocking(move || control(&socket, false))
+                .await
+                .map_err(io::Error::other)?
+            {
+                Ok(_pid) => {
+                    #[cfg(target_os = "macos")]
+                    if let Ok(mut master) = self.entry.master.lock() {
+                        if master.is_none_or(|process| process.pid != _pid) {
+                            *master = crate::local_resources::process_identity(_pid);
+                        }
+                    }
+                    return Ok(());
+                }
+                Err(error) => {
+                    let retryable = matches!(
+                        error.kind(),
+                        ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted
+                    ) || (starting && error.kind() == ErrorKind::NotFound);
+                    if !retryable {
+                        return Err(error);
+                    }
+                    let Some(delay) = delays.next() else {
+                        return Err(error);
+                    };
+                    tokio::time::sleep(Duration::from_millis(delay)).await;
+                }
+            }
         }
+    }
+    async fn open(&self) -> Result<(), String> {
         let mut args = self.pool.base_options(&self.entry.endpoint, false)?;
         args.extend([
             "-N".into(),
@@ -673,14 +719,53 @@ impl Lease {
             "--".into(),
             self.entry.endpoint.host.clone(),
         ]);
-        let output = process::ssh_master(&args).await?;
-        if !output.success {
-            return Err(ssh::classify_error(&output.stderr));
+        let mut delays = OPEN_RETRY_DELAYS_MS.into_iter();
+        let mut prepared = false;
+        loop {
+            let permit = tokio::time::timeout(WAIT_TIMEOUT, self.pool.0.opening.acquire())
+                .await
+                .map_err(|_| "Timed out waiting to open an SSH connection")?
+                .map_err(|_| WITHDRAWN)?;
+            if prepared {
+                self.pool.verify_configuration(&self.entry).await?;
+                // A launcher can detach before its final status is observed.
+                if self.entry.socket.try_exists().map_err(|e| e.to_string())? {
+                    break;
+                }
+            } else {
+                let files = self.pool.configuration(&self.entry.endpoint).await?;
+                *self.entry.files.lock().map_err(|e| e.to_string())? = Some(files);
+                prepared = true;
+            }
+            if self.entry.closed.load(Ordering::SeqCst) {
+                return Err(WITHDRAWN.into());
+            }
+            let launch = process::ssh_master(&args).await;
+            drop(permit);
+            let (error, retryable) = match launch {
+                Ok(output) if output.success => break,
+                Ok(output) => (
+                    ssh::classify_error(&output.stderr),
+                    output.exit_code == Some(255) && retryable_handshake(&output.stderr),
+                ),
+                Err(error) => (error.to_string(), error.retryable()),
+            };
+            if !retryable {
+                return Err(error);
+            }
+            if self.entry.socket.try_exists().map_err(|e| e.to_string())? {
+                break;
+            }
+            let Some(delay) = delays.next() else {
+                return Err(error);
+            };
+            let jitter = u64::from(uuid::Uuid::new_v4().as_bytes()[0]) % 251;
+            tokio::time::sleep(Duration::from_millis(delay + jitter)).await;
         }
-        self.pool.verify_configuration(&self.entry).await?;
-        self.entry
-            .check_master()
+        self.check_master(true)
+            .await
             .map_err(|e| format!("Checking the SSH connection: {e}"))?;
+        self.pool.verify_configuration(&self.entry).await?;
         crate::connectivity::ssh_reply();
         self.pool.0.opened.fetch_add(1, Ordering::Relaxed);
         Ok(())
@@ -778,43 +863,98 @@ impl Drop for Lease {
     }
 }
 
+// OpenSSH reports connection and authentication errors with the same exit code.
+fn retryable_handshake(stderr: &str) -> bool {
+    const DNS_ERROR: &str = "ssh: Could not resolve hostname ";
+    const TEMPORARY_DNS: &str = "Temporary failure in name resolution";
+    if [
+        "Host key verification failed",
+        "REMOTE HOST IDENTIFICATION HAS CHANGED",
+        "Permission denied",
+        "Too many authentication failures",
+        "Unable to negotiate with",
+        "Bad configuration option",
+        "Bad owner or permissions",
+        "terminating, ",
+    ]
+    .into_iter()
+    .any(|message| stderr.contains(message))
+        || stderr.lines().any(|line| {
+            line.starts_with(DNS_ERROR)
+                && !line
+                    .trim_end()
+                    .rsplit_once(": ")
+                    .is_some_and(|(_, reason)| reason.eq_ignore_ascii_case(TEMPORARY_DNS))
+        })
+    {
+        return false;
+    }
+    stderr.lines().any(|line| {
+        let line = line.trim_end();
+        if line == "Connection timed out during banner exchange"
+            || ["Connection closed by ", "Connection reset by "]
+                .into_iter()
+                .any(|prefix| {
+                    line.strip_prefix(prefix).is_some_and(|peer| {
+                        peer.rsplit_once(" port ").is_some_and(|(host, port)| {
+                            host != "UNKNOWN" && port.parse::<u16>().is_ok()
+                        })
+                    })
+                })
+        {
+            return true;
+        }
+        let Some((context, reason)) = line.rsplit_once(": ") else {
+            return false;
+        };
+        if context.starts_with(DNS_ERROR) {
+            return reason.eq_ignore_ascii_case(TEMPORARY_DNS);
+        }
+        let connect = context.starts_with("ssh: connect to host ")
+            || (context.starts_with("channel ") && context.ends_with(": connect failed"));
+        let handshake = context.starts_with("kex_exchange_identification")
+            || context.starts_with("ssh_exchange_identification")
+            || context.starts_with("ssh_dispatch_run_fatal: Connection to ");
+        (connect || handshake)
+            && matches!(
+                reason,
+                "Connection refused"
+                    | "Operation timed out"
+                    | "Connection timed out"
+                    | "Connection reset by peer"
+                    | "Connection closed by remote host"
+            )
+    })
+}
+
 // Only HELLO, ALIVE and TERMINATE from OpenSSH PROTOCOL.mux v4. No remote exec here.
-fn control(path: &Path, terminate: bool) -> Result<u32, String> {
-    let socket = socket2::Socket::new(socket2::Domain::UNIX, socket2::Type::STREAM, None)
-        .map_err(|e| e.to_string())?;
-    let address = socket2::SockAddr::unix(path).map_err(|e| e.to_string())?;
-    socket
-        .connect_timeout(&address, Duration::from_millis(200))
-        .map_err(|e| {
-            if e.kind() == std::io::ErrorKind::ConnectionRefused {
-                let _ = std::fs::remove_file(path);
-            }
-            e.to_string()
-        })?;
+fn control(path: &Path, terminate: bool) -> io::Result<u32> {
+    let socket = socket2::Socket::new(socket2::Domain::UNIX, socket2::Type::STREAM, None)?;
+    let address = socket2::SockAddr::unix(path)?;
+    socket.connect_timeout(&address, Duration::from_millis(200))?;
     let fd: std::os::fd::OwnedFd = socket.into();
     let mut stream = UnixStream::from(fd);
-    stream
-        .set_read_timeout(Some(Duration::from_millis(200)))
-        .map_err(|e| e.to_string())?;
-    stream
-        .set_write_timeout(Some(Duration::from_millis(200)))
-        .map_err(|e| e.to_string())?;
-    fn send(stream: &mut UnixStream, words: &[u32]) -> Result<(), String> {
+    stream.set_read_timeout(Some(Duration::from_millis(200)))?;
+    stream.set_write_timeout(Some(Duration::from_millis(200)))?;
+    fn send(stream: &mut UnixStream, words: &[u32]) -> io::Result<()> {
         let mut packet = ((words.len() * 4) as u32).to_be_bytes().to_vec();
         for word in words {
             packet.extend(word.to_be_bytes());
         }
-        stream.write_all(&packet).map_err(|e| e.to_string())
+        stream.write_all(&packet)
     }
-    fn read(stream: &mut UnixStream) -> Result<Vec<u32>, String> {
+    fn read(stream: &mut UnixStream) -> io::Result<Vec<u32>> {
         let mut size = [0; 4];
-        stream.read_exact(&mut size).map_err(|e| e.to_string())?;
+        stream.read_exact(&mut size)?;
         let size = u32::from_be_bytes(size) as usize;
         if !(4..=1024).contains(&size) || size % 4 != 0 {
-            return Err("Invalid SSH multiplexing packet".into());
+            return Err(io::Error::new(
+                ErrorKind::InvalidData,
+                "Invalid SSH multiplexing packet",
+            ));
         }
         let mut bytes = vec![0; size];
-        stream.read_exact(&mut bytes).map_err(|e| e.to_string())?;
+        stream.read_exact(&mut bytes)?;
         Ok(bytes
             .chunks_exact(4)
             .map(|v| u32::from_be_bytes(v.try_into().unwrap()))
@@ -822,7 +962,10 @@ fn control(path: &Path, terminate: bool) -> Result<u32, String> {
     }
     send(&mut stream, &[1, 4])?;
     if read(&mut stream)? != [1, 4] {
-        return Err("Unsupported version of SSH mux".into());
+        return Err(io::Error::new(
+            ErrorKind::InvalidData,
+            "Unsupported version of SSH mux",
+        ));
     }
     send(
         &mut stream,
@@ -840,7 +983,10 @@ fn control(path: &Path, terminate: bool) -> Result<u32, String> {
     {
         return Ok(response[2]);
     }
-    Err("SSH multiplexing rejected the request".into())
+    Err(io::Error::new(
+        ErrorKind::InvalidData,
+        "SSH multiplexing rejected the request",
+    ))
 }
 
 #[cfg(test)]
@@ -992,6 +1138,151 @@ mod tests {
             server.join().unwrap();
         }
     }
+    #[tokio::test]
+    async fn busy_mux_retries_and_keeps_its_master_when_opening_slots_are_full() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        for stalled_checks in [1, 3] {
+            let pool = Pool::new(1, Duration::from_secs(900), None).unwrap();
+            let server = endpoint(22);
+            let active = pool.reserve(&server).await.unwrap();
+            let listener = tokio::net::UnixListener::bind(&active.entry.socket).unwrap();
+            let _permits = pool
+                .0
+                .opening
+                .acquire_many(OPEN_LIMIT as u32)
+                .await
+                .unwrap();
+            let peer = tokio::spawn(async move {
+                let mut request = [0; 12];
+                for _ in 0..stalled_checks {
+                    let (mut stream, _) = listener.accept().await.unwrap();
+                    stream.read_exact(&mut request).await.unwrap();
+                    // Keep the socket connected until the client times out.
+                    assert_eq!(stream.read(&mut request).await.unwrap(), 0);
+                }
+                let (mut stream, _) = listener.accept().await.unwrap();
+                stream.read_exact(&mut request).await.unwrap();
+                stream
+                    .write_all(&[0, 0, 0, 8, 0, 0, 0, 1, 0, 0, 0, 4])
+                    .await
+                    .unwrap();
+                stream.read_exact(&mut request).await.unwrap();
+                let response = [12, 0x80000005, 1, std::process::id()]
+                    .into_iter()
+                    .flat_map(u32::to_be_bytes)
+                    .collect::<Vec<_>>();
+                stream.write_all(&response).await.unwrap();
+            });
+            tokio::time::timeout(Duration::from_secs(5), async {
+                if stalled_checks == 3 {
+                    let error = pool.acquire(&server).await.err().unwrap();
+                    assert!(error.starts_with("Checking the existing SSH connection"));
+                    assert!(active.options().is_ok());
+                }
+                let reused = pool.acquire(&server).await.unwrap();
+                assert!(Arc::ptr_eq(&active.entry, &reused.entry));
+                assert_eq!(pool.stats().opened, 0);
+                assert_eq!(pool.stats().reused, 1);
+                peer.await.unwrap();
+            })
+            .await
+            .unwrap();
+            pool.shutdown();
+        }
+    }
+
+    #[tokio::test]
+    async fn a_new_master_waits_for_an_opening_slot_and_can_be_revoked() {
+        let pool = Pool::new(1, Duration::from_secs(900), None).unwrap();
+        let server = endpoint(22);
+        let _permits = pool
+            .0
+            .opening
+            .acquire_many(OPEN_LIMIT as u32)
+            .await
+            .unwrap();
+        let acquire = pool.acquire(&server);
+        tokio::pin!(acquire);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), &mut acquire)
+                .await
+                .is_err()
+        );
+        {
+            let state = pool.0.state.lock().unwrap();
+            let entry = state.entries.get(&key(&server)).unwrap();
+            assert!(entry.files.lock().unwrap().is_none());
+        }
+        pool.retain(&[]);
+        let error = tokio::time::timeout(Duration::from_secs(1), acquire)
+            .await
+            .unwrap()
+            .err()
+            .unwrap();
+        assert_eq!(error, WITHDRAWN);
+        assert_eq!(pool.stats().connections, 0);
+    }
+
+    #[test]
+    fn retries_only_recognized_temporary_handshake_errors() {
+        let closed = "kex_exchange_identification: Connection closed by remote host";
+        for error in [
+            closed,
+            "Connection closed by 127.0.0.1 port 22",
+            "Connection reset by 127.0.0.1 port 22",
+            "Connection timed out during banner exchange",
+            "kex_exchange_identification: read: Connection reset by peer",
+            "ssh: connect to host fixture port 22: Operation timed out",
+            "ssh: connect to host fixture port 22: Connection refused",
+            "channel 0: open failed: connect failed: Connection refused",
+            "ssh: Could not resolve hostname fixture: Temporary failure in name resolution",
+        ] {
+            assert!(retryable_handshake(error), "{error}");
+        }
+        for error in [
+            format!("Host key verification failed.\n{closed}"),
+            format!("ops@fixture: Permission denied (publickey).\n{closed}"),
+            format!("config line 1: Bad configuration option: bad\n{closed}"),
+            format!("ssh: Could not resolve hostname fixture: Name or service not known\n{closed}"),
+            "Connection closed by UNKNOWN port 65535".into(),
+            "remote command: Connection timed out".into(),
+        ] {
+            assert!(!retryable_handshake(&error), "{error}");
+        }
+    }
+
+    #[tokio::test]
+    async fn repeated_handshake_closures_exhaust_the_retry_budget() {
+        use tokio::io::{AsyncBufReadExt, BufReader};
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("config");
+        std::fs::write(&config, "").unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let server = endpoint(listener.local_addr().unwrap().port());
+        let peer = tokio::spawn(async move {
+            for _ in 0..3 {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut banner = String::new();
+                BufReader::new(stream).read_line(&mut banner).await.unwrap();
+                assert!(banner.starts_with("SSH-"));
+            }
+        });
+        let pool = Pool::new(1, Duration::from_secs(900), Some(config)).unwrap();
+        let error = tokio::time::timeout(Duration::from_secs(8), pool.acquire(&server))
+            .await
+            .unwrap()
+            .err()
+            .unwrap();
+        assert!(error.contains("Connection closed by "), "{error}");
+        tokio::time::timeout(Duration::from_secs(1), peer)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(pool.stats().opened, 0);
+        assert_eq!(pool.0.opening.available_permits(), OPEN_LIMIT);
+        pool.shutdown();
+    }
+
     #[tokio::test]
     async fn unresponsive_master_keeps_its_slot_until_closure_is_confirmed() {
         use std::os::unix::net::UnixListener;

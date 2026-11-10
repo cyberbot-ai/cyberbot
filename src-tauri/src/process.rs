@@ -106,9 +106,35 @@ pub(crate) async fn watched_ssh(
     .await
 }
 
+pub(crate) enum MasterError {
+    Spawn(std::io::Error),
+    Timeout,
+    Other(String),
+}
+
+impl MasterError {
+    pub(crate) fn retryable(&self) -> bool {
+        match self {
+            Self::Spawn(error) => error.kind() == std::io::ErrorKind::WouldBlock,
+            Self::Timeout => true,
+            Self::Other(_) => false,
+        }
+    }
+}
+
+impl std::fmt::Display for MasterError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Spawn(error) => write!(f, "Failed to launch SSH: {error}"),
+            Self::Timeout => f.write_str("Timed out establishing the SSH connection"),
+            Self::Other(message) => f.write_str(message),
+        }
+    }
+}
+
 // Only the pool may launch a daemon. Successful ControlPersist launchers detach;
 // killing their original process group would also kill an active ProxyJump helper.
-pub(crate) async fn ssh_master(args: &[String]) -> Result<Output, String> {
+pub(crate) async fn ssh_master(args: &[String]) -> Result<Output, MasterError> {
     let mut command = Command::new("/usr/bin/ssh");
     command
         .args(args)
@@ -118,14 +144,15 @@ pub(crate) async fn ssh_master(args: &[String]) -> Result<Output, String> {
         .kill_on_drop(true);
     #[cfg(unix)]
     command.process_group(0);
-    let mut child = command
-        .spawn()
-        .map_err(|e| format!("Failed to launch SSH: {e}"))?;
-    let guard = GroupGuard::register(child.id().ok_or("SSH process ID unavailable")?)?;
+    let mut child = command.spawn().map_err(MasterError::Spawn)?;
+    let pid = child
+        .id()
+        .ok_or_else(|| MasterError::Other("SSH process ID unavailable".into()))?;
+    let guard = GroupGuard::register(pid).map_err(MasterError::Other)?;
     let mut stderr = child
         .stderr
         .take()
-        .ok_or("SSH standard error is unavailable")?;
+        .ok_or_else(|| MasterError::Other("SSH standard error is unavailable".into()))?;
     let error = std::sync::Arc::new(Mutex::new(Vec::<u8>::new()));
     let saved = error.clone();
     // A ProxyJump child inherits stderr and can outlive the launcher. Drain it
@@ -144,8 +171,8 @@ pub(crate) async fn ssh_master(args: &[String]) -> Result<Output, String> {
     });
     let status = tokio::time::timeout(Duration::from_secs(20), child.wait())
         .await
-        .map_err(|_| "Timeline of SSH connection".to_string())?
-        .map_err(|e| e.to_string())?;
+        .map_err(|_| MasterError::Timeout)?
+        .map_err(|e| MasterError::Other(e.to_string()))?;
     if status.success() {
         guard.disarm();
     } else {

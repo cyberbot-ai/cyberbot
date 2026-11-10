@@ -1,5 +1,68 @@
 use cyberbot_lib::{model::Endpoint, ssh_pool::Pool};
 use std::{path::PathBuf, time::Duration};
+
+#[tokio::test]
+#[ignore = "Requires disposable fixture: python3 scripts/test-ssh-pool.py"]
+async fn a_dropped_handshake_recovers_and_concurrent_commands_share_the_master() {
+    use tokio::{
+        io::{AsyncBufReadExt, BufReader},
+        net::{TcpListener, TcpStream},
+    };
+    let fixture = PathBuf::from(std::env::var("CYBERBOT_TEST_SSH_DIR").unwrap());
+    let upstream_port: u16 = std::env::var("CYBERBOT_TEST_SSH_PORT")
+        .unwrap()
+        .parse()
+        .unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let proxy_port = listener.local_addr().unwrap().port();
+    let proxy = tokio::spawn(async move {
+        let (first, _) = listener.accept().await.unwrap();
+        let mut banner = String::new();
+        BufReader::new(first).read_line(&mut banner).await.unwrap();
+        assert!(banner.starts_with("SSH-"));
+
+        let (mut next, _) = listener.accept().await.unwrap();
+        let mut upstream = TcpStream::connect(("127.0.0.1", upstream_port))
+            .await
+            .unwrap();
+        tokio::io::copy_bidirectional(&mut next, &mut upstream)
+            .await
+            .unwrap();
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let trust = dir.path().join("known_hosts");
+    let host_key = std::fs::read_to_string(fixture.join("known_hosts")).unwrap();
+    let (_, key) = host_key.split_once(' ').unwrap();
+    std::fs::write(&trust, format!("[127.0.0.1]:{proxy_port} {key}")).unwrap();
+    let pool = Pool::new(1, Duration::from_secs(900), Some(fixture.join("config"))).unwrap();
+    let endpoint = Endpoint {
+        host: "127.0.0.1".into(),
+        port: proxy_port,
+        user: "ops".into(),
+        identity_file: Some(fixture.join("key-0").to_string_lossy().into_owned()),
+        known_hosts_file: Some(trust.to_string_lossy().into_owned()),
+        jump_host: None,
+    };
+    let (first, second) = tokio::time::timeout(Duration::from_secs(10), async {
+        tokio::join!(
+            command(&pool, &endpoint, "printf first"),
+            command(&pool, &endpoint, "printf second")
+        )
+    })
+    .await
+    .unwrap();
+    assert!(first.status.success() && second.status.success());
+    assert_eq!(first.stdout, b"first");
+    assert_eq!(second.stdout, b"second");
+    assert_eq!(pool.stats().opened, 1);
+    assert_eq!(pool.stats().reused, 1);
+    pool.shutdown();
+    tokio::time::timeout(Duration::from_secs(3), proxy)
+        .await
+        .unwrap()
+        .unwrap();
+}
+
 async fn command(pool: &Pool, e: &Endpoint, command: &str) -> std::process::Output {
     let lease = pool.acquire(e).await.unwrap_or_else(|error| {
         panic!(

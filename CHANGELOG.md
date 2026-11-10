@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.9.1
+
+- Retry temporary SSH connection failures, limit concurrent handshakes, and show failed metric refreshes on the affected server.
+
 ## 0.9.0
 
 - Show the Servers page as a list only. The card view and the view switch are removed.

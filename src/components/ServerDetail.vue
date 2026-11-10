@@ -25,6 +25,12 @@ const showResolved=ref(props.initialShowResolved??false);
 const incidentRows=computed(()=>showResolved.value?serverIncidents.value:activeIncidents.value);
 const showDependencies=ref(false),showUndetected=ref(false);
 const samples=ref<Observation[]>([]);const busy=ref(false);
+const refreshError = ref('');
+const metricsError = computed(() => refreshError.value
+  || (!props.server.awaitingFirstCheck ? props.server.lastError : null));
+watch([() => props.server.id, () => props.server.observation?.at, () => props.server.networkOffline], () => {
+  refreshError.value = '';
+});
 const initialTab=()=>props.initialSection??(activeIncidents.value.length?'incidents':'overview');
 const defaultService = Object.keys(serviceCatalog).find(kind => serviceCatalog[kind].preferred) ?? Object.keys(serviceCatalog)[0];
 const section=ref<string>(initialTab()),service=ref(defaultService);
@@ -100,13 +106,17 @@ const cpuChart = computed(() => {
 });
 async function refreshMetrics() {
   const id = props.server.id;
+  refreshError.value = '';
   busy.value = true;
   try {
     await call('poll_server', { id });
     emit('updated');
     if (props.server.id === id && section.value === 'overview') await loadHistory(id);
   } catch (error) {
-    emit('error', String(error));
+    if (props.server.id === id) {
+      refreshError.value = String(error).replace(/^Error: /, '');
+      emit('updated');
+    }
   } finally {
     busy.value = false;
   }
@@ -124,7 +134,7 @@ async function refreshMetrics() {
       <RelativeDate :at="currentObservation?.at" empty="Not checked yet"/>
     </ServerTabBar>
     <p v-if="server.awaitingFirstCheck && !server.networkOffline" class="notice" role="status">Waiting for the first check to collect data.</p>
-    <div v-if="server.lastError && !server.awaitingFirstCheck && !server.networkOffline" class="alert" role="alert">{{server.lastError}}</div>
+    <div v-if="metricsError && !server.networkOffline" class="alert" role="alert">{{metricsError}}</div>
   <div class="metrics">
     <div :class="pressure(currentObservation?.cpuPercent)"><small>CPU</small><strong><MetricValue :value="currentObservation?.cpuPercent" :precision="0" unit="%"/></strong><svg v-if="cpuChart && !server.networkOffline" class="spark" viewBox="0 0 600 100" preserveAspectRatio="none" aria-hidden="true"><path :d="cpuChart" fill="none" class="chart-line" vector-effect="non-scaling-stroke" stroke-width="1.5" stroke-linecap="round"/></svg></div>
     <div :class="pressure(currentObservation?.memoryPercent)"><small>Memory</small><strong><MetricValue :value="currentObservation?.memoryPercent" :precision="0" unit="%"/></strong><span class="sub">swap {{percent(currentObservation?.swapPercent)}}</span></div>
