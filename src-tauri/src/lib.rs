@@ -729,8 +729,11 @@ async fn refresh_service(
     _activity_result
 }
 #[tauri::command]
-fn log_summary(state: State<'_, Arc<AppState>>, id: String) -> Result<logs::LogView, String> {
-    state.store.log_view(&id)
+fn log_summary(
+    state: State<'_, Arc<AppState>>,
+    id: String,
+) -> Result<logs::DesktopLogView, String> {
+    state.store.desktop_log_view(&id)
 }
 #[tauri::command]
 fn action_requests(

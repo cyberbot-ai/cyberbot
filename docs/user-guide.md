@@ -21,7 +21,9 @@ Cyberbot starts polling automatically and writes its versioned collector under `
 
 Nginx can use an existing `stub_status` endpoint and accessible access or error logs. Response codes, upstream timings, and latency estimates depend on the configured log format and available fields. PostgreSQL can report connections, long-running queries, blocking, replication, and maintenance indicators, subject to diagnostic privileges. See [connectors](CONNECTORS.md) for other services and requirements.
 
-System and SSH log summaries use incremental reading and limited evidence. Source access, rotation, and incomplete samples affect coverage. Package advisory checks cover critical advisories on supported Debian and Ubuntu releases and match installed versions locally. Each affected source package contributes one representative CVE to the active list. Dismissing a package suppresses it until its installed versions change, or until you restore it from the hidden packages list.
+System and SSH log summaries use incremental reading and limited evidence. Source access, rotation, and incomplete samples affect coverage. In **Logs → Findings**, each available log excerpt shows the source and time of a matching record. Cyberbot stores these excerpts locally for the desktop interface. AI investigations receive the redacted summary.
+
+Package advisory checks cover critical advisories on supported Debian and Ubuntu releases and match installed versions locally. Each affected source package contributes one representative CVE to the active list. Dismissing a package suppresses it until its installed versions change, or until you restore it from the hidden packages list.
 
 The monitoring library lists built-in checks, their sources and operations, and the settings that apply. Configuration inherits from factory defaults through the fleet, server, and service instance. Disabling a check stops new observations and automatic investigations from its evidence. Existing history is retained.
 

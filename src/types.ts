@@ -19,7 +19,7 @@ export interface AutoStatus { day:number; runs:number; actualTokens:number; char
 
 export interface LogSummary { sshCorrelationLimited?:boolean; id:string; at:number; remoteAt:number; windowSeconds:number; coverage:{complete:boolean;initial:boolean;sources:string[];gaps:{reason:string;source:string;fromTime?:number;toTime?:number;fromOffset?:number;toOffset?:number}[]}; counts:Record<string,number>; examples:{at:number;category:string;template:string;peer?:string;account?:string}[]; findings:{check:string;title:string;severity:string;count:number}[]; learning:boolean; bytesRead:number;bytesReceived:number;durationMs:number }
 export interface LogCoveragePeriod {remoteAt:number;windowSeconds:number;gaps:LogSummary['coverage']['gaps']}
-export interface LogView {shortCheck:boolean;lastIncomplete:LogCoveragePeriod|null;monitoring?:MonitoringValues;summary:LogSummary|null;severity?:string|null;lastSuccess:number|null;nextCheck:number;error:string|null;fresh:boolean}
+export interface LogView {shortCheck:boolean;lastIncomplete:LogCoveragePeriod|null;monitoring?:MonitoringValues;summary:LogSummary|null;findingExamples?:Record<string,{at:number;source:string;text:string}>;severity?:string|null;lastSuccess:number|null;nextCheck:number;error:string|null;fresh:boolean}
 
 
 export interface StorageStatus {actions?:{bytes:number;limitBytes:number;records:number;active:number;historyDays:number};activity?:ActivityStorage;databaseBytes:number;walBytes:number;limitBytes:number;cacheBytes:number;cacheLimitBytes:number;blocked:boolean;message:string|null}

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.2
+
+- Show a matching log excerpt with its source and timestamp under findings in the Logs tab.
+
 ## 0.10.1
 
 - Give the local OpenSSH control socket more time to respond under load and keep slow connections available for reuse.

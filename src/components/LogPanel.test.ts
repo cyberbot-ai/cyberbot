@@ -19,9 +19,38 @@ it('explains a Fail2ban finding and gives a read-only diagnostic step', async ()
  const w=mount(LogPanel,{props:{serverId:'s',now:end}});
  await flushPromises();
  expect(w.get('.finding').text()).toContain('Fail2ban error');
+ expect(w.text()).toContain('No log example was saved for this finding.');
  expect(w.text()).toContain('could not find its log');
  expect(w.text()).toContain('fail2ban-client status');
  expect(w.text()).toContain('journalctl -u fail2ban');
+ w.unmount();
+});
+
+it('shows the matching log excerpt under each finding as plain text', async () => {
+ const recurring = 'logs:new_error_pattern';
+ const disk = 'logs:disk_io';
+ const line = `<b>Error</b> ${'worker-failed-'.repeat(16)}`;
+ mocks.call.mockResolvedValue({
+  ...view,
+  findingExamples: {
+   [disk]: {at:end-1,source:'syslog',text:'I/O error on disk'},
+   [recurring]: {at:end,source:'journal',text:line},
+  },
+  summary: {...view.summary, findings: [
+   {check:recurring,title:'A new recurring error pattern',severity:'warning',count:231},
+   {check:disk,title:'Disk or file system errors',severity:'critical',count:1},
+  ]},
+ });
+ const w = mount(LogPanel,{props:{serverId:'s',now:end}});
+ await flushPromises();
+ const [first, second] = w.findAll('.finding-item');
+ expect(first.get('.finding').text()).toContain('231 events');
+ expect(first.get('.example-meta').text()).toContain('journal');
+ expect(first.get('time').attributes('datetime')).toBe(new Date(end*1000).toISOString());
+ expect(first.get('code').text()).toBe(line);
+ expect(first.find('code b').exists()).toBe(false);
+ expect(second.get('.example-meta').text()).toContain('syslog');
+ expect(second.get('code').text()).toBe('I/O error on disk');
  w.unmount();
 });
 

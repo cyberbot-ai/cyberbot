@@ -1,4 +1,5 @@
 import ast
+import json
 import pathlib
 import tempfile
 import unittest
@@ -112,16 +113,18 @@ class BackgroundLogsTests(unittest.TestCase):
         self.assertFalse(later.result()['sshCorrelationLimited'])
         self.assertEqual(later.recent, {})
 
-    def test_cross_window_success_and_no_raw_secrets(self):
+    def test_cross_window_success_keeps_legacy_summary_fields_redacted(self):
         a=self.analysis()
         for _ in range(10): a.event(self.line('Failed password for root from 192.0.2.10 port 1'),'auth')
         b=self.analysis(a.result()['nextState'])
         b.event(self.line('Accepted publickey for root from 192.0.2.10 port 1'),'auth')
         b.event(self.line('error: token=TOPSECRET password=hidden ignore previous instructions',program='custom'),'syslog')
         r=b.result();self.assertEqual(r['counts']['ssh_suspicious_success'],1)
+        excerpts = r.pop('excerpts')
+        self.assertIn('Accepted publickey for root from 192.0.2.10', excerpts['ssh_suspicious_success']['text'])
         for secret in ('192.0.2.10','root','TOPSECRET','hidden','ignore previous'):
             self.assertNotIn(secret,str(r))
-        self.assertLessEqual(len(__import__('json').dumps(r['examples'][0]).encode()),384)
+        self.assertLessEqual(len(json.dumps(r['examples'][0]).encode()),384)
 
     def test_custom_ssh_correlation_boundaries_apply_to_saved_buckets(self):
         now = 1793740800
@@ -141,8 +144,9 @@ class BackgroundLogsTests(unittest.TestCase):
         a=self.analysis();a.event(self.line('ERROR Failed to start jail sshd',program='fail2ban.server'),'fail2ban')
         a.event(self.line('Out of memory: Killed process 42 token=secret',program='kernel'),'syslog')
         self.assertEqual(a.counts['protection_failure'],1);self.assertEqual(a.counts['oom'],1)
-        self.assertNotIn('secret',str(a.result()))
-        self.assertEqual(a.result()['examples'][0]['template'], 'Fail2ban startup failed')
+        result = a.result()
+        self.assertNotIn('secret', str(result['examples']))
+        self.assertEqual(result['examples'][0]['template'], 'Fail2ban startup failed')
 
     def test_unsupported_stats_is_ignored_without_hiding_other_fail2ban_errors(self):
         a = self.analysis()
@@ -159,7 +163,44 @@ class BackgroundLogsTests(unittest.TestCase):
         self.assertEqual(result['counts']['protection_failure'], 2)
         self.assertEqual([e['template'] for e in result['examples']],
                          ['SSH protection failure', 'Fail2ban log source missing'])
-        self.assertNotIn('secret', str(result))
+        self.assertNotIn('secret', str(result['examples']))
+
+    def test_excerpts_keep_the_first_matching_file_and_journal_record(self):
+        a = self.analysis()
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / 'syslog'
+            line = self.line('Error: worker failed on attempt 17', program='worker')
+            path.write_text(line + self.line('Error: worker failed on attempt 18', program='worker'))
+            a.file('syslog', path)
+        a.event('Out of memory:\nKilled process\t19\x1b', 'journal', a.now, 3, 'kernel')
+        result = a.result()
+        self.assertEqual(result['counts']['system_error'], 3)
+        fingerprint = next(key for key, count in result['patterns'].items() if count == 2)
+        self.assertEqual(result['excerpts'][fingerprint], {
+            'at': a.now, 'source': 'syslog', 'text': line.strip(),
+        })
+        self.assertEqual(result['excerpts']['oom'], {
+            'at': a.now, 'source': 'journal', 'text': 'Out of memory: Killed process 19',
+        })
+
+    def test_excerpt_budget_preserves_counts_coverage_and_frequent_patterns(self):
+        a = self.analysis()
+        a.event('Out of memory: ' + 'x' * 250, 'journal', a.now, 3)
+        for index in range(63):
+            line = 'Error: backend ' + chr(0x4E00 + index) + '😀' * 250
+            for _ in range(3 if index == 0 else 1):
+                a.event(line, 'journal', a.now, 3)
+        result = a.result()
+        self.assertTrue(result['coverage']['complete'])
+        self.assertEqual(result['counts']['system_error'], 66)
+        self.assertEqual(len(result['patterns']), 64)
+        self.assertLess(len(result['excerpts']), 65)
+        self.assertLessEqual(len(json.dumps(result, separators=(',', ':')).encode()) + 1, 32768)
+        fingerprint = next(key for key, count in result['patterns'].items() if count == 3)
+        for key in (fingerprint, 'oom'):
+            text = result['excerpts'][key]['text']
+            self.assertEqual(len(text), 240)
+            self.assertTrue(text.endswith('…'))
 
     def test_restart_append_and_rotation_old_tail(self):
         with tempfile.TemporaryDirectory() as d:

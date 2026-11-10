@@ -54,14 +54,19 @@ async function refresh(){busy.value=true;error.value='';try{await call('diagnose
 <template v-if="view?.summary">
 <section v-if="view.summary.findings.length || view.severity" class="block">
   <h4>Findings</h4>
-  <template v-for="f in view.summary.findings" :key="f.check">
+  <div v-for="f in view.summary.findings" :key="f.check" class="finding-item">
     <div class="finding"><span class="tag" :class="f.severity==='critical'?'crit':'warn'">{{f.severity==='critical'?'Critical':'Needs attention'}}</span><strong>{{f.check==='logs:protection_failure'?'Fail2ban error':f.title}}</strong><span class="count">{{f.count}} {{events1(f.count)}}</span></div>
+    <div v-if="view.findingExamples?.[f.check]" class="log-example">
+      <div class="example-meta">Log example · {{view.findingExamples[f.check].source}} · <RelativeDate :at="view.findingExamples[f.check].at"/></div>
+      <code>{{view.findingExamples[f.check].text}}</code>
+    </div>
+    <p v-else class="hint">No log example was saved for this finding.</p>
     <template v-if="f.check==='logs:protection_failure'">
       <p v-for="reason in protectionReasons" :key="reason" class="hint">{{reason}}</p>
-      <p v-if="!protectionReasons.length" class="hint">Fail2ban recorded an error. The summary doesn’t contain the exact cause.</p>
+      <p v-if="!protectionReasons.length && !view.findingExamples?.[f.check]" class="hint">Fail2ban recorded an error. The summary doesn’t contain the exact cause.</p>
       <p class="hint">Check status with <code>fail2ban-client status</code>. Look up the event in <code>/var/log/fail2ban.log</code> or run <code>journalctl -u fail2ban</code>.</p>
     </template>
-  </template>
+  </div>
   <p v-if="!view.summary.findings.length" class="note">Awaiting confirmation of recovery. See the Incidents tab for details.</p>
 </section>
 <div class="columns">
@@ -76,7 +81,7 @@ async function refresh(){busy.value=true;error.value='';try{await call('diagnose
 <li v-if="view.summary.windowSeconds === 0">Both checks ran in the same second.</li>
 <li v-if="view.summary.sshCorrelationLimited">Some failed attempts could not be correlated with successful logins because there were too many source addresses.</li>
 <li v-for="(g,i) in view.summary.coverage.gaps" :key="i">{{g.source}}: {{gaps[g.reason]??g.reason}}<small v-if="g.fromOffset!=null"> · bytes {{g.fromOffset}}–{{g.toOffset}}</small><small v-if="g.fromTime!=null"> · <RelativeDate :at="g.fromTime"/> – <RelativeDate :at="g.toTime??g.fromTime"/></small></li>
-<li>Logs are analyzed on the server without AI. Cyberbot receives the summary and redacted examples.</li>
+<li>Logs are analyzed on the server without AI. The desktop app shows short excerpts for findings and redacted examples for selected events.</li>
 <li><small>Received {{view.summary.bytesReceived}} bytes · read {{view.summary.bytesRead}} bytes on the server · {{view.summary.durationMs}} ms. Figures exclude SSH overhead.</small></li></ul></details>
 <details v-if="view.lastIncomplete" class="quality">
   <summary>Previous gaps · {{ formatTimeRange(view.lastIncomplete.remoteAt - view.lastIncomplete.windowSeconds, view.lastIncomplete.remoteAt) }}</summary>
@@ -92,7 +97,8 @@ async function refresh(){busy.value=true;error.value='';try{await call('diagnose
 <style scoped>
 .logs{border:0;margin:0;padding:0}h4{font-size:13px;font-weight:600;margin:0 0 8px}.tag{display:inline-flex;align-items:center;padding:1px 9px;border-radius:20px;background:var(--subtle);color:var(--muted);white-space:nowrap;font-size:12px}.tag.ok{background:var(--accent-bg);color:var(--success)}.tag.warn{background:var(--warning-bg);color:var(--warning)}.tag.crit{background:var(--danger-bg);color:var(--danger)}
 p,li{font-size:13px;line-height:1.6;color:var(--muted);overflow-wrap:anywhere}p{max-width:75ch}.note{margin:0}.hint{font-size:12px;margin:8px 0 0}button{font:inherit;color:var(--text);background:var(--surface);border:1px solid var(--line);border-radius:7px;padding:6px 12px;cursor:pointer;white-space:nowrap}button:hover:enabled{background:var(--hover)}button:disabled{opacity:.45;cursor:default}.problem{padding:10px 12px;background:var(--danger-bg);color:var(--danger);border-radius:7px;margin:0 0 12px}
-.block{margin-bottom:22px}.finding{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--line);font-size:13px}.finding strong{flex:1;min-width:0;font-weight:500;overflow-wrap:anywhere}.finding .count{color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+.block{margin-bottom:22px}.finding-item{padding:9px 0;border-bottom:1px solid var(--line)}.finding{display:flex;align-items:center;gap:10px;font-size:13px}.finding strong{flex:1;min-width:0;font-weight:500;overflow-wrap:anywhere}.finding .count{color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+.log-example{min-width:0;margin-top:8px;padding:8px 10px;background:var(--subtle);border-radius:7px;overflow-wrap:anywhere}.example-meta{color:var(--muted);font-size:12px}.log-example code{display:block;margin-top:4px;color:var(--text);font-size:12px;line-height:1.5;white-space:pre-wrap}
 .columns{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:28px}dl{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px 16px;font-size:13px;margin:0}dt{min-width:0;overflow-wrap:anywhere;color:var(--muted)}dd{margin:0;text-align:right}
 details{margin:8px 0;font-size:13px;color:var(--muted)}summary{cursor:pointer}.quality{background:var(--subtle);border-radius:10px;padding:10px 14px}.quality ul{margin:8px 0 2px;padding-left:18px}article{padding:10px 0;border-bottom:1px solid var(--line);overflow-wrap:anywhere}small{font-size:12px;color:var(--muted)}
 button:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:3px}

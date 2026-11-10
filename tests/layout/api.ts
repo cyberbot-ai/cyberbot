@@ -20,7 +20,19 @@ export async function call<T>(command:string,args?:Record<string,unknown>):Promi
       const metrics=Object.fromEntries(spec.metrics.map(m=>[m.key,n]));
       result={config,status:'healthy',fresh:true,error:null,summary:{id:'fixture',at,bytesReceived:1024,data:{complete:true,issues:[],metrics,durationMs:20},rates:metrics,findings:[]},evidence:[]};break;
     }
-    case 'log_summary':result={fresh:true,lastSuccess:at,error:null,summary:{windowSeconds:600,coverage:{complete:true,initial:false,sources:['auth'],gaps:[]},counts:{ssh_failed:n,ssh_banned:n,system_error:n},examples:[],findings:[],learning:true,bytesReceived:1024,bytesRead:2048,durationMs:10}};break;
+    case 'log_summary': {
+      const check = 'logs:new_error_pattern';
+      const text = 'worker: Error reopening state file /var/lib/worker/' + (scenario.value === 'normal' ? 'state.db' : 'long-file-name-'.repeat(13) + '…');
+      result = {
+        fresh:true,lastSuccess:at,error:null,
+        findingExamples:{[check]:{at,source:'journal',text}},
+        summary:{remoteAt:at,windowSeconds:600,coverage:{complete:true,initial:false,sources:['journal'],gaps:[]},
+          counts:{ssh_failed:n,ssh_banned:n,system_error:n},examples:[],
+          findings:[{check,title:'A new recurring error pattern',severity:'warning',count:231}],
+          learning:false,bytesReceived:1024,bytesRead:2048,durationMs:10},
+      };
+      break;
+    }
     default:throw new Error(`No surgery at the booth: ${command}`);
   }
   return result as T;

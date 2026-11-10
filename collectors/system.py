@@ -157,9 +157,11 @@ def aggregate_file(path, cursor=None, status_parser=None):
                 "cursor": {"inode": stat.st_ino, "offset": end, "discarding": discarding}, "size": stat.st_size}
 
 
-# Log profile v1: fixed source paths and classifiers. Raw messages never leave here.
+# Log profile v1: fixed sources and classifiers, with bounded desktop excerpts.
 CATEGORIES = ("oom", "disk_io", "service_crash", "protection_failure", "ssh_suspicious_success")
 TEMPLATES = {"oom": "Memory exhaustion", "disk_io": "Storage or filesystem error", "service_crash": "Process or service failure", "protection_failure": "SSH protection failure", "ssh_suspicious_success": "Successful SSH login after repeated failures"}
+MAX_LOG_EXCERPT = 240
+MAX_LOG_JSON = 32768 - 1  # Reserve the newline written by the collector entry point.
 UNSUPPORTED_FAIL2BAN_STATS = re.compile(r"\bCommand \['stats'\] has failed\. Received Exception\('Invalid command'\)\s*$")
 
 
@@ -213,6 +215,7 @@ class LogAnalysis:
         self.counts = collections.Counter()
         self.patterns = collections.Counter()
         self.examples = []
+        self.excerpts = {}
         self.gaps = []
         self.bytes_read = 0
         self.sources = []
@@ -297,7 +300,7 @@ class LogAnalysis:
                     template = "Fail2ban startup failed"
                 elif "failed to execute ban" in lower or "failed to execute unban" in lower:
                     template = "Fail2ban blocking action failed"
-                self.finding("protection_failure", when, template=template)
+                self.finding("protection_failure", when, source, line, template=template)
             return
         if is_ssh:
             # Failures/blocks and every other sshd message are excluded from generic novelty.
@@ -326,7 +329,7 @@ class LogAnalysis:
                 # Conservative bucket inclusion avoids claiming failures older than the window.
                 n = sum(n for t, n in bins if when-self.thresholds["sshLookbackSeconds"] <= t <= when)
                 if n >= self.thresholds["sshFailedAttempts"] and timestamp_known:
-                    self.finding("ssh_suspicious_success", when, ip, account)
+                    self.finding("ssh_suspicious_success", when, source, line, ip, account)
             elif any(s in lower for s in ("invalid user", "authentication failure", "preauth", "connection closed", "connection reset", "unable to negotiate", "disconnect")):
                 self.counts["ssh_noise"] += 1
             return
@@ -337,7 +340,7 @@ class LogAnalysis:
             ("service_crash", ("failed to start", "segfault", "core dumped")),
         ):
             if any(n in lower for n in needles): category = name; break
-        if category: self.finding(category, when)
+        if category: self.finding(category, when, source, line)
         if category or (priority is not None and priority <= 3) or re.search(r"\b(error|fatal|critical|panic)\b", lower):
             self.counts["system_error"] += 1
             normalized = re.sub(r"\b[0-9a-f]{8,}\b|\b\d+(?:[.:]\d+)*\b|(?<=\s)/\S+|https?://\S+", "<value>", lower)
@@ -345,10 +348,22 @@ class LogAnalysis:
             fingerprint = self.pseudonym(normalized)
             if fingerprint in self.patterns or len(self.patterns) < 64:
                 self.patterns[fingerprint] += 1
+                self.excerpt(fingerprint, when, source, line)
             else: self.gap("pattern_limit", source)
 
-    def finding(self, category, at, peer=None, account=None, *, template=None):
+    def excerpt(self, key, at, source, line):
+        if key in self.excerpts:
+            return
+        line = line.strip()
+        text = "".join(char if char.isprintable() else " " for char in line[:MAX_LOG_EXCERPT]).strip()
+        if len(line) > MAX_LOG_EXCERPT:
+            text = text[:MAX_LOG_EXCERPT - 1] + "…"
+        if text:
+            self.excerpts[key] = {"at": at, "source": source, "text": text}
+
+    def finding(self, category, at, source, line, peer=None, account=None, *, template=None):
         self.counts[category] += 1
+        self.excerpt(category, at, source, line)
         if len(self.examples) < 10:
             e = {"at": at, "category": category, "template": template or TEMPLATES[category]}
             if peer: e["peer"] = peer
@@ -543,12 +558,24 @@ class LogAnalysis:
                   "sshCorrelationLimited": bool(self.ssh_limited_until),
                   "counts": dict(self.counts), "patterns": dict(self.patterns), "examples": self.examples,
                   "bytesRead": self.bytes_read, "durationMs": int((time.monotonic()-self.started)*1000), "nextState": self.next}
-        while len(json.dumps(result, separators=(",", ":")).encode()) > 32768:
+        while len(json.dumps(result, separators=(",", ":"))) > MAX_LOG_JSON:
             if result["examples"]: result["examples"].pop()
             elif result["patterns"]: result["patterns"].pop(next(iter(result["patterns"])))
             else: raise ValueError("Output limit")
             self.gap("output_limit", "all")
-        result["coverage"]["complete"] = not self.gaps
+            result["coverage"]["complete"] = False
+        # Keep category excerpts first, then the most frequent patterns. Optional
+        # excerpts must never take space from counts, checkpoints or coverage.
+        size = len(json.dumps(result, separators=(",", ":"))) + len(',"excerpts":{}')
+        excerpts = {}
+        for key in sorted(self.excerpts, key=lambda key: (key in self.patterns, -self.patterns[key], key)):
+            excerpt = self.excerpts[key]
+            size += len(json.dumps({key: excerpt}, separators=(",", ":"))) - 2 + bool(excerpts)
+            if size > MAX_LOG_JSON:
+                break
+            excerpts[key] = excerpt
+        if excerpts:
+            result["excerpts"] = excerpts
         return result
 
 

@@ -3,9 +3,10 @@ use crate::{inventory::stable_id, model::*, ssh, store::Store, AppState};
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::{collections::BTreeMap, sync::Arc};
+use std::{cmp::Reverse, collections::BTreeMap, sync::Arc};
 type Result<T> = std::result::Result<T, String>;
 const MIN_HEALTH_INTERVAL_SECONDS: u64 = 60;
+const MAX_LOG_EXCERPT: usize = 240;
 fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
@@ -70,6 +71,13 @@ pub struct LogExample {
     pub account: Option<String>,
 }
 #[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LogExcerpt {
+    at: i64,
+    source: String,
+    text: String,
+}
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct WireSummary {
     version: u32,
@@ -81,6 +89,8 @@ struct WireSummary {
     counts: BTreeMap<String, u64>,
     patterns: BTreeMap<String, u64>,
     examples: Vec<LogExample>,
+    #[serde(default)]
+    excerpts: BTreeMap<String, LogExcerpt>,
     bytes_read: u64,
     duration_ms: u64,
     next_state: Value,
@@ -112,11 +122,20 @@ pub struct LogSummary {
     pub findings: Vec<LogFinding>,
     pub learning: bool,
 }
-impl LogSummary {
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredLogSummary {
+    #[serde(flatten)]
+    summary: LogSummary,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    finding_examples: BTreeMap<String, LogExcerpt>,
+}
+impl StoredLogSummary {
     fn from_saved(raw: &str) -> Result<Self> {
-        let mut summary: Self = serde_json::from_str(raw).map_err(err)?;
+        let mut stored: Self = serde_json::from_str(raw).map_err(err)?;
+        let summary = &mut stored.summary;
         summary.ssh_correlation_limited |= summary.coverage.take_legacy_ssh_limit();
-        Ok(summary)
+        Ok(stored)
     }
 }
 #[derive(Clone, Serialize, Deserialize, Default)]
@@ -165,6 +184,14 @@ pub struct LogView {
     pub next_check: i64,
     pub error: Option<String>,
     pub fresh: bool,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopLogView {
+    #[serde(flatten)]
+    view: LogView,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    finding_examples: BTreeMap<String, LogExcerpt>,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -278,6 +305,17 @@ fn validate(w: &WireSummary) -> Result<()> {
         || w.patterns
             .iter()
             .any(|(k, v)| !valid_hash(k) || *v > 2_097_152)
+        || w.excerpts.iter().any(|(key, excerpt)| {
+            !(w.patterns.contains_key(key)
+                || RULES[..5]
+                    .iter()
+                    .any(|(category, _, _)| *category == key.as_str())
+                    && w.counts.get(key).is_some_and(|n| *n > 0))
+                || !sources[1..].contains(&excerpt.source.as_str())
+                || excerpt.text.trim().is_empty()
+                || excerpt.text.chars().count() > MAX_LOG_EXCERPT
+                || excerpt.text.chars().any(char::is_control)
+        })
         || w.examples.len() > 10
         || w.examples.iter().any(|e| {
             !RULES[..5].iter().any(|(k, _, _)| *k == e.category)
@@ -308,7 +346,7 @@ fn evaluate(
     b: &mut Baseline,
     at: i64,
     thresholds: &Thresholds,
-) -> (Vec<LogFinding>, bool) {
+) -> (Vec<LogFinding>, bool, BTreeMap<String, LogExcerpt>) {
     b.patterns.retain(|_, v| v.seen >= at - 7 * 86400);
     let trained = b.windows >= 72 && b.since.is_some_and(|s| at - s >= 86400);
     let complete = w.coverage.complete
@@ -338,6 +376,7 @@ fn evaluate(
         0
     };
     let mut novelty = 0;
+    let mut novel_example = None;
     let pattern_minimum = thresholds["new_error_pattern"]["warning"] as u64;
     if complete {
         for (hash, n) in &w.patterns {
@@ -373,6 +412,11 @@ fn evaluate(
             }
             if p.alerted && *n >= pattern_minimum {
                 novelty += *n;
+                if let Some(excerpt) = w.excerpts.get(hash) {
+                    if novel_example.is_none_or(|(count, _)| *n > count) {
+                        novel_example = Some((*n, excerpt));
+                    }
+                }
             }
             p.seen = at;
         }
@@ -396,6 +440,7 @@ fn evaluate(
             b.rates.remove(0);
         }
     }
+    let mut finding_examples = BTreeMap::new();
     let findings = RULES
         .iter()
         .filter_map(|(key, title, severity)| {
@@ -415,15 +460,31 @@ fn evaluate(
                     .filter(|n| *n as f64 >= thresholds::activation(&thresholds[*key]))
                     .unwrap_or(0),
             };
-            (count > 0).then(|| LogFinding {
-                check: format!("logs:{key}"),
+            if count == 0 {
+                return None;
+            }
+            let check = format!("logs:{key}");
+            let excerpt = match *key {
+                "system_error_spike" => w
+                    .patterns
+                    .iter()
+                    .max_by_key(|(hash, n)| (**n, Reverse(hash.as_str())))
+                    .and_then(|(hash, _)| w.excerpts.get(hash)),
+                "new_error_pattern" => novel_example.map(|(_, excerpt)| excerpt),
+                _ => w.excerpts.get(*key),
+            };
+            if let Some(excerpt) = excerpt {
+                finding_examples.insert(check.clone(), excerpt.clone());
+            }
+            Some(LogFinding {
+                check,
                 title: (*title).into(),
                 severity: (*severity).into(),
                 count,
             })
         })
         .collect();
-    (findings, !trained)
+    (findings, !trained, finding_examples)
 }
 impl Store {
     pub(crate) fn log_schedule(&self, servers: &[Server]) -> Result<BTreeMap<String, i64>> {
@@ -510,10 +571,18 @@ impl Store {
         Ok(state)
     }
     pub(crate) fn log_view(&self, id: &str) -> Result<LogView> {
+        Ok(self.desktop_log_view(id)?.view)
+    }
+    pub(crate) fn desktop_log_view(&self, id: &str) -> Result<DesktopLogView> {
         let db = self.0.lock().map_err(err)?;
         let state = Self::read_log_state(&db, id)?.unwrap_or_else(|| LogState::new(id));
         let v:Option<String>=db.query_row("SELECT payload FROM log_summaries WHERE server_id=?1 ORDER BY at DESC,rowid DESC LIMIT 1",[id],|r|r.get(0)).optional().map_err(err)?;
-        let summary = v.as_deref().map(LogSummary::from_saved).transpose()?;
+        let (summary, finding_examples) = v
+            .as_deref()
+            .map(StoredLogSummary::from_saved)
+            .transpose()?
+            .map(|stored| (Some(stored.summary), stored.finding_examples))
+            .unwrap_or_default();
         let last_incomplete = if summary.as_ref().is_some_and(|s| s.coverage.complete) {
             let previous: Option<String> = db
                 .query_row(
@@ -531,7 +600,7 @@ impl Store {
                 .map_err(err)?;
             previous
                 .map(|raw| {
-                    let s = LogSummary::from_saved(&raw)?;
+                    let s = StoredLogSummary::from_saved(&raw)?.summary;
                     Ok::<_, String>(LogCoveragePeriod {
                         remote_at: s.remote_at,
                         window_seconds: s.window_seconds,
@@ -544,22 +613,25 @@ impl Store {
         };
         let policy = crate::monitoring::effective(&db, "logs", id, "")?.values;
         let interval = policy.interval_seconds;
-        Ok(LogView {
-            short_check: summary
-                .as_ref()
-                .is_some_and(|s| s.window_seconds < MIN_HEALTH_INTERVAL_SECONDS),
-            last_incomplete,
-            fresh: policy.enabled
-                && state.error.is_none()
-                && state
-                    .last_success
-                    .is_some_and(|t| now() - t <= (interval * 2 + 30) as i64),
-            summary,
-            severity: state.severity,
-            last_success: state.last_success,
-            next_check: state.next_check,
-            error: state.error,
-            monitoring: policy,
+        Ok(DesktopLogView {
+            view: LogView {
+                short_check: summary
+                    .as_ref()
+                    .is_some_and(|s| s.window_seconds < MIN_HEALTH_INTERVAL_SECONDS),
+                last_incomplete,
+                fresh: policy.enabled
+                    && state.error.is_none()
+                    && state
+                        .last_success
+                        .is_some_and(|t| now() - t <= (interval * 2 + 30) as i64),
+                summary,
+                severity: state.severity,
+                last_success: state.last_success,
+                next_check: state.next_check,
+                error: state.error,
+                monitoring: policy,
+            },
+            finding_examples,
         })
     }
     pub(crate) fn record_logs(
@@ -606,7 +678,8 @@ impl Store {
         }
         let policy = crate::monitoring::effective(&tx, "logs", &server.id, "")?.values;
         let interval = policy.interval_seconds;
-        let (findings, learning) = evaluate(&wire, &mut state.baseline, at, &policy.thresholds);
+        let (findings, learning, finding_examples) =
+            evaluate(&wire, &mut state.baseline, at, &policy.thresholds);
         let summary = LogSummary {
             id: uuid::Uuid::new_v4().to_string(),
             at,
@@ -623,16 +696,21 @@ impl Store {
             findings,
             learning,
         };
+        let stored = StoredLogSummary {
+            summary,
+            finding_examples,
+        };
         tx.execute(
             "INSERT INTO log_summaries VALUES(?1,?2,?3,?4)",
             params![
-                summary.id,
+                stored.summary.id,
                 server.id,
                 at,
-                serde_json::to_string(&summary).map_err(err)?
+                serde_json::to_string(&stored).map_err(err)?
             ],
         )
         .map_err(err)?;
+        let summary = stored.summary;
         let long_enough = summary.window_seconds >= MIN_HEALTH_INTERVAL_SECONDS;
         for (key, title, severity) in RULES {
             let coverage = &summary.coverage;
@@ -1105,6 +1183,49 @@ mod tests {
         assert!(!b.patterns.contains_key(&"c".repeat(24)));
     }
     #[test]
+    fn new_pattern_example_excludes_known_patterns_and_prefers_the_largest_match() {
+        let thresholds = crate::monitoring::Book::default()
+            .resolve(&crate::monitoring::scope("logs", None, None))
+            .unwrap()
+            .values
+            .thresholds;
+        let mut baseline = Baseline {
+            since: Some(0),
+            windows: 72,
+            ..Default::default()
+        };
+        let known = "a".repeat(24);
+        let new = "b".repeat(24);
+        let rarer = "c".repeat(24);
+        baseline.patterns.insert(known.clone(), Pattern::default());
+        let mut w: WireSummary =
+            serde_json::from_slice(&wire(json!({"system_error":251}), true)).unwrap();
+        for (key, count, text) in [
+            (known, 220, "Known error"),
+            (new, 25, "New worker error"),
+            (rarer, 6, "New database error"),
+        ] {
+            w.patterns.insert(key.clone(), count);
+            w.excerpts.insert(
+                key,
+                LogExcerpt {
+                    at: w.at,
+                    source: "journal".into(),
+                    text: text.into(),
+                },
+            );
+        }
+        assert!(evaluate(&w, &mut baseline, 90000, &thresholds).0.is_empty());
+        let (findings, _, examples) = evaluate(&w, &mut baseline, 90600, &thresholds);
+        let check = "logs:new_error_pattern";
+        assert_eq!(
+            findings.iter().find(|f| f.check == check).unwrap().count,
+            31
+        );
+        assert_eq!(examples[check].text, "New worker error");
+        assert_eq!(examples["logs:system_error_spike"].text, "Known error");
+    }
+    #[test]
     fn known_error_does_not_become_new_again_after_recovery() {
         let thresholds = crate::monitoring::Book::default()
             .resolve(&crate::monitoring::scope("logs", None, None))
@@ -1246,7 +1367,7 @@ mod tests {
             .import(&src, crate::inventory::parse_manual(&src.location).unwrap())
             .unwrap();
         let id = state.store.snapshot().unwrap().servers[0].id.clone();
-        let m = crate::mcp::McpServer::start(state, std::slice::from_ref(&id))
+        let m = crate::mcp::McpServer::start(state.clone(), std::slice::from_ref(&id))
             .await
             .unwrap();
         let value = crate::mcp::call(
@@ -1257,6 +1378,37 @@ mod tests {
         .await
         .unwrap();
         assert!(value["summary"].is_null());
+
+        let server = state.store.snapshot().unwrap().servers.remove(0);
+        let checkpoint = state.store.log_state(&id).unwrap();
+        let mut sample: Value = serde_json::from_slice(&wire(json!({"oom":1}), true)).unwrap();
+        sample["excerpts"] = json!({"oom":{
+            "at":100, "source":"syslog", "text":"Out of memory: fixture process 42"
+        }});
+        let summary = state
+            .store
+            .record_logs(
+                &server,
+                &checkpoint,
+                &serde_json::to_vec(&sample).unwrap(),
+                now(),
+            )
+            .unwrap();
+        let desktop = serde_json::to_value(state.store.desktop_log_view(&id).unwrap()).unwrap();
+        assert_eq!(
+            desktop["findingExamples"]["logs:oom"],
+            sample["excerpts"]["oom"]
+        );
+        let value = crate::mcp::call(
+            &m.scope,
+            "get_log_summary",
+            json!({"serverId":id,"kind":"logs"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(value["summary"], serde_json::to_value(summary).unwrap());
+        assert!(!value.to_string().contains("fixture process"));
+        assert!(value.get("findingExamples").is_none());
         assert_eq!(m.scope.remote.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
 }
