@@ -23,6 +23,8 @@ pub const DEFAULT_LIMIT: usize = 32;
 const STARTUP_LIMIT: usize = 64;
 const OPEN_LIMIT: usize = 16;
 const WAIT_TIMEOUT: Duration = Duration::from_secs(25);
+const MUX_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+const MUX_MAINTENANCE_TIMEOUT: Duration = Duration::from_millis(200);
 const MUX_RETRY_DELAYS_MS: [u64; 2] = [100, 250];
 const OPEN_RETRY_DELAYS_MS: [u64; 2] = [500, 1000];
 const SETTINGS_CHANGED: &str = "SSH: server or settings have changed";
@@ -189,7 +191,7 @@ impl Entry {
         }
         self.cancel.cancel();
         // Address only our private socket, never an old PID that the OS may reuse.
-        let terminated = match control(&self.socket, true) {
+        let terminated = match control(&self.socket, true, MUX_MAINTENANCE_TIMEOUT) {
             Ok(_) => true,
             Err(error) => error.kind() == ErrorKind::ConnectionRefused,
         };
@@ -277,7 +279,7 @@ impl Pool {
             .map(|s| {
                 s.entries
                     .values()
-                    .filter_map(|e| control(&e.socket, false).ok())
+                    .filter_map(|e| control(&e.socket, false, MUX_MAINTENANCE_TIMEOUT).ok())
                     .collect()
             })
             .unwrap_or_default()
@@ -669,10 +671,24 @@ impl Lease {
             "SSH connection",
             Some(ssh::target(&self.entry.endpoint)),
         );
-        let result = self.open().await;
-        if result.is_err() {
-            self.invalidate();
+        let result = async {
+            self.launch_master()
+                .await
+                .inspect_err(|_| self.invalidate())?;
+            self.pool.0.opened.fetch_add(1, Ordering::Relaxed);
+            if let Err(error) = self.check_master(true).await {
+                // The launcher authenticated successfully. A busy local socket
+                // can still become ready for the next request.
+                if error.kind() != ErrorKind::TimedOut {
+                    self.invalidate();
+                }
+                return Err(format!("Checking the SSH connection: {error}"));
+            }
+            self.pool.verify_configuration(&self.entry).await?;
+            crate::connectivity::ssh_reply();
+            Ok(())
         }
+        .await;
         event.result(&result);
         result
     }
@@ -680,7 +696,7 @@ impl Lease {
         let mut delays = MUX_RETRY_DELAYS_MS.into_iter();
         loop {
             let socket = self.entry.socket.clone();
-            match tokio::task::spawn_blocking(move || control(&socket, false))
+            match tokio::task::spawn_blocking(move || control(&socket, false, MUX_PROBE_TIMEOUT))
                 .await
                 .map_err(io::Error::other)?
             {
@@ -694,22 +710,30 @@ impl Lease {
                     return Ok(());
                 }
                 Err(error) => {
-                    let retryable = matches!(
-                        error.kind(),
-                        ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted
-                    ) || (starting && error.kind() == ErrorKind::NotFound);
+                    let kind = error.kind();
+                    let timed_out = matches!(kind, ErrorKind::WouldBlock | ErrorKind::TimedOut);
+                    let retryable = timed_out
+                        || kind == ErrorKind::Interrupted
+                        || (starting && kind == ErrorKind::NotFound);
                     if !retryable {
                         return Err(error);
                     }
                     let Some(delay) = delays.next() else {
-                        return Err(error);
+                        return Err(if timed_out {
+                            io::Error::new(
+                                ErrorKind::TimedOut,
+                                "the local OpenSSH control socket did not respond in time",
+                            )
+                        } else {
+                            error
+                        });
                     };
                     tokio::time::sleep(Duration::from_millis(delay)).await;
                 }
             }
         }
     }
-    async fn open(&self) -> Result<(), String> {
+    async fn launch_master(&self) -> Result<(), String> {
         let mut args = self.pool.base_options(&self.entry.endpoint, false)?;
         args.extend([
             "-N".into(),
@@ -762,12 +786,6 @@ impl Lease {
             let jitter = u64::from(uuid::Uuid::new_v4().as_bytes()[0]) % 251;
             tokio::time::sleep(Duration::from_millis(delay + jitter)).await;
         }
-        self.check_master(true)
-            .await
-            .map_err(|e| format!("Checking the SSH connection: {e}"))?;
-        self.pool.verify_configuration(&self.entry).await?;
-        crate::connectivity::ssh_reply();
-        self.pool.0.opened.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
     pub fn invalidate(&self) {
@@ -928,14 +946,14 @@ fn retryable_handshake(stderr: &str) -> bool {
 }
 
 // Only HELLO, ALIVE and TERMINATE from OpenSSH PROTOCOL.mux v4. No remote exec here.
-fn control(path: &Path, terminate: bool) -> io::Result<u32> {
+fn control(path: &Path, terminate: bool, timeout: Duration) -> io::Result<u32> {
     let socket = socket2::Socket::new(socket2::Domain::UNIX, socket2::Type::STREAM, None)?;
     let address = socket2::SockAddr::unix(path)?;
-    socket.connect_timeout(&address, Duration::from_millis(200))?;
+    socket.connect_timeout(&address, timeout)?;
     let fd: std::os::fd::OwnedFd = socket.into();
     let mut stream = UnixStream::from(fd);
-    stream.set_read_timeout(Some(Duration::from_millis(200)))?;
-    stream.set_write_timeout(Some(Duration::from_millis(200)))?;
+    stream.set_read_timeout(Some(timeout))?;
+    stream.set_write_timeout(Some(timeout))?;
     fn send(stream: &mut UnixStream, words: &[u32]) -> io::Result<()> {
         let mut packet = ((words.len() * 4) as u32).to_be_bytes().to_vec();
         for word in words {
@@ -1134,10 +1152,39 @@ mod tests {
                 socket.read_exact(&mut hello).unwrap();
                 socket.write_all(&bytes).unwrap();
             });
-            assert!(control(&path, false).is_err());
+            assert!(control(&path, false, MUX_MAINTENANCE_TIMEOUT).is_err());
             server.join().unwrap();
         }
     }
+    #[tokio::test]
+    async fn freshly_launched_mux_can_reply_after_the_previous_retry_window() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let pool = Pool::new(1, Duration::from_secs(900), None).unwrap();
+        let lease = pool.reserve(&endpoint(22)).await.unwrap();
+        let listener = tokio::net::UnixListener::bind(&lease.entry.socket).unwrap();
+        let peer = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0; 12];
+            stream.read_exact(&mut request).await.unwrap();
+            // The old probe abandoned every socket after 200 ms and gave up
+            // altogether before this master's first HELLO could arrive.
+            tokio::time::sleep(Duration::from_millis(1250)).await;
+            stream
+                .write_all(&[0, 0, 0, 8, 0, 0, 0, 1, 0, 0, 0, 4])
+                .await
+                .unwrap();
+            stream.read_exact(&mut request).await.unwrap();
+            let response = [12, 0x80000005, 1, std::process::id()]
+                .into_iter()
+                .flat_map(u32::to_be_bytes)
+                .collect::<Vec<_>>();
+            stream.write_all(&response).await.unwrap();
+        });
+        lease.check_master(true).await.unwrap();
+        peer.await.unwrap();
+        pool.shutdown();
+    }
+
     #[tokio::test]
     async fn busy_mux_retries_and_keeps_its_master_when_opening_slots_are_full() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -1173,10 +1220,13 @@ mod tests {
                     .collect::<Vec<_>>();
                 stream.write_all(&response).await.unwrap();
             });
-            tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::time::timeout(Duration::from_secs(12), async {
                 if stalled_checks == 3 {
                     let error = pool.acquire(&server).await.err().unwrap();
-                    assert!(error.starts_with("Checking the existing SSH connection"));
+                    assert_eq!(
+                        error,
+                        "Checking the existing SSH connection: the local OpenSSH control socket did not respond in time"
+                    );
                     assert!(active.options().is_ok());
                 }
                 let reused = pool.acquire(&server).await.unwrap();

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.1
+
+- Give the local OpenSSH control socket more time to respond under load and keep slow connections available for reuse.
+
 ## 0.10.0
 
 - Set alert thresholds for built-in resource, service, and log checks across the fleet, per server, or per service connection.
