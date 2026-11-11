@@ -40,7 +40,9 @@ For example, under **Redis → Memory limit usage**, enter **99%** for **Warning
 
 In server and fleet AI chats, the agent follows the language of your latest message. You can switch languages within a conversation.
 
-In a manual conversation, the agent may propose a supported action. Review the target, exact effect, and evidence before approving. Approving until the end of the run keeps the same fixed server scope and each proposed script still goes through risk review. For supported Nginx configuration changes, the app shows the result and offers rollback while the recorded files still match. If the response is lost, verify the saved receipt before deciding what to do next.
+In a manual conversation, the agent may propose a supported action. Review the target, exact commands, and risk before approving. Approval for the current run covers low-risk scripts within the same fixed server scope. SSH commands with material or unresolved risk or an unavailable risk review require one-time approval. Cyberbot returns SSH command output to the AI provider and retains it in the action history.
+
+For supported Nginx configuration changes, the app shows the result and offers rollback while the recorded files still match. If the response is lost, verify the saved receipt before deciding what to do next.
 
 User-defined checks use declarative rules over saved metrics. Use the check editor to test the definition with fixtures, preview the results on a server, and enable a reviewed version. Scheduled checks run without invoking the model.
 

@@ -1,11 +1,26 @@
 use super::*;
 
+#[derive(Debug)]
+pub(super) enum ReviewAdmissionError {
+    Budget(&'static str),
+    Rejected(String),
+}
+impl From<String> for ReviewAdmissionError {
+    fn from(error: String) -> Self {
+        Self::Rejected(error)
+    }
+}
+
 impl Store {
     pub(crate) fn review_charged(&self, parent: &str) -> Result<u64> {
         let db = self.0.lock().map_err(err)?;
         review_charged(&db, parent)
     }
-    pub(crate) fn admit_review(&self, request: &Request, at: i64) -> Result<(String, u64)> {
+    pub(super) fn admit_review(
+        &self,
+        request: &Request,
+        at: i64,
+    ) -> std::result::Result<(String, u64), ReviewAdmissionError> {
         let mut db = self.0.lock().map_err(err)?;
         let tx = db
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
@@ -13,11 +28,15 @@ impl Store {
         let current = read(&tx, &request.id)?;
         let run = context(&tx, &current, at)?;
         if current.state != "reviewing" || current.artifact_hash != request.artifact_hash {
-            return Err("Review cancelled or artifact changed".into());
+            return Err(ReviewAdmissionError::Rejected(
+                "Review cancelled or artifact changed".into(),
+            ));
         }
         let active:i64=tx.query_row("SELECT count(*) FROM ai_children c JOIN ai_ledger l ON l.id=c.id WHERE l.state='running'",[],|r|r.get(0)).map_err(err)?;
         if active > 0 {
-            return Err("A risk review is already in progress".into());
+            return Err(ReviewAdmissionError::Rejected(
+                "A risk review is already in progress".into(),
+            ));
         }
         let (reserved, day, state): (u64, i64, String) = tx
             .query_row(
@@ -27,7 +46,9 @@ impl Store {
             )
             .map_err(err)?;
         if state != "running" {
-            return Err("The AI run has ended".into());
+            return Err(ReviewAdmissionError::Rejected(
+                "The AI run has ended".into(),
+            ));
         }
         let settings = Self::read_settings(&tx)?;
         let (runs, charged): (u64, u64) = tx
@@ -47,14 +68,18 @@ impl Store {
                 .daily_tokens_cap()
                 .is_some_and(|n| charged.saturating_add(additional) > n)
         {
-            return Err("The daily budget does not cover another risk review".into());
+            return Err(ReviewAdmissionError::Budget(
+                "The daily budget does not cover another risk review",
+            ));
         }
         let used = review_charged(&tx, &run.id)?;
         if reserved != 0 {
             let main = crate::automation::tokens(&run.agent, &run.usage).unwrap_or(0);
             let available = reserved.saturating_sub(used).saturating_sub(main);
             if available < wanted {
-                return Err("This run has too few tokens left for risk review".into());
+                return Err(ReviewAdmissionError::Budget(
+                    "This run has too few tokens left for risk review",
+                ));
             }
             tx.execute(
                 "UPDATE ai_ledger SET charged=?2 WHERE id=?1",

@@ -109,6 +109,20 @@ with tempfile.TemporaryDirectory(prefix='cyberbot-action-keys-') as temp, tempfi
     cold_wire=net(cid)-cold_start
   if a.shell:
    run(['docker','exec','-i',cid,'/bin/sh','-s'],input="mkdir -p /home/cyberbot-fixture/.ssh\nprintf 'ffmpeg -version\\n' > /home/cyberbot-fixture/convert.sh\nprintf 'ffmpeg secret\\n' > /home/cyberbot-fixture/.ssh/id_ed25519\n")
+   if not a.agent:
+    run(['docker','exec','-i',cid,'python3','-'],input="""import subprocess, time, uuid
+from pathlib import Path
+Path('/root/time_avg.sh').write_text('#!/bin/sh\\ntouch /root/time_avg-ran\\n')
+stamp = time.time_ns() // 1000
+boot = uuid.uuid4().hex
+entries = ''.join(
+    f'__REALTIME_TIMESTAMP={stamp}\\n_BOOT_ID={boot}\\nMESSAGE={message}\\n\\n'
+    for message in ('time_avg.sh fixture event', 'unrelated fixture event')
+)
+subprocess.run(['/usr/lib/systemd/systemd-journal-remote',
+                '--output=/tmp/cyberbot-action-fixture.journal', '-'],
+               input=entries, text=True, check=True)
+""")
    env['CYBERBOT_TEST_SHELL']='1'
   if a.review_upgrade:
    env['CYBERBOT_TEST_REVIEW_UPGRADE']='1'
@@ -133,6 +147,7 @@ with tempfile.TemporaryDirectory(prefix='cyberbot-action-keys-') as temp, tempfi
   if a.shell:
    markers=run(['docker','exec',cid,'find','/tmp','-maxdepth','1','-type','f','-name','cyberbot-shell-fixture.*'],capture_output=True).stdout.splitlines()
    assert len(markers)==1 and run(['docker','exec',cid,'cat',markers[0]],capture_output=True).stdout=='once\n'
+   run(['docker','exec',cid,'test','!','-e','/root/time_avg-ran'])
   suffix='-review-upgrade' if a.review_upgrade else '-shell' if a.shell else ''
   output=ROOT/'.runtime'/f'ai-actions-{a.agent or "model-free"}{suffix}.json';output.write_text(json.dumps(report,ensure_ascii=False,indent=2))
   print(json.dumps({'phase':'completed','kind':a.agent or 'model-free','status':report['status'],'wallSeconds':report['wallSeconds'],'wireBytes':report['wireBytes'],'report':str(output)},ensure_ascii=False),flush=True)

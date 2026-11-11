@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.12.2
+
+- Let bounded SSH diagnostics pass risk review and ask for one-time approval when a shell command is risky or its review is unavailable.
+
 ## 0.12.1
 
 - Restore SSH polling with OpenSSH 10.3 by accepting extensions in the multiplexing handshake.

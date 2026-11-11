@@ -10,6 +10,7 @@ defineProps<{ verdict: ActionReview['verdict'] }>();
     <UiIcon name="incident" :size="16"/>
     <div>
       <strong>One-time approval required</strong>
+      <p v-if="verdict.decision === 'uncertain'">Cyberbot could not assess this command.</p>
       <p>{{ verdict.explanation }}</p>
       <ul v-if="verdict.effects.length">
         <li v-for="(effect, index) in verdict.effects" :key="index">{{ effect }}</li>

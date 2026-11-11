@@ -43,7 +43,9 @@ const proposedAction = computed(() => current.value?.artifact.spec.action);
 const waiting = computed(() => current.value?.state === 'awaitingApproval');
 const pendingRisk = computed(() => {
   const verdict = current.value?.review?.verdict;
-  return waiting.value && verdict?.decision === 'confirm' ? verdict : undefined;
+  const requiresOnce = verdict?.decision === 'confirm'
+    || (proposedAction.value?.kind === 'shell' && verdict?.decision === 'uncertain');
+  return waiting.value && requiresOnce ? verdict : undefined;
 });
 const planning = computed(() => current.value && activeStates.has(current.value.state) && current.value.state !== 'rollbackRunning');
 const scope = computed(() => capturedActionServers(current.value));
@@ -274,7 +276,10 @@ onUnmounted(() => {
       </dl>
 
       <section class="impact">
-        <h3>{{ planning ? proposedAction?.kind === 'diagnostic' ? 'What Cyberbot will calculate' : 'What will change' : 'What happened' }}</h3>
+        <h3 v-if="!planning">What happened</h3>
+        <h3 v-else-if="proposedAction?.kind === 'diagnostic'">What Cyberbot will calculate</h3>
+        <h3 v-else-if="proposedAction?.kind === 'shell'">What the commands do</h3>
+        <h3 v-else>What will change</h3>
         <ActionRiskWarning v-if="pendingRisk" :verdict="pendingRisk"/>
         <template v-if="planning">
           <p v-if="proposedAction?.kind === 'diagnostic'">Cyberbot will calculate the result from the prepared data. The script runs without file access, networking, or process creation.</p>
@@ -320,7 +325,13 @@ onUnmounted(() => {
         <details>
           <summary>Risk review and parameters</summary>
           <template v-if="current.review">
-            <p><strong>{{ reviewLabels[current.review.verdict.decision] }}</strong> · {{ current.review.model ?? current.artifact.profile.low.model }} · {{ current.review.tokens.toLocaleString('en-US') }} tokens</p>
+            <p>
+              <strong>{{ reviewLabels[current.review.verdict.decision] }}</strong>
+              <template v-if="current.review.model || current.review.verdict.decision !== 'uncertain'">
+                · {{ current.review.model ?? current.artifact.profile.low.model }}
+              </template>
+              · {{ current.review.tokens.toLocaleString('en-US') }} tokens
+            </p>
             <p v-if="!pendingRisk">{{ current.review.verdict.explanation }}</p>
             <ul v-if="!planning && current.review.verdict.effects.length" class="effect-list">
               <li v-for="(effect, index) in current.review.verdict.effects" :key="index">{{ effect }}</li>
@@ -344,7 +355,7 @@ onUnmounted(() => {
         <button type="button" class="primary" :disabled="busy || preview" @click="action('open_action_approval', { id: current.id })">
           Review request <UiIcon name="external" :size="14"/>
         </button>
-        <p v-if="current.review?.verdict.decision === 'confirm'">You can approve this action once or decline it.</p>
+        <p v-if="pendingRisk">You can approve this action once or decline it.</p>
         <p v-else>Review the details before deciding whether to approve this action.</p>
       </div>
       <div v-else class="controls">

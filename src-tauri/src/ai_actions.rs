@@ -231,6 +231,25 @@ pub struct Verdict {
     pub explanation: String,
     pub effects: Vec<String>,
 }
+impl Verdict {
+    pub(crate) fn unavailable(explanation: impl Into<String>) -> Self {
+        Self {
+            decision: Decision::Uncertain,
+            explanation: explanation.into(),
+            effects: vec![],
+        }
+    }
+
+    pub(crate) fn validate_size(&self) -> Result<()> {
+        if self.explanation.len() > 2000
+            || self.effects.len() > 16
+            || self.effects.iter().any(|effect| effect.len() > 384)
+        {
+            return Err("Risk review response is too large".into());
+        }
+        Ok(())
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum Decision {
@@ -239,9 +258,21 @@ pub enum Decision {
     Deny,
     Uncertain,
 }
-impl Decision {
-    fn allows_approval(&self) -> bool {
-        matches!(self, Self::Allow | Self::Confirm)
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ApprovalMode {
+    SessionEligible,
+    Once,
+}
+impl Request {
+    fn approval_mode(&self) -> Option<ApprovalMode> {
+        match self.review.as_ref()?.verdict.decision {
+            Decision::Allow => Some(ApprovalMode::SessionEligible),
+            Decision::Confirm => Some(ApprovalMode::Once),
+            Decision::Uncertain if self.artifact.spec.action == Action::Shell => {
+                Some(ApprovalMode::Once)
+            }
+            Decision::Deny | Decision::Uncertain => None,
+        }
     }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -660,19 +691,14 @@ impl Store {
         if r.state != "reviewing" {
             return Err("Request validation cancelled".into());
         }
-        if review.verdict.explanation.len() > 2000
-            || review.verdict.effects.len() > 16
-            || review.verdict.effects.iter().any(|x| x.len() > 384)
-        {
-            return Err("Risk review response is too large".into());
-        }
-        r.state = match review.verdict.decision {
-            Decision::Allow if granted(&tx, &r, at)? => "approved",
-            Decision::Allow | Decision::Confirm => "awaitingApproval",
-            Decision::Deny | Decision::Uncertain => "denied",
+        review.verdict.validate_size()?;
+        r.review = Some(review);
+        r.state = match r.approval_mode() {
+            Some(ApprovalMode::SessionEligible) if granted(&tx, &r, at)? => "approved",
+            Some(_) => "awaitingApproval",
+            None => "denied",
         }
         .into();
-        r.review = Some(review);
         r.updated_at = at;
         persist(&tx, &r)?;
         tx.commit().map_err(err)?;
@@ -694,19 +720,13 @@ impl Store {
         if r.artifact_hash != hash || r.state != "awaitingApproval" {
             return Err("The request has changed or the decision has been made".into());
         }
-        let verdict = &r
-            .review
-            .as_ref()
-            .ok_or("Risk review result is missing")?
-            .verdict
-            .decision;
-        if !verdict.allows_approval() {
-            return Err("The risk review did not clear this action for approval".into());
-        }
+        let mode = r
+            .approval_mode()
+            .ok_or("The risk review did not clear this action for approval")?;
         if !matches!(decision, "deny" | "once" | "session") {
             return Err("Unknown approval decision".into());
         }
-        if decision == "session" && *verdict == Decision::Confirm {
+        if decision == "session" && mode == ApprovalMode::Once {
             return Err("This action requires one-time approval".into());
         }
         if decision == "session" {
@@ -779,13 +799,13 @@ impl Store {
             return Err("The status of the request has changed".into());
         }
         if matches!(to, "queued" | "running")
-            && !r.review.as_ref().is_some_and(|v| match v.verdict.decision {
-                Decision::Allow => true,
-                Decision::Confirm => r.decision.as_deref() == Some("once"),
-                Decision::Deny | Decision::Uncertain => false,
-            })
+            && match r.approval_mode() {
+                Some(ApprovalMode::SessionEligible) => false,
+                Some(ApprovalMode::Once) => r.decision.as_deref() != Some("once"),
+                None => true,
+            }
         {
-            return Err("This action lacks a passing risk review".into());
+            return Err("This action lacks the required review or approval".into());
         }
         r.state = to.into();
         r.updated_at = at;
@@ -1226,33 +1246,42 @@ mod tests {
         let second = shell("printf two");
         assert_eq!(second.state, "reviewing");
         assert_eq!(review(&db, &second, Decision::Allow).state, "approved");
-        let update = review(
-            &db,
-            &shell("apt-get update && apt-get install --only-upgrade --no-remove python3.11"),
-            Decision::Confirm,
-        );
-        assert_eq!(update.state, "awaitingApproval");
-        assert!(db
-            .action_decide(&update.id, &update.artifact_hash, "session", 104)
-            .is_err());
-        assert!(db.action_decide(&update.id, "wrong", "once", 104).is_err());
-        assert!(db
-            .action_transition(&update.id, "awaitingApproval", "queued", 104)
-            .is_err());
-        let update = db
-            .action_decide(&update.id, &update.artifact_hash, "once", 104)
-            .unwrap();
-        assert_eq!(update.state, "approved");
-        db.action_transition(&update.id, "approved", "queued", 105)
-            .unwrap();
-        db.action_transition(&update.id, "queued", "running", 106)
-            .unwrap();
         for (code, decision) in [
-            ("rm /srv/app.db", Decision::Deny),
-            ("ufw allow from any to any port 5432", Decision::Deny),
-            ("sh /tmp/uninspected-script", Decision::Uncertain),
+            (
+                "apt-get update && apt-get install --only-upgrade --no-remove python3.11",
+                Decision::Confirm,
+            ),
+            ("sh /tmp/uninspected-script", Decision::Confirm),
+            ("sed -n '1,240p' /root/time_avg.sh", Decision::Uncertain),
         ] {
-            let blocked = review(&db, &shell(code), decision);
+            let pending = review(&db, &shell(code), decision);
+            assert_eq!(pending.state, "awaitingApproval");
+            assert!(db
+                .action_decide(&pending.id, &pending.artifact_hash, "session", 104)
+                .is_err());
+            assert!(db.action_decide(&pending.id, "wrong", "once", 104).is_err());
+            assert!(db
+                .action_transition(&pending.id, "awaitingApproval", "queued", 104)
+                .is_err());
+            let approved = db
+                .action_decide(&pending.id, &pending.artifact_hash, "once", 104)
+                .unwrap();
+            assert_eq!(approved.state, "approved");
+            db.action_transition(&approved.id, "approved", "queued", 105)
+                .unwrap();
+            db.action_transition(&approved.id, "queued", "running", 106)
+                .unwrap();
+        }
+        let pending = review(&db, &shell("printf diagnostic"), Decision::Uncertain);
+        let declined = db
+            .action_decide(&pending.id, &pending.artifact_hash, "deny", 104)
+            .unwrap();
+        assert_eq!(declined.state, "denied");
+        assert!(db
+            .action_transition(&declined.id, "denied", "queued", 105)
+            .is_err());
+        for code in ["rm /srv/app.db", "ufw allow from any to any port 5432"] {
+            let blocked = review(&db, &shell(code), Decision::Deny);
             assert_eq!(blocked.state, "denied");
             assert!(db
                 .action_decide(&blocked.id, &blocked.artifact_hash, "once", 104)
@@ -1510,7 +1539,10 @@ mod tests {
         settings.daily_run_limit = Some(1);
         db.save_settings(&settings).unwrap();
         let r = freeze(&db, &run, "one run only");
-        assert!(db.admit_review(&r, 103).is_err());
+        assert!(matches!(
+            db.admit_review(&r, 103),
+            Err(budget::ReviewAdmissionError::Budget(_))
+        ));
         assert_eq!(db.auto_status(103).unwrap().runs, 1);
     }
 }

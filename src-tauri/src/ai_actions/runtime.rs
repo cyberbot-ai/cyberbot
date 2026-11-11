@@ -1,4 +1,5 @@
 //! Executes one approved artifact; waiting never owns a remote admission slot.
+use super::budget::ReviewAdmissionError;
 use super::*;
 use crate::{mcp::Scope, AppState};
 use std::{
@@ -99,15 +100,15 @@ impl Drop for Task {
         }
     }
 }
-struct ReviewLease {
-    state: Arc<AppState>,
-    id: String,
+struct ReviewLease<'a> {
+    state: &'a Store,
+    id: &'a str,
     settled: bool,
 }
-impl Drop for ReviewLease {
+impl Drop for ReviewLease<'_> {
     fn drop(&mut self) {
         if !self.settled {
-            let _ = self.state.store.settle_review(&self.id, json!({}), false);
+            let _ = self.state.settle_review(self.id, json!({}), false);
         }
     }
 }
@@ -323,6 +324,55 @@ pub(super) async fn queue_approved(
     Ok(())
 }
 
+fn check_review_usage(review: &mut Review, shell: bool, charged: u64, reservation: u64) {
+    if (!review.usage_complete || charged >= reservation)
+        && review.verdict.decision != Decision::Uncertain
+        && !(shell && review.verdict.decision == Decision::Deny)
+    {
+        review.verdict =
+            Verdict::unavailable("Risk review token usage is unconfirmed or its budget ran out");
+    }
+}
+
+async fn review_request(
+    state: &AppState,
+    request: &Request,
+    cancel: &CancellationToken,
+) -> Result<Review> {
+    let shell = request.artifact.spec.action == Action::Shell;
+    let (id, reservation) = match state.store.admit_review(request, now()) {
+        Ok(admitted) => admitted,
+        Err(ReviewAdmissionError::Budget(reason)) if shell => {
+            return Ok(Review {
+                id: String::new(),
+                verdict: Verdict::unavailable(reason),
+                model: None,
+                usage: json!({}),
+                usage_complete: true,
+                tokens: 0,
+                duration_ms: 0,
+            });
+        }
+        Err(ReviewAdmissionError::Budget(reason)) => return Err(reason.into()),
+        Err(ReviewAdmissionError::Rejected(reason)) => return Err(reason),
+    };
+    let mut lease = ReviewLease {
+        state: &state.store,
+        id: &id,
+        settled: false,
+    };
+    let mut review =
+        crate::agents::review_action(&state.root, request, cancel.child_token(), reservation).await;
+    let charged = state
+        .store
+        .settle_review(&id, review.usage.clone(), review.usage_complete)?;
+    lease.settled = true;
+    drop(lease);
+    review.id = id;
+    check_review_usage(&mut review, shell, charged, reservation);
+    Ok(review)
+}
+
 pub(crate) async fn submit(scope: &Scope, spec: Spec) -> Result<Value> {
     if scope.cancel.is_cancelled() {
         return Err("AI launch cancelled".into());
@@ -405,10 +455,8 @@ pub(crate) async fn submit(scope: &Scope, spec: Spec) -> Result<Value> {
   request=scope.app.store.action_freeze(&request.id,prepared["prepared"].clone(),prepared["isolation"].clone(),now())?;
   changed(&request.id);crate::activity::action(&request,"script_review_started");
   let review_lock=tokio::select!{_=cancel.cancelled()=>return Err("Review cancelled".into()),guard=scope.app.actions.reviewer.lock()=>guard};
-  let (child,reservation)=scope.app.store.admit_review(&request,now())?;let mut lease=ReviewLease{state:scope.app.clone(),id:child.clone(),settled:false};
-  let mut review=crate::agents::review_action(&scope.app.root,&request,cancel.child_token(),reservation).await;review.id=child;
-  let charged=scope.app.store.settle_review(&review.id,review.usage.clone(),review.usage_complete)?;lease.settled=true;
-  if !review.usage_complete||charged>=reservation{review.verdict.decision=Decision::Uncertain;review.verdict.explanation="Risk review token usage is unconfirmed or its budget ran out".into();}
+  let review=review_request(&scope.app,&request,&cancel).await?;
+  if cancel.is_cancelled(){return Err("Review cancelled".into());}
   request=scope.app.store.action_reviewed(&request.id,review,now())?;changed(&request.id);crate::activity::action(&request,"script_review_completed");drop(review_lock);
   if request.state=="awaitingApproval" {
     crate::activity::action(&request,"script_awaiting_approval");
@@ -512,6 +560,35 @@ pub(crate) async fn fixture_remote(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unconfirmed_usage_never_replaces_a_shell_denial() {
+        for (shell, decision, expected) in [
+            (true, Decision::Deny, Decision::Deny),
+            (true, Decision::Allow, Decision::Uncertain),
+            (false, Decision::Deny, Decision::Uncertain),
+        ] {
+            let mut review = Review {
+                id: "review".into(),
+                verdict: Verdict {
+                    decision,
+                    explanation: "Reviewed".into(),
+                    effects: vec!["Reviewed effect".into()],
+                },
+                model: Some("test-low".into()),
+                usage: json!({}),
+                usage_complete: false,
+                tokens: 100,
+                duration_ms: 0,
+            };
+            check_review_usage(&mut review, shell, 100, 100);
+            assert_eq!(review.verdict.decision, expected);
+            assert_eq!(
+                review.verdict.effects.is_empty(),
+                expected == Decision::Uncertain
+            );
+        }
+    }
 
     #[test]
     fn user_wait_is_shared_bounded_and_stops_after_the_last_guard() {

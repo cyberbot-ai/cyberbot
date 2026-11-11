@@ -11,6 +11,11 @@ const SHELL_CODE: &str =
     "umask 077; marker=$(mktemp /tmp/cyberbot-shell-fixture.XXXXXXXX) || exit 1; printf 'once\\n' > \"$marker\"; cat \"$marker\"; printf '%s\\n' \"$marker\"";
 const UPGRADE_CODE: &str =
     "apt-get update && apt-get install -y --only-upgrade --no-remove python3.11";
+const DIAGNOSTIC_CODE: &str = "set -eu
+date -Iseconds
+stat -- /root/time_avg.sh
+sed -n '1,240p' /root/time_avg.sh
+journalctl --file=/tmp/cyberbot-action-fixture.journal --since '30 minutes ago' --no-pager -o short-iso -g 'time_avg[.]sh' -n 30";
 pub(crate) async fn run(root: PathBuf, agent: Option<String>) -> Result<Value> {
     let shell = std::env::var("CYBERBOT_TEST_SHELL").as_deref() == Ok("1");
     let review_upgrade = std::env::var("CYBERBOT_TEST_REVIEW_UPGRADE").as_deref() == Ok("1");
@@ -277,6 +282,9 @@ pub(crate) async fn run(root: PathBuf, agent: Option<String>) -> Result<Value> {
             }
             restored.result
         };
+        if shell {
+            check_shell_diagnostic(state.clone(), &run).await?;
+        }
         let mut run = run;
         run.status = "completed".into();
         run.usage_complete = true;
@@ -290,6 +298,68 @@ pub(crate) async fn run(root: PathBuf, agent: Option<String>) -> Result<Value> {
     report["applicationTraffic"] = state.actions.traffic();
     report["durationMs"] = json!(started.elapsed().as_millis());
     Ok(report)
+}
+
+async fn check_shell_diagnostic(state: Arc<AppState>, run: &Investigation) -> Result<()> {
+    let mut settings = state.store.settings()?;
+    settings.daily_run_limit = Some(1);
+    state.store.save_settings(&settings)?;
+    let mcp = crate::mcp::McpServer::start_run(state.clone(), run).await?;
+    let id = &run.server_ids[0];
+    crate::mcp::call(&mcp.scope, "get_server", json!({"serverId":id})).await?;
+    mcp.scope.audit.lock().map_err(err)?.push(json!({
+        "tool":"get_server", "serverId":id, "ok":true
+    }));
+    let exec = crate::mcp::call(
+        &mcp.scope,
+        "exec",
+        json!({"serverId":id,"goal":"Read the diagnostic script and its recent journal entries","script":DIAGNOSTIC_CODE}),
+    );
+    let approve = async {
+        tokio::time::timeout(Duration::from_secs(20), async {
+            loop {
+                let cards = state.store.action_cards(Some(&run.id), None)?;
+                if let Some(card) = cards.iter().find(|r| r.state == "awaitingApproval") {
+                    let request = state.store.action_request(&card.id)?;
+                    if request.server_id != *id
+                        || request.artifact.spec.code != DIAGNOSTIC_CODE
+                        || request.review.as_ref().is_none_or(|review| {
+                            review.verdict.decision != Decision::Uncertain
+                                || !review.verdict.explanation.contains("daily budget")
+                        })
+                        || request.result.is_some()
+                        || state.store.auto_status(now())?.runs != 1
+                    {
+                        return Err(
+                            "Fixture expected a one-time request without a model call".into()
+                        );
+                    }
+                    state.store.action_decide(
+                        &request.id,
+                        &request.artifact_hash,
+                        "once",
+                        now(),
+                    )?;
+                    return Ok::<_, String>(());
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .map_err(|_| "The diagnostic did not reach approval".to_owned())?
+    };
+    let (response, ()) = tokio::try_join!(exec, approve)?;
+    let stdout = response["result"]["result"]["stdout"]
+        .as_str()
+        .unwrap_or_default();
+    if response["state"] != "succeeded"
+        || !stdout.contains("touch /root/time_avg-ran")
+        || !stdout.contains("time_avg.sh fixture event")
+        || stdout.contains("unrelated fixture event")
+    {
+        return Err(format!("Unexpected diagnostic result: {response}"));
+    }
+    Ok(())
 }
 
 async fn check_remote_reads(state: Arc<AppState>, run: &Investigation) -> Result<()> {

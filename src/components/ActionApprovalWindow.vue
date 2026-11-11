@@ -17,11 +17,12 @@ const requestServer = computed(() => actionRequestReference(request.value));
 const waiting=computed(()=>request.value?.state==='awaitingApproval');
 const expired=computed(()=>Boolean(request.value&&request.value.expiresAt<=now.value));
 const verdict=computed(()=>request.value?.review?.verdict);
-const requiresOneTime=computed(()=>verdict.value?.decision==='confirm');
+const action=computed(()=>request.value?.artifact.spec.action);
+const requiresOneTime=computed(()=>verdict.value?.decision==='confirm'
+  || (action.value?.kind==='shell' && verdict.value?.decision==='uncertain'));
 const pendingRisk=computed(()=>waiting.value&&!expired.value&&requiresOneTime.value?verdict.value:undefined);
 const allowed=computed(()=>waiting.value&&!expired.value&&(verdict.value?.decision==='allow'||requiresOneTime.value));
 const useSession=computed(()=>!requiresOneTime.value&&session.value);
-const action=computed(()=>request.value?.artifact.spec.action);
 const serviceAction = computed(() => presentServiceAction(action.value));
 const statusLabels:Record<string,string>={approved:'Approval sent',queued:'Action queued',running:'Action in progress',succeeded:'Action completed',denied:'Action denied',cancelled:'Request cancelled',expired:'Request expired',unknown:'Result unconfirmed',failed:'Action failed',rolledBack:'Original configuration restored',rollbackUnknown:'Rollback unconfirmed'};
 let timer:ReturnType<typeof setInterval>|undefined,off:UnlistenFn|undefined,disposed=false,sequence=0;
@@ -63,6 +64,7 @@ onUnmounted(()=>{disposed=true;sequence++;clearInterval(timer);off?.();document.
         <div class="effect">
           <strong>Shell runs as {{request.artifact.prepared.user}}</strong>
           <p class="risk">The script runs with this user’s permissions on the server.</p>
+          <p>Cyberbot returns the command output to the AI provider and saves it in the action history.</p>
         </div>
         <pre aria-label="Exact script">{{request.artifact.spec.code}}</pre>
       </template>

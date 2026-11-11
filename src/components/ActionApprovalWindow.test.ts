@@ -82,6 +82,35 @@ it('offers only one-time approval for a package upgrade with operational risk',a
   expect(mock.call).toHaveBeenCalledWith('decide_action',{id:request.id,artifactHash:request.artifactHash,decision:'once'});
   w.unmount();
 });
+it.each(['once', 'deny'] as const)('allows decision %s for a shell command after a review timeout', async (decision) => {
+  request.artifact.spec.action = {kind:'shell'};
+  request.artifact.spec.code = "sed -n '1,240p' /root/time_avg.sh";
+  request.review!.verdict = {decision:'uncertain', explanation:'Risk review timed out.', effects:[]};
+  const w = mount(ActionApprovalWindow, {props:{requestId:request.id}});
+  await flushPromises();
+  expect(w.get('.risk-warning').text()).toContain('Cyberbot could not assess this command.');
+  expect(w.get('.risk-warning').text()).toContain('Risk review timed out.');
+  expect(w.get('.effect').text()).toContain('returns the command output to the AI provider and saves it');
+  expect(w.find('input[type=checkbox]').exists()).toBe(false);
+  const buttons = w.findAll('footer button');
+  expect(buttons.map(button => button.text())).toEqual(['Decline', 'Allow once']);
+  await buttons[decision === 'deny' ? 0 : 1].trigger('click');
+  expect(mock.call).toHaveBeenCalledWith('decide_action', {
+    id:request.id, artifactHash:request.artifactHash, decision,
+  });
+  w.unmount();
+});
+it('keeps a shell command blocked when review identifies concrete harm', async () => {
+  request.state = 'denied';
+  request.artifact.spec.action = {kind:'shell'};
+  request.artifact.spec.code = 'rm /srv/app.db';
+  request.review!.verdict = {decision:'deny', explanation:'Deletes the live database.', effects:[]};
+  const w = mount(ActionApprovalWindow, {props:{requestId:request.id}});
+  await flushPromises();
+  expect(w.get('.content').text()).toContain('Deletes the live database.');
+  expect(w.findAll('footer button').map(button => button.text())).toEqual(['Close']);
+  w.unmount();
+});
 it('reports a failed automatic close and allows a manual retry without resubmitting approval',async()=>{
   const w=mount(ActionApprovalWindow,{props:{requestId:request.id}});await flushPromises();
   mock.close.mockRejectedValueOnce(new Error('window.close denied'));

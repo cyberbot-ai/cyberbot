@@ -25,12 +25,12 @@ it('opens a separate consent window without approving from the AI page', async (
   expect(mock.call.mock.calls.some(c => c[0] === 'decide_action')).toBe(false);
   w.unmount();
 });
-it('shows the reason and effects of a one-time request in the chat card before the commands', async () => {
+it.each(['confirm', 'uncertain'] as const)('shows the %s warning in the chat card before the commands', async (decision) => {
   request.artifact.spec.action = { kind: 'shell' };
   request.review!.verdict = {
-    decision: 'confirm',
-    explanation: 'The jail remains disabled after startup.',
-    effects: ['Restore the backup manually if startup fails.'],
+    decision,
+    explanation: decision === 'confirm' ? 'The jail remains disabled after startup.' : 'Risk review timed out.',
+    effects: decision === 'confirm' ? ['Restore the backup manually if startup fails.'] : [],
   };
   const w = mount(ActionApprovals, { props: { compact: true, runId: request.runId } });
   await flushPromises();
@@ -38,8 +38,12 @@ it('shows the reason and effects of a one-time request in the chat card before t
   await flushPromises();
   const warning = w.get('.risk-warning');
   expect(warning.get('strong').text()).toBe('One-time approval required');
-  expect(warning.get('p').text()).toBe(request.review!.verdict.explanation);
-  expect(warning.get('li').text()).toBe(request.review!.verdict.effects[0]);
+  expect(warning.text()).toContain(request.review!.verdict.explanation);
+  if (decision === 'confirm') {
+    expect(warning.get('li').text()).toBe(request.review!.verdict.effects[0]);
+  } else {
+    expect(warning.text()).toContain('Cyberbot could not assess this command.');
+  }
   expect(warning.element.compareDocumentPosition(w.get('.code').element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(w.get('.approval').text()).toContain('You can approve this action once or decline it.');
   w.unmount();

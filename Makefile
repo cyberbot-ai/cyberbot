@@ -80,7 +80,7 @@ test-actions: ## Test isolation, Nginx, read and shell approvals without a model
 	$(PYTHON) scripts/test-ai-actions.py --wait-seconds 12
 	$(PYTHON) scripts/test-ai-actions.py --no-build --shell
 	docker run --rm --network none -v "$(CURDIR):/work:ro" -w /work --entrypoint python3 cyberbot-actions-test:local -B -m unittest discover -s /work/tests -p test_actions.py
-	docker run --rm --network none -v "$(CURDIR):/work:ro" --entrypoint python3 cyberbot-actions-test:local -B -m unittest discover -s /work/tests -p test_remote_read.py
+	docker run --rm --network none -v "$(CURDIR):/work:ro" -w /work --entrypoint python3 cyberbot-actions-test:local -B -m unittest discover -s /work/tests -p test_remote_read.py
 
 version-check: ## Validate all release version fields and notes
 	$(PYTHON) scripts/version.py check
