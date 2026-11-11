@@ -1,6 +1,6 @@
 # Contributing to Cyberbot
 
-Use a fork and open a pull request against `master`. Describe the behavior you changed, how to reproduce it, and which checks you ran. Use fictional or redacted hostnames, inventory files, and logs in issues and examples.
+Switch to `master` before editing and commit changes directly there. Describe the behavior you changed, how to reproduce it, and which checks you ran. Use fictional or redacted hostnames, inventory files, and logs in issues and examples.
 
 ## Local development
 

@@ -265,7 +265,7 @@ Not at the moment. Cyberbot is a macOS app that you build from source.
 
 ## Contributing
 
-Bug reports and pull requests are welcome. See [Contributing](CONTRIBUTING.md) for the development setup, checks, and release process. The [connector contract](docs/CONNECTORS.md#adding-a-connector) and the [platform adapter guide](docs/LINUX_PLATFORMS.md#adding-a-platform-adapter) explain how to extend coverage.
+Bug reports and contributions are welcome. See [Contributing](CONTRIBUTING.md) for the development setup, checks, and release process. The [connector contract](docs/CONNECTORS.md#adding-a-connector) and the [platform adapter guide](docs/LINUX_PLATFORMS.md#adding-a-platform-adapter) explain how to extend coverage.
 
 ## License
 
