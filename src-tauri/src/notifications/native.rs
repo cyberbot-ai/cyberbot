@@ -6,7 +6,7 @@ mod macos {
         define_class, msg_send,
         rc::Retained,
         runtime::{Bool, ProtocolObject},
-        AnyThread,
+        sel, AnyThread,
     };
     use objc2_app_kit::NSWorkspace;
     use objc2_foundation::NSURL;
@@ -77,11 +77,15 @@ mod macos {
         }
     }
     pub async fn permission() -> Result<String, String> {
+        Ok(authorization().await?.0)
+    }
+    pub async fn authorization() -> Result<(String, bool), String> {
         let rx = {
             let (tx, rx) = tokio::sync::oneshot::channel();
             let tx = Mutex::new(Some(tx));
             let block = RcBlock::new(move |value: NonNull<UNNotificationSettings>| {
-                let status = unsafe { value.as_ref() }.authorizationStatus();
+                let settings = unsafe { value.as_ref() };
+                let status = settings.authorizationStatus();
                 let name = if status == UNAuthorizationStatus::Authorized {
                     "authorized"
                 } else if status == UNAuthorizationStatus::Provisional {
@@ -92,7 +96,10 @@ mod macos {
                     "notDetermined"
                 };
                 if let Some(tx) = tx.lock().ok().and_then(|mut tx| tx.take()) {
-                    let _ = tx.send(name.to_string());
+                    let _ = tx.send((
+                        name.to_string(),
+                        settings.badgeSetting() == UNNotificationSetting::Enabled,
+                    ));
                 }
             });
             center()?.getNotificationSettingsWithCompletionHandler(&block);
@@ -103,7 +110,14 @@ mod macos {
             .map_err(|_| "macOS did not respond to the notification permission check")?
             .map_err(|_| "Notification permission check interrupted".into())
     }
-    pub async fn request() -> Result<(), String> {
+    pub async fn request(alerts: bool, badge: bool) -> Result<(), String> {
+        let mut options = UNAuthorizationOptions::empty();
+        if alerts {
+            options |= UNAuthorizationOptions::Alert | UNAuthorizationOptions::Sound;
+        }
+        if badge {
+            options |= UNAuthorizationOptions::Badge;
+        }
         let rx = {
             let (tx, rx) = tokio::sync::oneshot::channel();
             let tx = Mutex::new(Some(tx));
@@ -117,16 +131,44 @@ mod macos {
                     let _ = tx.send(result);
                 }
             });
-            center()?.requestAuthorizationWithOptions_completionHandler(
-                UNAuthorizationOptions::Alert | UNAuthorizationOptions::Sound,
-                &block,
-            );
+            center()?.requestAuthorizationWithOptions_completionHandler(options, &block);
             rx
         };
         tokio::time::timeout(Duration::from_secs(120), rx)
             .await
             .map_err(|_| "The macOS notification permission request timed out")?
             .map_err(|_| "Notification permission request interrupted".to_string())?
+    }
+    pub async fn set_dock_badge(window: &tauri::WebviewWindow, count: i64) -> Result<(), String> {
+        if count != 0 && !authorization().await?.1 {
+            return Err("macOS badge permission is required".into());
+        }
+        let rx = {
+            let center = center()?;
+            center
+                .respondsToSelector(sel!(setBadgeCount:withCompletionHandler:))
+                .then(|| {
+                    let (tx, rx) = tokio::sync::oneshot::channel();
+                    let tx = Mutex::new(Some(tx));
+                    let block = RcBlock::new(move |error: *mut NSError| {
+                        if let Some(tx) = tx.lock().ok().and_then(|mut tx| tx.take()) {
+                            let _ = tx.send(error.is_null());
+                        }
+                    });
+                    center.setBadgeCount_withCompletionHandler(count as isize, Some(&block));
+                    rx
+                })
+        };
+        let Some(rx) = rx else {
+            // macOS 12 supports Dock tile labels but lacks the notification center setter.
+            return window
+                .set_badge_count((count > 0).then_some(count))
+                .map_err(|error| error.to_string());
+        };
+        match tokio::time::timeout(Duration::from_secs(10), rx).await {
+            Ok(Ok(true)) => Ok(()),
+            _ => Err("macOS did not apply the Dock badge".into()),
+        }
     }
     pub async fn show(id: &str, title: &str, body: &str) -> Result<(), String> {
         let rx = {
@@ -175,7 +217,11 @@ pub async fn permission() -> Result<String, String> {
     Ok("unsupported".into())
 }
 #[cfg(not(target_os = "macos"))]
-pub async fn request() -> Result<(), String> {
+pub async fn authorization() -> Result<(String, bool), String> {
+    Ok(("unsupported".into(), false))
+}
+#[cfg(not(target_os = "macos"))]
+pub async fn request(_: bool, _: bool) -> Result<(), String> {
     Err("Notifications are unavailable on this OS".into())
 }
 #[cfg(not(target_os = "macos"))]

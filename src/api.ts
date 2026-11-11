@@ -8,7 +8,7 @@ import {
   type VulnerabilityCatalogRow, type VulnerabilityStatus,
 } from './vulnerabilityCatalog';
 export const preview = !isTauri();
-let previewSettings: Settings = {mode:'manual',dailyRunLimit:0,dailyTokenLimit:0,runTokenLimit:0,autoAgent:'codex',pollSeconds:180,logPollSeconds:600,concurrency:4,paused:false};
+let previewSettings: Settings = {mode:'manual',dailyRunLimit:0,dailyTokenLimit:0,runTokenLimit:0,autoAgent:'codex',pollSeconds:180,logPollSeconds:600,concurrency:4,paused:false,dockBadgeEnabled:true};
 function previewSnapshot(): Snapshot {
   const now=Math.floor(Date.now()/1000);
   const servers: Server[] = Array.from({length:24}, (_, i) => {
@@ -130,7 +130,7 @@ export async function call<T>(command: string, args?: Record<string,unknown>): P
   if(command==='update_settings'){previewSettings={...previewSettings,...args?.patch as Partial<Settings>};return {...previewSettings} as T;}
   if(command==='incident_groups')return {groups:[],total:0} as T;
   if(command==='group_investigations')return [] as T;
-  if(command==='notification_status')return {enabled:true,permission:'unavailable',error:null,queued:0,overflow:0} as T;
+  if(command==='notification_status')return {enabled:true,badgeAllowed:false,permission:'unavailable',error:null,queued:0,overflow:0} as T;
   if(command==='take_notification_target')return {open:false,incidentIds:[]} as T;
   if(command==='server_dependencies'){
     const available=previewSnapshot().servers.filter(s=>s.id!==args?.id).map(s=>({id:s.id,name:s.name,host:s.endpoint.host,address:serverAddress(s.endpoint)}));

@@ -166,7 +166,7 @@ describe('fleet ribbon integration', () => {
       endpoint: { host: 'vpn.invalid', user: 'root', port: 22, identityFile: null, jumpHost: null },
       observation, lastError: null, lastAttempt: observation.at, nextCheck: 0, failures: 0,
     };
-    const settings: Settings = {mode:'manual',dailyTokenLimit:0,dailyRunLimit:0,runTokenLimit:0,autoAgent:'codex',pollSeconds:180,logPollSeconds:600,paused:false,concurrency:4};
+    const settings: Settings = {mode:'manual',dailyTokenLimit:0,dailyRunLimit:0,runTokenLimit:0,autoAgent:'codex',pollSeconds:180,logPollSeconds:600,paused:false,concurrency:4, dockBadgeEnabled: true};
     const logs: LogView = {
       fresh: true, shortCheck: false, lastIncomplete: null, lastSuccess: now, nextCheck: now + 600, error: null,
       summary: {
@@ -382,7 +382,7 @@ describe('fleet ribbon integration', () => {
   it('autosaves monitoring while preserving current AI and pause state',async()=>{
     vi.useFakeTimers();
     apiState.preview=false;
-    const settings:Settings={mode:'manual',dailyRunLimit:3,dailyTokenLimit:200000,runTokenLimit:50000,autoAgent:'claude',pollSeconds:180,logPollSeconds:600,concurrency:4,paused:false};
+    const settings:Settings={mode:'manual',dailyRunLimit:3,dailyTokenLimit:200000,runTokenLimit:50000,autoAgent:'claude',pollSeconds:180,logPollSeconds:600,concurrency:4,paused:false, dockBadgeEnabled: true};
     const snapshot={servers:[],sources:[],incidents:[],nginx:{},logStatus:{},settings,collectedAt:Date.now()/1000};
     vi.mocked(call).mockImplementation(async(command,args)=>{
       if(command==='snapshot')return {...snapshot,settings:{...snapshot.settings}};
@@ -410,7 +410,7 @@ describe('fleet ribbon integration', () => {
   });
   it('keeps saved values after a late snapshot and flushes edits when leaving settings',async()=>{
     vi.useFakeTimers();
-    const initial:Settings={mode:'manual',dailyRunLimit:null,dailyTokenLimit:null,runTokenLimit:50000,autoAgent:'codex',pollSeconds:180,logPollSeconds:600,concurrency:4,paused:false};
+    const initial:Settings={mode:'manual',dailyRunLimit:null,dailyTokenLimit:null,runTokenLimit:50000,autoAgent:'codex',pollSeconds:180,logPollSeconds:600,concurrency:4,paused:false, dockBadgeEnabled: true};
     let stored={...initial},hold=false,finish!:(value:unknown)=>void;
     const snapshot=()=>({servers:[],sources:[],incidents:[],nginx:{},logStatus:{},settings:{...stored},collectedAt:Date.now()/1000});
     vi.mocked(call).mockImplementation(async(command,args)=>{
@@ -450,7 +450,7 @@ describe('fleet ribbon integration', () => {
     app.unmount();
   });
   it('pauses and resumes from the sidebar on any page without changing AI settings',async()=>{
-    const settings:Settings={mode:'auto',dailyRunLimit:3,dailyTokenLimit:200000,runTokenLimit:50000,autoAgent:'claude',pollSeconds:30,logPollSeconds:600,concurrency:4,paused:false};
+    const settings:Settings={mode:'auto',dailyRunLimit:3,dailyTokenLimit:200000,runTokenLimit:50000,autoAgent:'claude',pollSeconds:30,logPollSeconds:600,concurrency:4,paused:false, dockBadgeEnabled: true};
     const snapshot={servers:[],sources:[],incidents:[],nginx:{},logStatus:{},settings,collectedAt:Date.now()/1000};
     vi.mocked(call).mockImplementation(async(command,args)=>{
       if(command==='snapshot')return {...snapshot,settings:{...snapshot.settings}};
@@ -469,7 +469,7 @@ describe('fleet ribbon integration', () => {
     app.unmount();
   });
   it('keeps the current polling state after a failed save and ignores repeated clicks while saving',async()=>{
-    const settings:Settings={mode:'manual',dailyRunLimit:null,dailyTokenLimit:null,runTokenLimit:50000,autoAgent:'codex',pollSeconds:180,logPollSeconds:600,concurrency:4,paused:false};
+    const settings:Settings={mode:'manual',dailyRunLimit:null,dailyTokenLimit:null,runTokenLimit:50000,autoAgent:'codex',pollSeconds:180,logPollSeconds:600,concurrency:4,paused:false, dockBadgeEnabled: true};
     let fail!:(error:Error)=>void;
     vi.mocked(call).mockImplementation(async command=>{
       if(command==='snapshot')return {servers:[],sources:[],incidents:[],nginx:{},logStatus:{},settings,collectedAt:Date.now()/1000};
@@ -520,7 +520,7 @@ describe('fleet ribbon integration', () => {
   });
   it('uses the selected agent check and the pending count only when entering AI', async () => {
     apiState.preview = false;
-    let settings: Settings = { mode: 'manual', dailyRunLimit: 0, dailyTokenLimit: 0, runTokenLimit: 0, autoAgent: 'codex', pollSeconds: 180, logPollSeconds: 600, concurrency: 4, paused: false };
+    let settings: Settings = { mode: 'manual', dailyRunLimit: 0, dailyTokenLimit: 0, runTokenLimit: 0, autoAgent: 'codex', pollSeconds: 180, logPollSeconds: 600, concurrency: 4, paused: false, dockBadgeEnabled: true };
     let pendingActions = 0;
     let failCheck = false;
     let agents = [
@@ -603,7 +603,7 @@ describe('fleet ribbon integration', () => {
   it('routes explicit AI settings and notification targets independently of the entry tab', async () => {
     apiState.preview = false;
     let target: { open: boolean; incidentIds: string[]; openActions?: boolean; actionRequestId?: string } = { open: false, incidentIds: [] };
-    const settings: Settings = { mode: 'manual', dailyRunLimit: 0, dailyTokenLimit: 0, runTokenLimit: 0, autoAgent: 'codex', pollSeconds: 180, logPollSeconds: 600, concurrency: 4, paused: true };
+    const settings: Settings = { mode: 'manual', dailyRunLimit: 0, dailyTokenLimit: 0, runTokenLimit: 0, autoAgent: 'codex', pollSeconds: 180, logPollSeconds: 600, concurrency: 4, paused: true, dockBadgeEnabled: true };
     vi.mocked(call).mockImplementation(async command => {
       if (command === 'snapshot') return { servers: [], sources: [], incidents: [], nginx: {}, logStatus: {}, settings };
       if (command === 'take_notification_target') return target;

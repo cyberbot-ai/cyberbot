@@ -7,7 +7,7 @@ export interface Server { networkOffline?:boolean; awaitingFirstCheck?:boolean; 
 export interface Source { id: string; name: string; kind: string; location: string; lastSync: number | null; error: string | null }
 export interface InventoryFile { name: string; location: string }
 export interface Incident {resolvedByUserAt?:number|null;manualResolutionPending?:boolean; episode?:string; id: string; serverId: string; check: string; title: string; severity: string; status: string; openedAt: number; updatedAt: number; evidence: string }
-export interface Settings { connectivityProbe?:{host:string;backupHost:string|null}; mode: 'manual' | 'auto'; dailyRunLimit: number | null; dailyTokenLimit: number | null; runTokenLimit: number; autoAgent: 'codex' | 'claude'; pollSeconds: number; logPollSeconds:number; concurrency: number; paused: boolean }
+export interface Settings { connectivityProbe?:{host:string;backupHost:string|null}; mode: 'manual' | 'auto'; dailyRunLimit: number | null; dailyTokenLimit: number | null; runTokenLimit: number; autoAgent: 'codex' | 'claude'; pollSeconds: number; logPollSeconds:number; concurrency: number; paused: boolean; dockBadgeEnabled: boolean }
 export interface Snapshot { offline?:boolean; awaitingFirstCheck?:string[]; pendingActions?:number;monitoring?:Record<string,MonitoringValues>; services?:Record<string,ServiceCard[]>; checkStatus?:Record<string,Health>; vulnerabilities?:Record<string,VulnerabilityCard>; logStatus: Record<string,Health>; servers: Server[]; sources: Source[]; incidents: Incident[]; settings: Settings; collectedAt: number }
 export interface AgentStatus { name: string; path: string | null; version: string | null; ready: boolean; reason: string }
 export type Health = 'healthy' | 'warning' | 'critical' | 'unknown' | 'stale' | 'unreachable';
@@ -47,7 +47,7 @@ export interface IncidentGroup {id:string;key:string;title:string;reason:string;
 export interface GroupMember {incident:Incident;serverName:string;serverAddress?:string;joinedAt:number;truncated:boolean}
 export interface GroupView {group:IncidentGroup;members:GroupMember[];total:number;offset:number;nextOffset:number|null;dependencies?:[string,string][];dependenciesTruncated?:boolean;fresh:number;open:number;outsideScope:number}
 export interface ServerDependencies { available:{id:string;name:string;host?:string;address?:string}[]; dependsOn:string[] }
-export interface NotificationStatus {enabled:boolean;permission:string;error:string|null;queued:number;overflow:number}
+export interface NotificationStatus {enabled:boolean;badgeAllowed:boolean;permission:string;error:string|null;queued:number;overflow:number}
 
 export interface ActivityStorage {bytes:number;limitBytes:number;dropped:number;error:string|null}
 export interface ActivityEvent {aiAction?:{requestId:string;artifactHash:string;rules:string;provider:string;model:string;effort:string;state:string;tokens:number|null;goal?:string};monitoring?:MonitoringExecution;id:string;at:number;category:string;action:string;phase:string;operationId:string;target:string|null;server?:{id?:string;name:string;address:string}|null;runId:string|null;durationMs:number|null}

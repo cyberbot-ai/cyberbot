@@ -7,7 +7,7 @@ import type { Settings } from '../types';
 const mocks = vi.hoisted(() => ({ call: vi.fn() }));
 vi.mock('./ActionApprovals.vue', () => ({ default: { template: '<div />' } }));
 vi.mock('../api', () => ({ preview: false, call: mocks.call }));
-const settings: Settings = { mode: 'manual', dailyRunLimit: null, dailyTokenLimit: null, runTokenLimit: 50000, autoAgent: 'codex', pollSeconds: 180, logPollSeconds: 600, concurrency: 4, paused: false };
+const settings: Settings = { mode: 'manual', dailyRunLimit: null, dailyTokenLimit: null, runTokenLimit: 50000, autoAgent: 'codex', pollSeconds: 180, logPollSeconds: 600, concurrency: 4, paused: false, dockBadgeEnabled: true };
 const status = { day: 20000, runs: 1, actualTokens: 300, chargedTokens: 50000, reservedTokens: 0, uncertainRuns: 1, queued: 0, jobs: [], blockedReason: null, waitingReason: null };
 
 beforeEach(() => {

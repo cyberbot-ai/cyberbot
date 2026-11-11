@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.14.0
+
+- See the total number of critical servers and open incidents on the macOS Dock icon. Turn off the badge in notification settings.
+
 ## 0.13.0
 
 - Set percentage warning and critical thresholds above 100%, for example to suppress CPU incidents on one server while keeping its readings visible.

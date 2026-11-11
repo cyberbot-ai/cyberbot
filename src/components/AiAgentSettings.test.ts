@@ -5,7 +5,7 @@ import AiAgentSettings from './AiAgentSettings.vue';
 import type {Settings} from '../types';
 const call=vi.hoisted(()=>vi.fn());
 vi.mock('../api',()=>({preview:false,call}));
-const settings:Settings={mode:'manual',autoAgent:'claude',dailyTokenLimit:null,dailyRunLimit:null,runTokenLimit:50000,pollSeconds:180,logPollSeconds:600,concurrency:4,paused:false};
+const settings:Settings={mode:'manual',autoAgent:'claude',dailyTokenLimit:null,dailyRunLimit:null,runTokenLimit:50000,pollSeconds:180,logPollSeconds:600,concurrency:4,paused:false, dockBadgeEnabled: true};
 beforeEach(()=>{vi.useFakeTimers();call.mockReset();call.mockImplementation(async(_cmd,args)=>({...settings,...args.patch}));});
 afterEach(()=>vi.useRealTimers());
 it('preserves the saved global choice without starting a model and autosaves only the agent',async()=>{

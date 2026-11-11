@@ -131,6 +131,8 @@ pub struct Settings {
     pub poll_seconds: u64,
     pub concurrency: usize,
     pub paused: bool,
+    #[serde(default = "default_dock_badge_enabled")]
+    pub dock_badge_enabled: bool,
     #[serde(default)]
     pub(crate) connectivity_probe: crate::connectivity::ProbeHosts,
 }
@@ -139,6 +141,9 @@ fn default_log_interval() -> u64 {
 }
 fn default_agent() -> String {
     "codex".into()
+}
+fn default_dock_badge_enabled() -> bool {
+    true
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -155,6 +160,7 @@ pub struct SettingsPatch {
     pub poll_seconds: Option<u64>,
     pub concurrency: Option<usize>,
     pub paused: Option<bool>,
+    pub dock_badge_enabled: Option<bool>,
     pub(crate) connectivity_probe: Option<crate::connectivity::ProbeHosts>,
 }
 
@@ -195,6 +201,9 @@ impl SettingsPatch {
         if let Some(value) = self.paused {
             settings.paused = value;
         }
+        if let Some(value) = self.dock_badge_enabled {
+            settings.dock_badge_enabled = value;
+        }
         if let Some(value) = self.connectivity_probe {
             settings.connectivity_probe = value;
         }
@@ -212,6 +221,7 @@ impl Default for Settings {
             poll_seconds: 180,
             concurrency: 4,
             paused: false,
+            dock_badge_enabled: default_dock_badge_enabled(),
             connectivity_probe: Default::default(),
         }
     }

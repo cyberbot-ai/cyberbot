@@ -6,7 +6,7 @@ import { onSettingsSaved } from '../settings';
 import type { Settings } from '../types';
 const mocks = vi.hoisted(() => ({ call: vi.fn() }));
 vi.mock('../api', () => ({ call: mocks.call }));
-const defaults: Settings = { mode:'auto', dailyRunLimit:4, dailyTokenLimit:200000, runTokenLimit:50000, autoAgent:'claude', pollSeconds:180, logPollSeconds:600, concurrency:4, paused:false };
+const defaults: Settings = { mode:'auto', dailyRunLimit:4, dailyTokenLimit:200000, runTokenLimit:50000, autoAgent:'claude', pollSeconds:180, logPollSeconds:600, concurrency:4, paused:false, dockBadgeEnabled: true };
 let stored: Settings;
 beforeEach(() => {
   vi.useFakeTimers();vi.clearAllMocks();stored={...defaults};

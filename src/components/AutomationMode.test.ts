@@ -5,7 +5,7 @@ import AutomationMode from './AutomationMode.vue';
 import type { Settings } from '../types';
 const mocks = vi.hoisted(() => ({call:vi.fn()}));
 vi.mock('../api', () => ({call:mocks.call}));
-const settings: Settings = {mode:'manual',dailyRunLimit:4,dailyTokenLimit:200000,runTokenLimit:50000,autoAgent:'claude',pollSeconds:300,logPollSeconds:1200,concurrency:2,paused:true};
+const settings: Settings = {mode:'manual',dailyRunLimit:4,dailyTokenLimit:200000,runTokenLimit:50000,autoAgent:'claude',pollSeconds:300,logPollSeconds:1200,concurrency:2,paused:true, dockBadgeEnabled: true};
 beforeEach(() => { vi.clearAllMocks(); mocks.call.mockImplementation(async (_command,args)=>({...settings,...args?.patch})); });
 
 describe('AI mode control', () => {

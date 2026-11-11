@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { automationBudgetError } from './automationSettings';
 import type { Settings } from './types';
-const settings: Settings = {mode:'auto',dailyRunLimit:4,dailyTokenLimit:200000,runTokenLimit:50000,autoAgent:'codex',pollSeconds:180,logPollSeconds:600,concurrency:4,paused:false};
+const settings: Settings = {mode:'auto',dailyRunLimit:4,dailyTokenLimit:200000,runTokenLimit:50000,autoAgent:'codex',pollSeconds:180,logPollSeconds:600,concurrency:4,paused:false, dockBadgeEnabled: true};
 describe('automation setup budget', () => {
   it('accepts zero limits and legacy unset daily limits in AUTO', () => {
     expect(automationBudgetError({...settings,dailyRunLimit:0,dailyTokenLimit:0,runTokenLimit:0})).toBeNull();

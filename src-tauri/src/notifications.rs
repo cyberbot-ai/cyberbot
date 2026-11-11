@@ -6,6 +6,8 @@ use crate::{
     store::Store,
     AppState,
 };
+#[cfg(target_os = "macos")]
+pub(crate) use native::set_dock_badge;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -66,6 +68,7 @@ pub(crate) struct Batch {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Status {
     pub enabled: bool,
+    pub badge_allowed: bool,
     pub permission: String,
     pub error: Option<String>,
     pub queued: i64,
@@ -157,6 +160,7 @@ impl Store {
             .map_err(err)?;
         Ok(Status {
             enabled,
+            badge_allowed: false,
             permission: "unknown".into(),
             error,
             queued,
@@ -432,9 +436,9 @@ pub(crate) fn suppress_incident(db: &Connection, id: &str, episode: &str) -> Res
 }
 pub(crate) async fn status(store: &Store) -> Result<Status> {
     let mut s = store.notification_settings()?;
-    s.permission = native::permission()
+    (s.permission, s.badge_allowed) = native::authorization()
         .await
-        .unwrap_or_else(|_| "unavailable".into());
+        .unwrap_or_else(|_| ("unavailable".into(), false));
     Ok(s)
 }
 pub(crate) async fn configure(store: &Store, enabled: bool) -> Result<Status> {
@@ -443,18 +447,20 @@ pub(crate) async fn configure(store: &Store, enabled: bool) -> Result<Status> {
         && native::permission().await.ok().as_deref() == Some("notDetermined")
         && store.notification_ask_once()?
     {
-        native::request().await?;
+        native::request(true, store.settings()?.dock_badge_enabled).await?;
     }
     status(store).await
 }
 pub(crate) async fn request_permission(store: &Store) -> Result<Status> {
-    if !store.notification_settings()?.enabled {
+    let alerts = store.notification_settings()?.enabled;
+    let badge = store.settings()?.dock_badge_enabled;
+    if !alerts && !badge {
         return Err("Notifications off".into());
     }
     let mut span = activity::begin("app", "notification_permission", None);
     let result = async {
         let _ = store.notification_ask_once()?;
-        native::request().await?;
+        native::request(alerts, badge).await?;
         status(store).await
     }
     .await;
@@ -470,7 +476,7 @@ pub(crate) async fn test(store: &Store) -> Result<()> {
     }
     if native::permission().await? == "notDetermined" {
         let _ = store.notification_ask_once()?;
-        native::request().await?;
+        native::request(true, store.settings()?.dock_badge_enabled).await?;
     }
     if !matches!(
         native::permission().await?.as_str(),

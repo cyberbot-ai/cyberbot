@@ -175,12 +175,14 @@ impl Store {
     pub(crate) fn polls_suspended(&self) -> bool {
         self.1.lock().is_ok_and(|runtime| runtime.suspended())
     }
-    pub fn snapshot(&self) -> Result<Snapshot> {
-        let db = self.0.lock().map_err(err)?;
-        let book = crate::monitoring::Book::load(&db)?;
-        let mut servers: Vec<Server> = Self::list(&db, "servers")?;
+    pub(crate) fn fleet_servers(
+        &self,
+        db: &Connection,
+        at: i64,
+    ) -> Result<(Vec<Server>, Vec<String>)> {
+        let mut servers: Vec<Server> = Self::list(db, "servers")?;
         let mut first = self.1.lock().map_err(err)?;
-        first.sync(&servers, now())?;
+        first.sync(&servers, at)?;
         let mut awaiting_first_check = Vec::new();
         for server in &mut servers {
             if let Some(due) = first.pending(server) {
@@ -188,6 +190,13 @@ impl Store {
                 server.next_check = due;
             }
         }
+        Ok((servers, awaiting_first_check))
+    }
+    pub fn snapshot(&self) -> Result<Snapshot> {
+        let db = self.0.lock().map_err(err)?;
+        let book = crate::monitoring::Book::load(&db)?;
+        let (mut servers, awaiting_first_check) = self.fleet_servers(&db, now())?;
+        let settings = Self::read_settings(&db)?;
         let monitoring = servers
             .iter()
             .map(|s| {
@@ -224,11 +233,11 @@ impl Store {
             services: Self::service_cards(&db)?,
             check_status: crate::checks::statuses(&db)?,
             vulnerabilities: Self::vulnerability_cards(&db)?,
-            log_status: Self::log_statuses(&db, Self::read_settings(&db)?.log_poll_seconds)?,
+            log_status: Self::log_statuses(&db, settings.log_poll_seconds)?,
             servers,
             sources: Self::list(&db, "sources")?,
             incidents,
-            settings: Self::read_settings(&db)?,
+            settings,
             collected_at: now(),
         })
     }

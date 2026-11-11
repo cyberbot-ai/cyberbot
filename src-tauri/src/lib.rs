@@ -15,6 +15,8 @@ mod connectivity;
 mod console;
 mod correlation;
 mod debversion;
+#[cfg(any(target_os = "macos", test))]
+mod dock_badge;
 pub mod egress;
 mod first_check;
 mod fleet_console;
@@ -169,11 +171,13 @@ async fn notification_status(
 #[tauri::command]
 async fn configure_notifications(
     state: State<'_, Arc<AppState>>,
+    app: tauri::AppHandle,
     enabled: bool,
 ) -> Result<notifications::Status, String> {
     let mut span = activity::begin("app", "configure_notifications", None);
     let result = notifications::configure(&state.store, enabled).await;
     span.result(&result);
+    let _ = app.emit("state-changed", ());
     result
 }
 #[tauri::command]
@@ -183,8 +187,11 @@ async fn test_notification(state: State<'_, Arc<AppState>>) -> Result<(), String
 #[tauri::command]
 async fn request_notification_permission(
     state: State<'_, Arc<AppState>>,
+    app: tauri::AppHandle,
 ) -> Result<notifications::Status, String> {
-    notifications::request_permission(&state.store).await
+    let result = notifications::request_permission(&state.store).await;
+    let _ = app.emit("state-changed", ());
+    result
 }
 #[tauri::command]
 fn open_notification_settings() -> Result<(), String> {
@@ -295,6 +302,9 @@ async fn sync_source_inner(state: &AppState, source: &Source) -> Result<usize, S
         source.last_sync = Some(now());
         source.error = None;
         let count = state.store.import(&source, imported)?;
+        if let Some(app) = state.app.get() {
+            let _ = app.emit("state-changed", ());
+        }
         let snapshot = state.store.snapshot()?;
         activity::set_servers(&snapshot.servers);
         state.consoles.retain(&snapshot.servers);
@@ -342,6 +352,9 @@ fn delete_source(state: State<'_, Arc<AppState>>, id: String) -> Result<(), Stri
         crate::activity::begin("app", "delete_source", crate::activity::id_target(&id));
     let _activity_result = (|| {
         state.store.delete_source(&id)?;
+        if let Some(app) = state.app.get() {
+            let _ = app.emit("state-changed", ());
+        }
         let snapshot = state.store.snapshot()?;
         activity::set_servers(&snapshot.servers);
         state.consoles.retain(&snapshot.servers);
@@ -361,8 +374,10 @@ fn delete_source(state: State<'_, Arc<AppState>>, id: String) -> Result<(), Stri
 #[tauri::command]
 fn update_settings(
     state: State<'_, Arc<AppState>>,
+    app: tauri::AppHandle,
     patch: SettingsPatch,
 ) -> Result<Settings, String> {
+    let refresh_badge = patch.dock_badge_enabled.is_some();
     let mut _activity_span = crate::activity::begin("app", "update_settings", None);
     let _activity_result = (|| {
         let _lifecycle = state
@@ -378,6 +393,9 @@ fn update_settings(
         Ok(settings)
     })();
     _activity_span.result(&_activity_result);
+    if refresh_badge && _activity_result.is_ok() {
+        let _ = app.emit("state-changed", ());
+    }
     _activity_result
 }
 #[tauri::command]
@@ -1898,6 +1916,8 @@ pub fn run() {
             ai_actions::install_events(app.handle().clone());
             main_window.show()?;
             window_size::track(&main_window, &state.root);
+            #[cfg(target_os = "macos")]
+            dock_badge::start(main_window, state.clone());
             notifications::start(app.handle().clone(), state.clone());
             if notification_smoke {
                 notifications::seed_smoke(state.clone(), app.handle().clone())?;
