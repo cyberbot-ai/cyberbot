@@ -838,19 +838,23 @@ mod tests {
     use super::*;
     use crate::{inventory, model::Source as InventorySource};
     fn fixture() -> (Store, String) {
+        let db = fixture_with_hosts("root@fixture.invalid");
+        let id = db.snapshot().unwrap().servers[0].id.clone();
+        (db, id)
+    }
+    fn fixture_with_hosts(hosts: &str) -> Store {
         let db = Store::open(std::path::Path::new(":memory:")).unwrap();
         let src = InventorySource {
             id: "monitoring".into(),
             name: "Fixture".into(),
             kind: "manual".into(),
-            location: "root@fixture.invalid".into(),
+            location: hosts.into(),
             last_sync: None,
             error: None,
         };
         db.import(&src, inventory::parse_manual(&src.location).unwrap())
             .unwrap();
-        let id = db.snapshot().unwrap().servers[0].id.clone();
-        (db, id)
+        db
     }
     fn change(db: &Store, s: &Scope, o: Overrides) -> Policy {
         let revision = db.monitoring_policy(s).unwrap().revision;
@@ -890,12 +894,13 @@ mod tests {
             &db,
             &connection,
             Overrides {
-                thresholds: [("memoryUsage".into(), pair(99., 100.))].into(),
+                thresholds: [("memoryUsage".into(), pair(101., 102.))].into(),
                 ..Default::default()
             },
         );
         assert_eq!(changed.values.interval_seconds, 180);
         assert_eq!(changed.values.thresholds["blocked"]["warning"], 3.);
+        assert_eq!(changed.values.thresholds["memoryUsage"], pair(101., 102.));
         assert_eq!(changed.inherited.thresholds["memoryUsage"], pair(95., 99.));
         assert_eq!(changed.threshold_origins["blocked"], "server");
         assert_eq!(changed.threshold_origins["memoryUsage"], "instance");
@@ -906,7 +911,7 @@ mod tests {
         for invalid in [
             pair(99., 98.),
             pair(99., 99.),
-            pair(99., 101.),
+            pair(-1., 101.),
             [("warning".into(), 99.)].into(),
         ] {
             let result = db.set_monitoring(
@@ -929,6 +934,57 @@ mod tests {
         let reset = change(&db, &connection, Overrides::default());
         assert_eq!(reset.values.thresholds["memoryUsage"], pair(95., 99.));
         assert_eq!(reset.threshold_origins["memoryUsage"], "global");
+    }
+    #[test]
+    fn nginx_minimum_shares_cannot_exceed_100_percent() {
+        let (db, id) = fixture();
+        let nginx = scope("nginx", Some(&id), None);
+        let policy = db.monitoring_policy(&nginx).unwrap();
+        for key in ["http_5xx", "latency"] {
+            let mut fields = policy.values.thresholds[key].clone();
+            fields.insert("share".into(), 101.);
+            let result = db.set_monitoring(
+                &nginx,
+                Overrides {
+                    thresholds: [(key.into(), fields)].into(),
+                    ..Default::default()
+                },
+                policy.revision,
+            );
+            assert!(result.unwrap_err().contains("Invalid alert thresholds"));
+        }
+    }
+    #[test]
+    fn cpu_threshold_above_100_suppresses_only_the_configured_server() {
+        let db = fixture_with_hosts("root@one.invalid\nroot@two.invalid");
+        let servers = db.snapshot().unwrap().servers;
+        let configured_server = &servers[0].id;
+        let default_server = &servers[1].id;
+        let limits = [("warning".into(), 101.), ("critical".into(), 102.)].into();
+        change(
+            &db,
+            &scope("metrics", Some(configured_server), None),
+            Overrides {
+                thresholds: [("cpu".into(), limits)].into(),
+                ..Default::default()
+            },
+        );
+        for server in &servers {
+            let observation = serde_json::from_value(serde_json::json!({
+                "at": now(), "cpuPercent": 100, "memoryPercent": 20,
+                "disks": [], "services": [], "missing": [], "bytesReceived": 100, "durationMs": 1,
+            }))
+            .unwrap();
+            db.record(server, Ok(observation), 180).unwrap();
+        }
+        let snapshot = db.snapshot().unwrap();
+        assert_eq!(snapshot.servers.len(), 2);
+        for server in &snapshot.servers {
+            assert_eq!(server.observation.as_ref().unwrap().cpu_percent, Some(100.));
+        }
+        assert_eq!(snapshot.incidents.len(), 1);
+        assert_eq!(snapshot.incidents[0].check, "cpu");
+        assert_eq!(&snapshot.incidents[0].server_id, default_server);
     }
     #[test]
     fn resource_incidents_keep_their_severity_rules_with_custom_thresholds() {

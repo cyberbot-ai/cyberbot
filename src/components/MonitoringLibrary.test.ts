@@ -21,8 +21,8 @@ const definitions = [
     thresholds: [{
       key: 'memoryUsage', label: 'Memory limit usage',
       fields: [
-        { key: 'warning', label: 'Warning', unit: '%', default: 90, min: 0, max: 100, integer: false },
-        { key: 'critical', label: 'Critical', unit: '%', default: 98, min: 0, max: 100, integer: false },
+        { key: 'warning', label: 'Warning', unit: '%', default: 90, min: 0, max: Number.MAX_SAFE_INTEGER, integer: false },
+        { key: 'critical', label: 'Critical', unit: '%', default: 98, min: 0, max: Number.MAX_SAFE_INTEGER, integer: false },
       ],
     }],
   },
@@ -108,7 +108,7 @@ beforeEach(() => {
   });
 });
 
-it('saves a threshold pair together and resets only that rule at a connection', async () => {
+it('saves a threshold pair above 100% and resets only that rule at a connection', async () => {
   overrides.set('redis/a/second', { diagnosticEnabled: false });
   const wrapper = mountLibrary({ definitionId: 'redis', serverId: 'a', instanceId: 'second' });
   await flushPromises();
@@ -117,16 +117,16 @@ it('saves a threshold pair together and resets only that rule at a connection', 
   const critical = rule.get<HTMLInputElement>('[aria-label="Memory limit usage Critical"]');
   expect(wrapper.text()).toContain('Alert thresholds');
   expect(warning.element.value).toBe('90');
-  await warning.setValue('99');
+  await warning.setValue('101');
   await rule.trigger('submit');
   expect(rule.get('[role="alert"]').text()).toContain('Critical must be higher');
   expect(mocks.call.mock.calls.some(([name]) => name === 'configure_monitoring')).toBe(false);
-  await critical.setValue('100');
+  await critical.setValue('102');
   await rule.trigger('submit');
   await flushPromises();
   expect(mocks.call).toHaveBeenCalledWith('configure_monitoring', {
     scope: { definitionId: 'redis', serverId: 'a', instanceId: 'second' },
-    overrides: { diagnosticEnabled: false, thresholds: { memoryUsage: { warning: 99, critical: 100 } } },
+    overrides: { diagnosticEnabled: false, thresholds: { memoryUsage: { warning: 101, critical: 102 } } },
     expectedRevision: 1,
   });
   expect(rule.text()).toContain('Connection override');

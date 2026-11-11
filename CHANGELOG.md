@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.13.0
+
+- Set percentage warning and critical thresholds above 100%, for example to suppress CPU incidents on one server while keeping its readings visible.
+
 ## 0.12.2
 
 - Let bounded SSH diagnostics pass risk review and ask for one-time approval when a shell command is risky or its review is unavailable.

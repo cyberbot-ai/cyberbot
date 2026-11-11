@@ -45,9 +45,13 @@ impl Field {
     }
 
     fn percent(key: &'static str, label: &'static str, default: f64) -> Self {
+        Self::number(key, label, "%", default)
+    }
+
+    fn share(default: f64) -> Self {
         Self {
             max: 100.,
-            ..Self::number(key, label, "%", default)
+            ..Self::percent("share", "Minimum share", default)
         }
     }
 
@@ -177,7 +181,7 @@ pub fn for_definition(kind: &str, metrics: &[MetricSpec]) -> Vec<ThresholdRule> 
             ThresholdRule::new(
                 "http_5xx",
                 "HTTP 5xx responses",
-                vec![warning(10.), Field::percent("share", "Minimum share", 5.)],
+                vec![warning(10.), Field::share(5.)],
             ),
             ThresholdRule::new(
                 "latency",
@@ -190,7 +194,7 @@ pub fn for_definition(kind: &str, metrics: &[MetricSpec]) -> Vec<ThresholdRule> 
                         ..Field::number("milliseconds", "Request duration", "ms", 1000.)
                     },
                     warning(20.),
-                    Field::percent("share", "Minimum share", 20.),
+                    Field::share(20.),
                 ],
             ),
             ThresholdRule::new("upstream", "Upstream errors", vec![warning(5.)]),
