@@ -962,50 +962,64 @@ fn control(path: &Path, terminate: bool, timeout: Duration) -> io::Result<u32> {
         }
         stream.write_all(&packet)
     }
-    fn read(stream: &mut UnixStream) -> io::Result<Vec<u32>> {
+    fn invalid_packet() -> io::Error {
+        io::Error::new(ErrorKind::InvalidData, "Invalid SSH multiplexing packet")
+    }
+    fn read_word(bytes: &mut &[u8]) -> io::Result<u32> {
+        let (word, rest) = bytes.split_first_chunk().ok_or_else(invalid_packet)?;
+        *bytes = rest;
+        Ok(u32::from_be_bytes(*word))
+    }
+    fn read(stream: &mut UnixStream) -> io::Result<Vec<u8>> {
         let mut size = [0; 4];
         stream.read_exact(&mut size)?;
         let size = u32::from_be_bytes(size) as usize;
-        if !(4..=1024).contains(&size) || size % 4 != 0 {
-            return Err(io::Error::new(
-                ErrorKind::InvalidData,
-                "Invalid SSH multiplexing packet",
-            ));
+        if !(4..=1024).contains(&size) {
+            return Err(invalid_packet());
         }
         let mut bytes = vec![0; size];
         stream.read_exact(&mut bytes)?;
-        Ok(bytes
-            .chunks_exact(4)
-            .map(|v| u32::from_be_bytes(v.try_into().unwrap()))
-            .collect())
+        Ok(bytes)
     }
     send(&mut stream, &[1, 4])?;
-    if read(&mut stream)? != [1, 4] {
+    let hello = read(&mut stream)?;
+    let mut extensions = hello.as_slice();
+    if (read_word(&mut extensions)?, read_word(&mut extensions)?) != (1, 4) {
         return Err(io::Error::new(
             ErrorKind::InvalidData,
             "Unsupported version of SSH mux",
         ));
+    }
+    // Each extension is a pair of length-prefixed SSH strings.
+    while !extensions.is_empty() {
+        for _ in 0..2 {
+            let size = read_word(&mut extensions)? as usize;
+            let (_, rest) = extensions
+                .split_at_checked(size)
+                .ok_or_else(invalid_packet)?;
+            extensions = rest;
+        }
     }
     send(
         &mut stream,
         &[if terminate { 0x10000005 } else { 0x10000004 }, 1],
     )?;
     let response = read(&mut stream)?;
-    if terminate && response == [0x80000001, 1] {
-        return Ok(0);
+    if response.len() % 4 != 0 {
+        return Err(invalid_packet());
     }
-    if !terminate
-        && response.len() == 3
-        && response[0] == 0x80000005
-        && response[1] == 1
-        && response[2] > 0
-    {
-        return Ok(response[2]);
+    let words: Vec<_> = response
+        .chunks_exact(4)
+        .map(|word| u32::from_be_bytes(word.try_into().unwrap()))
+        .collect();
+    match (terminate, words.as_slice()) {
+        (true, [0x80000001, 1]) => Ok(0),
+        (false, [0x80000005, 1, pid]) if *pid > 0 => Ok(*pid),
+        _ => Err(io::Error::new(
+            ErrorKind::InvalidData,
+            "SSH multiplexing rejected the request",
+        )),
     }
-    Err(io::Error::new(
-        ErrorKind::InvalidData,
-        "SSH multiplexing rejected the request",
-    ))
 }
 
 #[cfg(test)]
@@ -1137,24 +1151,90 @@ mod tests {
         std::fs::rename(other, file).unwrap();
         assert_ne!(trusted, fingerprint(&paths));
     }
-    #[test]
-    fn mux_rejects_oversized_or_wrong_protocol_responses() {
+    fn mux_frame(words: &[u32], tail: &[u8]) -> Vec<u8> {
+        let size = (words.len() * 4 + tail.len()) as u32;
+        size.to_be_bytes()
+            .into_iter()
+            .chain(words.iter().copied().flat_map(u32::to_be_bytes))
+            .chain(tail.iter().copied())
+            .collect()
+    }
+
+    fn mux_exchange(hello: &[u8], reply: Option<&[u8]>, terminate: bool) -> io::Result<u32> {
         use std::os::unix::net::UnixListener;
-        for bytes in [
-            2048u32.to_be_bytes().to_vec(),
-            vec![0, 0, 0, 8, 0, 0, 0, 1, 0, 0, 0, 3],
-        ] {
-            let dir = tempfile::tempdir().unwrap();
-            let path = dir.path().join("socket");
-            let listener = UnixListener::bind(&path).unwrap();
-            let server = std::thread::spawn(move || {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("socket");
+        let listener = UnixListener::bind(&path).unwrap();
+        std::thread::scope(|scope| {
+            let peer = scope.spawn(move || {
                 let (mut socket, _) = listener.accept().unwrap();
-                let mut hello = [0; 12];
-                socket.read_exact(&mut hello).unwrap();
-                socket.write_all(&bytes).unwrap();
+                socket.set_read_timeout(Some(MUX_PROBE_TIMEOUT)).unwrap();
+                let mut request = [0; 12];
+                socket.read_exact(&mut request).unwrap();
+                assert_eq!(request.as_slice(), mux_frame(&[1, 4], &[]));
+                socket.write_all(hello).unwrap();
+                match socket.read_exact(&mut request) {
+                    Ok(()) => {
+                        let kind = if terminate { 0x10000005 } else { 0x10000004 };
+                        assert_eq!(request.as_slice(), mux_frame(&[kind, 1], &[]));
+                        socket
+                            .write_all(reply.expect("request after invalid HELLO"))
+                            .unwrap();
+                    }
+                    Err(error) if error.kind() == ErrorKind::UnexpectedEof => {}
+                    Err(error) => panic!("Could not read mux request: {error}"),
+                }
             });
-            assert!(control(&path, false, MUX_MAINTENANCE_TIMEOUT).is_err());
-            server.join().unwrap();
+            let result = control(&path, terminate, MUX_PROBE_TIMEOUT);
+            peer.join().unwrap();
+            result
+        })
+    }
+
+    #[test]
+    fn mux_accepts_hello_with_and_without_extensions() {
+        // The OpenSSH 10.3p1 master sends the SSH strings "info" and "0".
+        let info = b"\0\0\0\x04info\0\0\0\x01\x30";
+        let mut extended = info.to_vec();
+        extended.extend_from_slice(b"\0\0\0\x06future\0\0\0\x03\0\xff\x80");
+        for extensions in [info.as_slice(), &[], extended.as_slice()] {
+            let hello = mux_frame(&[1, 4], extensions);
+            let alive = mux_frame(&[0x80000005, 1, 42], &[]);
+            let ok = mux_frame(&[0x80000001, 1], &[]);
+            assert_eq!(mux_exchange(&hello, Some(&alive), false).unwrap(), 42);
+            assert_eq!(mux_exchange(&hello, Some(&ok), true).unwrap(), 0);
+        }
+    }
+
+    #[test]
+    fn mux_rejects_oversized_or_invalid_hello() {
+        for hello in [
+            2048u32.to_be_bytes().to_vec(),
+            mux_frame(&[1], &[]),
+            mux_frame(&[2, 4], &[]),
+            mux_frame(&[1, 3], &[]),
+            mux_frame(&[1, 4], b"\0\0\0"),
+            mux_frame(&[1, 4], b"\0\0\0\x04info"),
+            mux_frame(&[1, 4], b"\0\0\0\x04info\0\0\0\x02\x30"),
+        ] {
+            let error = mux_exchange(&hello, None, false).unwrap_err();
+            assert_eq!(error.kind(), ErrorKind::InvalidData);
+        }
+    }
+
+    #[test]
+    fn mux_rejects_invalid_control_replies() {
+        let hello = mux_frame(&[1, 4], &[]);
+        for (terminate, reply) in [
+            (false, mux_frame(&[0x80000001, 1, 42], &[])),
+            (false, mux_frame(&[0x80000005, 2, 42], &[])),
+            (false, mux_frame(&[0x80000005, 1, 0], &[])),
+            (false, mux_frame(&[0x80000005, 1, 42], &[0])),
+            (true, mux_frame(&[0x80000001, 2], &[])),
+            (true, mux_frame(&[0x80000001, 1, 42], &[])),
+        ] {
+            let error = mux_exchange(&hello, Some(&reply), terminate).unwrap_err();
+            assert_eq!(error.kind(), ErrorKind::InvalidData);
         }
     }
     #[tokio::test]

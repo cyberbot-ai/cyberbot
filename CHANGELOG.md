@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.12.1
+
+- Restore SSH polling with OpenSSH 10.3 by accepting extensions in the multiplexing handshake.
+
 ## 0.12.0
 
 - Poll each server over one SSH command at the shared interval, with a single refresh button for metrics, services, logs, and packages.
