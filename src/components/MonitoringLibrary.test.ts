@@ -4,7 +4,7 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import { serverDirectory, serverDirectoryKey } from '../serverDirectory';
 import CheckPanel from './CheckPanel.vue';
 import MonitoringLibrary from './MonitoringLibrary.vue';
-import type { MonitoringDefinition, MonitoringLibraryEntry, MonitoringOverrides, MonitoringPolicy, MonitoringScope, MonitoringValues, Server } from '../types';
+import type { ActivityEvent, MonitoringDefinition, MonitoringLibraryEntry, MonitoringOverrides, MonitoringPolicy, MonitoringScope, MonitoringValues, Server } from '../types';
 
 const mocks = vi.hoisted(() => ({ call: vi.fn() }));
 vi.mock('../api', () => ({ preview: false, call: mocks.call }));
@@ -309,6 +309,33 @@ it('keeps technical details lazy and separates custom checks and service jobs', 
   await openTab(wrapper, 'My checks');
   await selectServer(wrapper, 'two.example');
   expect(wrapper.getComponent(CheckPanel).props('serverId')).toBe('b');
+  wrapper.unmount();
+});
+
+it('shows legacy and grouped runs for the selected service instance', async () => {
+  const previous = mocks.call.getMockImplementation()!;
+  const legacy: ActivityEvent = {
+    id: 'old', at: 1700000000000, category: 'server', action: 'Server poll result', phase: 'completed',
+    operationId: 'old-poll', target: 'a', runId: null, durationMs: null,
+    monitoring: { definitionId: 'redis', instanceId: 'second', serverId: 'a', trigger: 'schedule', version: 'old-hash', revision: 1 },
+  };
+  const combined: ActivityEvent = {
+    ...legacy, id: 'new', action: 'poll', phase: 'failed', monitoring: undefined,
+    poll: { version: 'new-hash', revision: 2, trigger: 'after_action', transport: 'completed', checks: [
+      { definitionId: 'redis', instanceId: 'default', succeeded: true },
+      { definitionId: 'redis', instanceId: 'second', succeeded: false },
+      { definitionId: 'metrics', succeeded: true },
+    ] },
+  };
+  mocks.call.mockImplementation((command, args) => command === 'activity_log' ? Promise.resolve({ events: [combined, legacy] }) : previous(command, args));
+  const wrapper = mountLibrary({ definitionId: 'redis', serverId: 'a', instanceId: 'second' });
+  await flushPromises();
+  const recent = wrapper.findAll('details').find(details => details.get('summary').text() === 'Recent runs')!;
+  (recent.element as HTMLDetailsElement).open = true;
+  await recent.trigger('toggle');
+  await flushPromises();
+  expect(recent.findAll('tbody tr').map(record => record.findAll('td').slice(2).map(cell => cell.text())))
+    .toEqual([['After an action', 'Failed'], ['On schedule', 'Finished']]);
   wrapper.unmount();
 });
 

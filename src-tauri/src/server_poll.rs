@@ -1,4 +1,5 @@
 use crate::{
+    activity::{self, PollCheck, PollSpan, PollTransport},
     collector_queue, connectivity, first_check, instances, logs,
     model::{now, Endpoint, Server},
     monitoring::{self, thresholds, Book, Execution, Policy},
@@ -28,6 +29,7 @@ pub(crate) struct Report {
 pub(crate) struct Queue {
     entries: Mutex<HashMap<String, EntryState>>,
     pub(crate) wake: Notify,
+    changes: Notify,
 }
 
 struct EntryState {
@@ -64,6 +66,10 @@ impl EntryState {
 }
 
 impl Queue {
+    pub(crate) fn notify_changed(&self) {
+        self.changes.notify_one();
+    }
+
     pub(crate) fn forced(&self, id: &str) -> bool {
         self.entries
             .lock()
@@ -145,11 +151,22 @@ impl Queue {
             let done = job.done.clone();
             drop(job);
             done.send_replace(Some(result));
-            if let Some(handle) = app.app.get() {
-                let _ = handle.emit("state-changed", ());
-            }
+            app.polls.notify_changed();
         });
         Ok(receiver)
+    }
+}
+
+pub(crate) async fn publish_changes(app: tauri::AppHandle, state: Arc<AppState>) {
+    let mut next = tokio::time::Instant::now();
+    loop {
+        tokio::time::sleep_until(next).await;
+        state.polls.changes.notified().await;
+        if state.stop.load(Ordering::Relaxed) {
+            return;
+        }
+        let _ = app.emit("state-changed", ());
+        next = tokio::time::Instant::now() + Duration::from_secs(1);
     }
 }
 
@@ -515,77 +532,86 @@ async fn execute(app: &AppState, server: &Server, manual: bool) -> Result<Report
     let mut first_deferred = None;
     let mut apt_result = None;
     let mut had_frame = false;
-    let mut span = crate::activity::begin("server", "poll", Some(server.id.clone()));
-    let transport = connectivity::observe_ssh(network.clone(), ticket, ssh::poll_server(
-        &server.endpoint,
-        &app.collector,
-        &request,
-        &mut |line| {
-            let frame: Frame = serde_json::from_slice(line).map_err(err)?;
-            let task = tasks.get_mut(frame.id).filter(|task| !task.terminal)
-                .ok_or("Unexpected collector result")?;
-            had_frame = true;
-            match frame.event {
-                Event::Data if !task.error => {
-                    if task.record(app, server, &attempt, started, &frame.payload).is_err() {
-                        task.error = true;
-                    } else if matches!(task.check, Check::Metrics) {
-                        if let Some(handle) = app.app.get() {
-                            let _ = handle.emit("state-changed", ());
-                        }
-                    }
-                }
-                Event::Data => (),
-                Event::Apt | Event::AptError => {
-                    let Check::Packages { checkpoint, apt } = &task.check else {
-                        return Err("Unexpected APT result".into());
-                    };
-                    if apt.is_empty() || apt_result.is_some() {
-                        return Err("Unexpected APT result".into());
-                    }
-                    if !task.error {
-                        let policy = book.resolve(&monitoring::scope("apt", Some(&server.id), None))?;
-                        let execution = Execution {
-                            definition_id: "apt".into(),
-                            version: monitoring::definition("apt")?.version.clone(),
-                            revision: policy.revision,
-                            instance_id: None,
-                            ..task.execution.clone()
-                        };
-                        let bytes = serde_json::to_vec(&frame.payload).map_err(err)?;
-                        let stored = monitoring::with_execution(execution.clone(), || {
-                            app.store.check_poll_attempt(&attempt, server)?;
-                            if matches!(frame.event, Event::Apt) {
-                                if let Err(error) = app.store.record_apt(server, checkpoint, apt, &bytes) {
-                                    let _ = app.store.record_apt_error(server, checkpoint);
-                                    return Err(error);
-                                }
-                            } else {
-                                app.store.record_apt_error(server, checkpoint)?;
-                            }
-                            Ok::<(), String>(())
-                        });
-                        let success = stored.is_ok() && matches!(frame.event, Event::Apt);
-                        apt_result = Some(success);
-                        monitoring::with_execution(execution, || crate::activity::poll_result(&server.id, success));
-                    }
-                }
-                Event::Done => {
-                    task.terminal = true;
-                    task.error |= !task.updated || matches!(&task.check, Check::Packages { checkpoint, .. } if checkpoint.stage.is_some());
-                }
-                Event::Error | Event::Deferred => {
-                    task.terminal = true;
+    let span = PollSpan::begin(server, &tasks[0].execution, started);
+    let mut record_frame = |line: &[u8]| -> Result<()> {
+        let frame: Frame = serde_json::from_slice(line).map_err(err)?;
+        let task = tasks
+            .get_mut(frame.id)
+            .filter(|task| !task.terminal)
+            .ok_or("Unexpected collector result")?;
+        had_frame = true;
+        match frame.event {
+            Event::Data if !task.error => {
+                if task
+                    .record(app, server, &attempt, started, &frame.payload)
+                    .is_err()
+                {
                     task.error = true;
-                    if matches!(frame.event, Event::Deferred) && task.execution.instance_id.is_some() {
-                        first_deferred.get_or_insert_with(|| task.identity());
-                    }
+                } else if matches!(task.check, Check::Metrics) {
+                    app.polls.notify_changed();
                 }
             }
-            Ok(())
-        },
-    )).await;
-    span.result(&transport);
+            Event::Data => (),
+            Event::Apt | Event::AptError => {
+                let Check::Packages { checkpoint, apt } = &task.check else {
+                    return Err("Unexpected APT result".into());
+                };
+                if apt.is_empty() || apt_result.is_some() {
+                    return Err("Unexpected APT result".into());
+                }
+                if !task.error {
+                    let policy = book.resolve(&monitoring::scope("apt", Some(&server.id), None))?;
+                    let execution = Execution {
+                        definition_id: "apt".into(),
+                        version: monitoring::definition("apt")?.version.clone(),
+                        revision: policy.revision,
+                        instance_id: None,
+                        ..task.execution.clone()
+                    };
+                    let bytes = serde_json::to_vec(&frame.payload).map_err(err)?;
+                    let stored = monitoring::with_execution(execution, || {
+                        app.store.check_poll_attempt(&attempt, server)?;
+                        if matches!(frame.event, Event::Apt) {
+                            if let Err(error) =
+                                app.store.record_apt(server, checkpoint, apt, &bytes)
+                            {
+                                let _ = app.store.record_apt_error(server, checkpoint);
+                                return Err(error);
+                            }
+                        } else {
+                            app.store.record_apt_error(server, checkpoint)?;
+                        }
+                        Ok::<(), String>(())
+                    });
+                    apt_result = Some(stored.is_ok() && matches!(frame.event, Event::Apt));
+                }
+            }
+            Event::Done => {
+                task.terminal = true;
+                task.error |= !task.updated
+                    || matches!(&task.check, Check::Packages { checkpoint, .. } if checkpoint.stage.is_some());
+            }
+            Event::Error | Event::Deferred => {
+                task.terminal = true;
+                task.error = true;
+                if matches!(frame.event, Event::Deferred) && task.execution.instance_id.is_some() {
+                    first_deferred.get_or_insert_with(|| task.identity());
+                }
+            }
+        }
+        Ok(())
+    };
+    let transport = activity::poll_transport(connectivity::observe_ssh(
+        network.clone(),
+        ticket,
+        ssh::poll_server(
+            &server.endpoint,
+            &app.collector,
+            &request,
+            &mut record_frame,
+        ),
+    ))
+    .await;
     let verdict = if transport.is_err() && !had_frame {
         network.confirm_failure(ticket).await
     } else {
@@ -600,12 +626,15 @@ async fn execute(app: &AppState, server: &Server, manual: bool) -> Result<Report
         updated: 0,
         failed: Vec::new(),
     };
+    let mut checks = Vec::with_capacity(tasks.len() + usize::from(apt_result.is_some()));
     for task in &tasks {
         let complete = task.updated
             && !matches!(&task.check, Check::Packages { checkpoint, .. } if checkpoint.stage.is_some());
         let success = complete && !task.error;
-        monitoring::with_execution(task.execution.clone(), || {
-            crate::activity::poll_result(&server.id, success);
+        checks.push(PollCheck {
+            definition_id: task.execution.definition_id.clone(),
+            instance_id: task.execution.instance_id.clone(),
+            succeeded: success,
         });
         if success {
             report.updated += 1;
@@ -614,11 +643,26 @@ async fn execute(app: &AppState, server: &Server, manual: bool) -> Result<Report
             report.failed.push(task.name());
         }
     }
-    match apt_result {
-        Some(true) => report.updated += 1,
-        Some(false) => report.failed.push("apt".into()),
-        None => (),
+    if let Some(succeeded) = apt_result {
+        checks.push(PollCheck {
+            definition_id: "apt".into(),
+            instance_id: None,
+            succeeded,
+        });
+        if succeeded {
+            report.updated += 1;
+        } else {
+            report.failed.push("apt".into());
+        }
     }
+    span.finish(
+        match (transport.is_ok(), had_frame) {
+            (false, _) => PollTransport::Failed,
+            (true, false) => PollTransport::NoResults,
+            (true, true) => PollTransport::Completed,
+        },
+        checks,
+    );
     if let Some(entry) = app.polls.entries.lock().map_err(err)?.get_mut(&server.id) {
         if entry.endpoint == server.endpoint && entry.started == Some(started) {
             entry.rotate_to = first_deferred;
@@ -751,25 +795,25 @@ mod tests {
         assert!(app.store.server(&server.id).unwrap().observation.is_some());
         let log_at = app.store.log_state(&server.id).unwrap().last_success;
         assert!(log_at.is_some());
-        let commands = |action: &str| {
-            activity::page(activity::Query {
-                phase: Some("completed".into()),
-                search: Some(action.into()),
-                ..Default::default()
-            })
-            .unwrap()
-            .events
-            .into_iter()
-            .filter(|e| e.action == action)
-            .count()
+        let events = || activity::page(activity::Query::default()).unwrap().events;
+        let poll_events = || {
+            events()
+                .into_iter()
+                .filter(|e| e.category == "server" || e.category == "ssh")
+                .collect::<Vec<_>>()
         };
-        let before = commands("Collect server");
-        let version_checks = commands("Check collector version");
-        assert_eq!(before, 1);
-        assert_eq!(
-            version_checks, 1,
-            "the first poll must deploy and verify the collector"
-        );
+        let first_poll = poll_events();
+        assert_eq!(first_poll.len(), 1);
+        assert_eq!(first_poll[0].action, "poll");
+        assert_eq!(first_poll[0].phase, "completed");
+        let audit = first_poll[0].poll.as_ref().unwrap();
+        assert_eq!(audit.checks.len(), first.updated);
+        assert_eq!(audit.transport, PollTransport::Completed);
+        assert!(audit
+            .checks
+            .iter()
+            .any(|check| check.definition_id == "logs" && check.succeeded));
+        let reused = pool.stats().reused;
 
         let scope = monitoring::scope("logs", Some(&server.id), None);
         let policy = app.store.monitoring_policy(&scope).unwrap();
@@ -792,8 +836,11 @@ mod tests {
         assert!(one.failed.is_empty(), "{one:?}");
         assert_eq!(one.updated + 1, first.updated);
         assert_eq!(one.updated, two.updated);
-        assert_eq!(commands("Collect server"), before + 1);
-        assert_eq!(commands("Check collector version"), version_checks);
+        let polls = poll_events();
+        assert_eq!(polls.len(), 2);
+        assert!(polls.iter().all(|event| event.action == "poll"));
+        assert_eq!(polls[0].poll.as_ref().unwrap().checks.len(), one.updated);
+        assert_eq!(pool.stats().reused, reused + 1);
         assert_eq!(pool.stats().opened, 1);
         assert_eq!(
             app.store.cached_package_state(&server.id).unwrap().checks,

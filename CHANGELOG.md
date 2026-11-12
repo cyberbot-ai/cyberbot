@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.14.4
+
+- Reduce CPU use during server polling by reusing SSH connections across larger fleets, recording one activity entry per poll, and reducing repeated storage and interface work.
+
 ## 0.14.3
 
 - Prevent SQLite storage from filling up by sharing the service history quota and reclaiming older history in resumable batches, while preserving latest results and incident evidence. Resume collection automatically when space becomes available.

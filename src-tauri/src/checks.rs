@@ -800,7 +800,6 @@ impl Store {
         b.last = Some(run);
         b.error = None;
         write_binding(&tx, &b)?;
-        trim_runs(&tx)?;
         tx.commit().map_err(err)?;
         Ok(true)
     }
@@ -1190,6 +1189,7 @@ mod tests {
         sample(&s, &id, 52.0, at + 4);
         run(&s, &id);
         assert_eq!(s.snapshot().unwrap().incidents[0].updated_at, closed);
+        s.maintain_storage().unwrap();
         let db = s.0.lock().unwrap();
         assert_eq!(
             db.query_row("SELECT count(*) FROM check_evidence", [], |r| r

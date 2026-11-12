@@ -808,8 +808,7 @@ impl Store {
             params![server.id, serde_json::to_string(&state).map_err(err)?],
         )
         .map_err(err)?;
-        tx.execute("DELETE FROM log_evidence WHERE incident_id IN (SELECT id FROM incidents WHERE json_extract(payload,'$.status')='resolved' AND json_extract(payload,'$.updatedAt')<?1)",[at-30*86400]).map_err(err)?;
-        tx.execute("DELETE FROM log_summaries WHERE server_id=?1 AND rowid!=(SELECT rowid FROM log_summaries WHERE server_id=?1 ORDER BY at DESC,rowid DESC LIMIT 1) AND (at<?2 OR id NOT IN (SELECT id FROM log_summaries WHERE server_id=?1 ORDER BY at DESC,rowid DESC LIMIT 1000)) AND id NOT IN (SELECT summary_id FROM log_evidence)",params![server.id,at-7*86400]).map_err(err)?;
+        crate::storage::trim_server_logs(&tx, &server.id)?;
         tx.commit().map_err(err)?;
         Ok(summary)
     }

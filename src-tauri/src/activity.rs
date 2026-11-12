@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, VecDeque},
     fs::{File, OpenOptions},
+    future::Future,
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     sync::{
@@ -15,10 +16,12 @@ use std::{
 
 pub const LIMIT: u64 = 30 * 1024 * 1024;
 const MAX_RECORD: usize = 2048;
+const MAX_POLL_RECORD: usize = 8192;
 const BLOCK: u64 = 65536;
 const SCAN_LIMIT: u64 = 2 * 1024 * 1024;
 static GLOBAL: OnceLock<Result<Arc<Journal>, String>> = OnceLock::new();
 static LOST: AtomicU64 = AtomicU64::new(0);
+tokio::task_local! { static POLL_TRANSPORT: (); }
 fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
@@ -61,6 +64,34 @@ pub struct ActionAudit {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub goal: Option<String>,
 }
+#[derive(Clone, Copy, Serialize, Deserialize, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum PollTransport {
+    Completed,
+    Failed,
+    NoResults,
+    Interrupted,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PollCheck {
+    pub definition_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance_id: Option<String>,
+    pub succeeded: bool,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PollAudit {
+    pub trigger: String,
+    pub version: String,
+    pub revision: i64,
+    pub transport: PollTransport,
+    pub checks: Vec<PollCheck>,
+}
+
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Event {
@@ -79,6 +110,28 @@ pub struct Event {
     pub duration_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub monitoring: Option<crate::monitoring::Execution>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) poll: Option<PollAudit>,
+}
+
+impl Event {
+    fn limit(&self) -> usize {
+        if self.poll.is_some() {
+            MAX_POLL_RECORD
+        } else {
+            MAX_RECORD
+        }
+    }
+
+    fn matches_definition(&self, id: &str) -> bool {
+        self.monitoring
+            .as_ref()
+            .is_some_and(|m| m.definition_id == id)
+            || self
+                .poll
+                .as_ref()
+                .is_some_and(|poll| poll.checks.iter().any(|check| check.definition_id == id))
+    }
 }
 #[derive(Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -179,7 +232,7 @@ impl Journal {
                     .write(true)
                     .open(&last.path)
                     .map_err(err)?;
-                let start = last.bytes.saturating_sub(MAX_RECORD as u64);
+                let start = last.bytes.saturating_sub(MAX_POLL_RECORD as u64);
                 f.seek(SeekFrom::Start(start)).map_err(err)?;
                 let mut tail = Vec::new();
                 f.read_to_end(&mut tail).map_err(err)?;
@@ -272,9 +325,10 @@ impl Journal {
             return Err("Activity logging paused after an error. Restart Cyberbot.".into());
         }
         let result = (|| {
+            let limit = event.limit();
             if w.segments
                 .back()
-                .is_none_or(|s| s.bytes + MAX_RECORD as u64 > self.segment_limit)
+                .is_none_or(|s| s.bytes + limit as u64 > self.segment_limit)
             {
                 w.file = None;
                 while w.segments.len() >= 3 {
@@ -317,7 +371,7 @@ impl Journal {
             event.run_id = event.run_id.map(|s| clean(&s, 64));
             let mut line = serde_json::to_vec(&event).map_err(err)?;
             line.push(b'\n');
-            if line.len() > MAX_RECORD {
+            if line.len() > limit || line.len() as u64 > self.segment_limit {
                 return Err("The event exceeds the activity log size limit".into());
             }
             if w.file.is_none() {
@@ -414,7 +468,7 @@ impl Journal {
                     let mut offset = before;
                     for line in bytes[first..].split_inclusive(|b| *b == b'\n').rev() {
                         offset -= line.len() as u64;
-                        if line.len() > MAX_RECORD {
+                        if line.len() > MAX_POLL_RECORD {
                             skipped += 1;
                             continue;
                         }
@@ -422,14 +476,17 @@ impl Journal {
                             skipped += 1;
                             continue;
                         };
+                        if line.len() > event.limit() {
+                            skipped += 1;
+                            continue;
+                        }
                         // Old records stored only an ID; resolve those without rewriting segments.
                         self.enrich(&mut event);
-                        if query.definition_id.as_ref().is_none_or(|id| {
-                            event
-                                .monitoring
-                                .as_ref()
-                                .is_some_and(|m| &m.definition_id == id)
-                        }) && query.category.as_ref().is_none_or(|c| c == &event.category)
+                        if query
+                            .definition_id
+                            .as_ref()
+                            .is_none_or(|id| event.matches_definition(id))
+                            && query.category.as_ref().is_none_or(|c| c == &event.category)
                             && query.phase.as_ref().is_none_or(|p| p == &event.phase)
                             && (search.is_empty()
                                 || format!(
@@ -536,18 +593,21 @@ fn record(event: Event) {
     }
 }
 pub fn info(category: &str, action: &str, target: Option<String>) {
-    event(category, action, target, "info");
+    if !poll_transport_event(category) {
+        record(new_event(category, action, target, "info"));
+    }
 }
-pub(crate) fn poll_result(target: &str, success: bool) {
-    event(
-        "server",
-        "Server poll result",
-        Some(target.into()),
-        if success { "completed" } else { "failed" },
-    );
+
+pub(crate) async fn poll_transport<F: Future>(run: F) -> F::Output {
+    POLL_TRANSPORT.scope((), run).await
 }
-fn event(category: &str, action: &str, target: Option<String>, phase: &str) {
-    record(Event {
+
+fn poll_transport_event(category: &str) -> bool {
+    matches!(category, "ssh" | "server") && POLL_TRANSPORT.try_with(|_| ()).is_ok()
+}
+
+fn new_event(category: &str, action: &str, target: Option<String>, phase: &str) -> Event {
+    Event {
         ai_action: None,
         id: String::new(),
         at: millis(),
@@ -560,7 +620,8 @@ fn event(category: &str, action: &str, target: Option<String>, phase: &str) {
         run_id: None,
         duration_ms: None,
         monitoring: crate::monitoring::context(),
-    });
+        poll: None,
+    }
 }
 pub(crate) fn action(request: &crate::ai_actions::Request, phase: &str) {
     record(Event {
@@ -598,12 +659,12 @@ pub(crate) fn action(request: &crate::ai_actions::Request, phase: &str) {
         run_id: Some(request.run_id.clone()),
         duration_ms: request.review.as_ref().map(|r| r.duration_ms),
         monitoring: None,
+        poll: None,
     });
 }
 pub struct Span {
-    event: Event,
+    event: Option<Event>,
     start: Instant,
-    finished: bool,
     sink: Option<Arc<Journal>>,
 }
 pub fn id_target(value: &str) -> Option<String> {
@@ -621,13 +682,18 @@ pub fn begin_run(
     target: Option<String>,
     run_id: Option<String>,
 ) -> Span {
-    Span::new(
-        GLOBAL.get().and_then(|g| g.as_ref().ok()).cloned(),
-        category,
-        action,
-        target,
-        run_id,
-    )
+    if poll_transport_event(category) {
+        return Span {
+            event: None,
+            start: Instant::now(),
+            sink: None,
+        };
+    }
+    Span::new(sink(), category, action, target, run_id)
+}
+
+fn sink() -> Option<Arc<Journal>> {
+    GLOBAL.get().and_then(|g| g.as_ref().ok()).cloned()
 }
 
 impl Span {
@@ -638,32 +704,23 @@ impl Span {
         target: Option<String>,
         run_id: Option<String>,
     ) -> Self {
-        let mut event = Event {
-            ai_action: None,
-            id: String::new(),
-            at: millis(),
-            category: category.into(),
-            action: action.into(),
-            phase: "started".into(),
-            operation_id: uuid::Uuid::new_v4().to_string(),
-            target,
-            server: None,
-            run_id,
-            duration_ms: None,
-            monitoring: crate::monitoring::context(),
-        };
+        let mut event = new_event(category, action, target, "started");
+        event.run_id = run_id;
+        let span = Self::capture(sink, event, Instant::now());
+        span.write(span.event.as_ref().unwrap().clone());
+        span
+    }
+
+    fn capture(sink: Option<Arc<Journal>>, mut event: Event, start: Instant) -> Self {
         if let Some(log) = &sink {
             // Keep both phases tied to the original endpoint, even if inventory changes mid-run.
             log.enrich(&mut event);
         }
-        let span = Self {
-            event,
-            start: Instant::now(),
-            finished: false,
+        Self {
+            event: Some(event),
+            start,
             sink,
-        };
-        span.write(span.event.clone());
-        span
+        }
     }
     fn write(&self, event: Event) {
         if let Some(log) = &self.sink {
@@ -675,9 +732,7 @@ impl Span {
         }
     }
     pub fn finish(&mut self, phase: &str) {
-        if !self.finished {
-            self.finished = true;
-            let mut e = self.event.clone();
+        if let Some(mut e) = self.event.take() {
             e.at = millis();
             e.phase = phase.into();
             e.duration_ms = Some(self.start.elapsed().as_millis() as u64);
@@ -685,7 +740,9 @@ impl Span {
         }
     }
     pub fn finish_as(&mut self, phase: &str, action: &'static str) {
-        self.event.action = action.into();
+        if let Some(event) = &mut self.event {
+            event.action = action.into();
+        }
         self.finish(phase);
     }
     pub fn result<T>(&mut self, result: &Result<T, String>) {
@@ -694,6 +751,55 @@ impl Span {
         } else {
             "failed"
         });
+    }
+}
+
+pub(crate) struct PollSpan(Span);
+
+impl PollSpan {
+    pub(crate) fn begin(
+        server: &crate::model::Server,
+        execution: &crate::monitoring::Execution,
+        start: Instant,
+    ) -> Self {
+        Self::new(sink(), server, execution, start)
+    }
+
+    fn new(
+        sink: Option<Arc<Journal>>,
+        server: &crate::model::Server,
+        execution: &crate::monitoring::Execution,
+        start: Instant,
+    ) -> Self {
+        let mut event = new_event("server", "poll", Some(server.id.clone()), "interrupted");
+        event.server = Some(ServerContext {
+            id: None,
+            name: server.name.clone(),
+            address: crate::ssh::target(&server.endpoint),
+        });
+        event.poll = Some(PollAudit {
+            trigger: execution.trigger.clone(),
+            version: execution.version.clone(),
+            revision: execution.revision,
+            transport: PollTransport::Interrupted,
+            checks: Vec::new(),
+        });
+        Self(Span::capture(sink, event, start))
+    }
+
+    pub(crate) fn finish(mut self, transport: PollTransport, checks: Vec<PollCheck>) {
+        if let Some(audit) = self.0.event.as_mut().and_then(|event| event.poll.as_mut()) {
+            let phase = if transport == PollTransport::Completed
+                && checks.iter().all(|check| check.succeeded)
+            {
+                "completed"
+            } else {
+                "failed"
+            };
+            audit.transport = transport;
+            audit.checks = checks;
+            self.0.finish(phase);
+        }
     }
 }
 impl Drop for Span {
@@ -719,6 +825,7 @@ mod tests {
             run_id: None,
             duration_ms: Some(n),
             monitoring: None,
+            poll: None,
         }
     }
     fn disk(dir: &Path) -> u64 {
@@ -726,6 +833,105 @@ mod tests {
             .unwrap()
             .map(|e| e.unwrap().metadata().unwrap().len())
             .sum()
+    }
+
+    #[test]
+    fn each_poll_writes_one_terminal_event_and_matches_its_checks() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = Arc::new(Journal::open(dir.path()).unwrap());
+        let server = server();
+        let execution = crate::monitoring::Execution {
+            definition_id: "metrics".into(),
+            version: "version".into(),
+            trigger: "manual".into(),
+            instance_id: None,
+            server_id: Some(server.id.clone()),
+            revision: 42,
+        };
+        let start = || PollSpan::new(Some(log.clone()), &server, &execution, Instant::now());
+        let redis = |succeeded| PollCheck {
+            definition_id: "redis".into(),
+            instance_id: Some("default".into()),
+            succeeded,
+        };
+        start().finish(PollTransport::Completed, vec![redis(true)]);
+        start().finish(PollTransport::Completed, vec![redis(false)]);
+        start().finish(PollTransport::Failed, vec![redis(true)]);
+        drop(start());
+
+        let page = log.page(Query::default()).unwrap();
+        let phases: Vec<_> = page.events.iter().map(|e| e.phase.as_str()).collect();
+        assert_eq!(phases, ["interrupted", "failed", "failed", "completed"]);
+        assert!(page
+            .events
+            .iter()
+            .all(|e| e.action == "poll" && e.duration_ms.is_some()));
+        assert_eq!(
+            page.events[0].poll.as_ref().unwrap().transport,
+            PollTransport::Interrupted
+        );
+        assert_eq!(
+            page.events[1].poll.as_ref().unwrap().transport,
+            PollTransport::Failed
+        );
+
+        let filtered = log
+            .page(Query {
+                definition_id: Some("redis".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(filtered.events.len(), 3);
+        let partial = filtered.events[1].poll.as_ref().unwrap();
+        assert_eq!(partial.trigger, "manual");
+        assert_eq!(partial.transport, PollTransport::Completed);
+        assert!(!partial.checks[0].succeeded);
+    }
+
+    #[test]
+    fn a_large_poll_fits_the_log_and_survives_partial_tail_recovery() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = Arc::new(Journal::open(dir.path()).unwrap());
+        let mut server = server();
+        server.name = "\"".repeat(160);
+        server.endpoint.host = "\\".repeat(240);
+        let execution = crate::monitoring::Execution {
+            definition_id: "metrics".into(),
+            version: "a".repeat(24),
+            trigger: "after_action".into(),
+            instance_id: None,
+            server_id: Some(server.id.clone()),
+            revision: i64::MAX,
+        };
+        let checks = (0..68)
+            .map(|i| PollCheck {
+                definition_id: "clickhouse".into(),
+                instance_id: Some(format!("00000000-0000-0000-0000-{i:012}")),
+                succeeded: false,
+            })
+            .collect();
+        PollSpan::new(Some(log.clone()), &server, &execution, Instant::now())
+            .finish(PollTransport::Failed, checks);
+        let size = disk(dir.path());
+        assert!(size > MAX_RECORD as u64 && size <= MAX_POLL_RECORD as u64);
+        drop(log);
+        let segment = std::fs::read_dir(dir.path())
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        OpenOptions::new()
+            .append(true)
+            .open(segment)
+            .unwrap()
+            .write_all(&vec![b'x'; MAX_POLL_RECORD - 1])
+            .unwrap();
+        let log = Journal::open(dir.path()).unwrap();
+        assert_eq!(disk(dir.path()), size);
+        let page = log.page(Query::default()).unwrap();
+        assert_eq!(page.events.len(), 1);
+        assert_eq!(page.events[0].poll.as_ref().unwrap().checks.len(), 68);
     }
     fn server() -> crate::model::Server {
         crate::model::Server {

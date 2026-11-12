@@ -48,7 +48,7 @@ const scopeOrigin: Record<string, string> = {
   factory: 'Factory default', global: 'From global settings', server: 'From server settings', instance: 'Connection override',
 };
 const resetLabel = computed(() => instance.value ? 'Use server settings' : props.server ? 'Use global settings' : 'Use factory defaults');
-const triggers: Record<string, string> = { schedule: 'On schedule', manual: 'Manual', ai: 'AI request' };
+const triggers: Record<string, string> = { schedule: 'On schedule', manual: 'Manual', ai: 'AI request', after_action: 'After an action' };
 const phases: Record<string, string> = { completed: 'Finished', failed: 'Failed', cancelled: 'Cancelled', interrupted: 'Interrupted', info: 'Event' };
 const message = (value: unknown) => String(value).replace(/^Error: /, '');
 const hasOverride = (field: MonitoringScalarField) => policy.value?.overrides[field] != null;
@@ -195,12 +195,34 @@ async function loadHistory() {
       query: { definitionId: props.definition.id, search: props.server || null },
     });
     if (current !== historyGeneration) return;
-    recent.value = result.events.filter(item => item.phase !== 'started' && (!instance.value || item.monitoring?.instanceId === instance.value)).slice(0, 8);
+    recent.value = result.events.flatMap(recentRuns).slice(0, 8);
   } catch (failure) {
     if (current === historyGeneration) historyError.value = message(failure);
   } finally {
     if (current === historyGeneration) loadingHistory.value = false;
   }
+}
+
+function recentRuns(event: ActivityEvent): ActivityEvent[] {
+  const poll = event.poll;
+  if (!poll) {
+    return event.phase !== 'started' && (!instance.value || event.monitoring?.instanceId === instance.value) ? [event] : [];
+  }
+  return poll.checks
+    .filter(check => check.definitionId === props.definition.id && (!instance.value || check.instanceId === instance.value))
+    .map(check => ({
+      ...event,
+      id: `${event.id}/${check.instanceId ?? ''}`,
+      phase: check.succeeded ? 'completed' : 'failed',
+      monitoring: {
+        definitionId: check.definitionId,
+        instanceId: check.instanceId ?? null,
+        serverId: event.target,
+        trigger: poll.trigger,
+        version: poll.version,
+        revision: poll.revision,
+      },
+    }));
 }
 function showHistory(event: Event) {
   historyOpen.value = (event.target as HTMLDetailsElement).open;

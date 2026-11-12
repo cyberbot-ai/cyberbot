@@ -20,6 +20,7 @@ use tokio::sync::{Mutex as AsyncMutex, Notify, Semaphore};
 pub const KEEPALIVE_SECONDS: u64 = 60;
 pub const IDLE_SECONDS: u64 = 15 * 60;
 pub const DEFAULT_LIMIT: usize = 32;
+pub(crate) const INVENTORY_LIMIT: usize = 192;
 const STARTUP_LIMIT: usize = 64;
 const OPEN_LIMIT: usize = 16;
 const WAIT_TIMEOUT: Duration = Duration::from_secs(25);
@@ -40,7 +41,9 @@ pub fn install(pool: Pool) -> Result<(), String> {
 
 pub fn global() -> Result<&'static Pool, String> {
     GLOBAL
-        .get_or_init(|| Pool::new(DEFAULT_LIMIT, Duration::from_secs(IDLE_SECONDS), None))
+        .get_or_init(|| {
+            Pool::with_capacity(Capacity::Inventory, Duration::from_secs(IDLE_SECONDS), None)
+        })
         .as_ref()
         .map_err(Clone::clone)
 }
@@ -69,9 +72,25 @@ pub fn maintain_global(endpoints: &[Endpoint]) {
 
 #[derive(Clone)]
 pub struct Pool(Arc<Inner>);
+
+#[derive(Clone, Copy)]
+enum Capacity {
+    Fixed(usize),
+    Inventory,
+}
+
+impl Capacity {
+    fn limit(self, endpoints: usize) -> usize {
+        match self {
+            Self::Fixed(limit) => limit,
+            Self::Inventory => endpoints.clamp(DEFAULT_LIMIT, INVENTORY_LIMIT),
+        }
+    }
+}
+
 struct Inner {
     root: PathBuf,
-    limit: usize,
+    capacity: Capacity,
     idle: Duration,
     config: Option<PathBuf>,
     state: Mutex<State>,
@@ -90,7 +109,8 @@ struct State {
     startup_until: Option<Instant>,
 }
 impl State {
-    fn limit(&self, regular: usize) -> usize {
+    fn limit(&self, capacity: Capacity) -> usize {
+        let regular = capacity.limit(self.allowed.as_ref().map_or(0, BTreeSet::len));
         if self
             .startup_until
             .is_some_and(|until| Instant::now() < until)
@@ -228,7 +248,17 @@ impl Drop for Inner {
 impl Pool {
     /// Custom configuration is for isolated fixture pools; the desktop uses system OpenSSH config.
     pub fn new(limit: usize, idle: Duration, config: Option<PathBuf>) -> Result<Self, String> {
-        if !(1..=256).contains(&limit) || idle.is_zero() || idle > Duration::from_secs(IDLE_SECONDS)
+        Self::with_capacity(Capacity::Fixed(limit), idle, config)
+    }
+
+    fn with_capacity(
+        capacity: Capacity,
+        idle: Duration,
+        config: Option<PathBuf>,
+    ) -> Result<Self, String> {
+        if !(1..=256).contains(&capacity.limit(0))
+            || idle.is_zero()
+            || idle > Duration::from_secs(IDLE_SECONDS)
         {
             return Err("Invalid SSH pool limits".into());
         }
@@ -245,7 +275,7 @@ impl Pool {
             .map_err(|e| e.to_string())?;
         Ok(Self(Arc::new(Inner {
             root,
-            limit,
+            capacity,
             idle,
             config,
             state: Mutex::new(State::default()),
@@ -262,8 +292,8 @@ impl Pool {
             .0
             .state
             .lock()
-            .map(|s| (s.limit(self.0.limit), s.entries.len()))
-            .unwrap_or((self.0.limit, 0));
+            .map(|s| (s.limit(self.0.capacity), s.entries.len()))
+            .unwrap_or((self.0.capacity.limit(0), 0));
         Stats {
             limit,
             connections,
@@ -311,9 +341,13 @@ impl Pool {
     }
     pub fn retain(&self, endpoints: &[Endpoint]) {
         let allowed = endpoints.iter().map(key).collect::<BTreeSet<_>>();
-        if let Ok(mut state) = self.0.state.lock() {
-            state.allowed = Some(allowed.clone());
-        }
+        let inventory_changed = self.0.state.lock().is_ok_and(|mut state| {
+            let changed = state.allowed.as_ref() != Some(&allowed);
+            if changed {
+                state.allowed = Some(allowed.clone());
+            }
+            changed
+        });
         self.prune(
             |e| !allowed.contains(&e.key) || !e.files_unchanged(),
             SETTINGS_CHANGED,
@@ -327,6 +361,9 @@ impl Pool {
             "SSH: idle",
         );
         self.trim_idle();
+        if inventory_changed {
+            self.0.changed.notify_waiters();
+        }
     }
 
     pub(crate) async fn refresh_changed_directories(&self) {
@@ -419,7 +456,7 @@ impl Pool {
         let excess = state
             .entries
             .len()
-            .saturating_sub(state.limit(self.0.limit) + retiring);
+            .saturating_sub(state.limit(self.0.capacity) + retiring);
         if excess == 0 {
             return;
         }
@@ -523,7 +560,7 @@ impl Pool {
                     if !entry.retiring.swap(true, Ordering::SeqCst) {
                         retired = Some(entry.clone());
                     }
-                } else if state.entries.len() >= state.limit(self.0.limit) {
+                } else if state.entries.len() >= state.limit(self.0.capacity) {
                     let oldest = state
                         .entries
                         .values()
@@ -1035,6 +1072,44 @@ mod tests {
             known_hosts_file: None,
         }
     }
+
+    #[tokio::test]
+    async fn inventory_capacity_reuses_a_fleet_and_respects_the_ceiling() {
+        let pool =
+            Pool::with_capacity(Capacity::Inventory, Duration::from_secs(900), None).unwrap();
+        let mut endpoints: Vec<_> = (1..=150).map(endpoint).collect();
+        endpoints.push(endpoint(1));
+        pool.retain(&endpoints);
+        assert_eq!(pool.stats().limit, 150);
+        assert_eq!(pool.stats().connections, 0);
+        let mut entries = Vec::new();
+        for target in &endpoints[..150] {
+            entries.push(pool.reserve(target).await.unwrap().entry.clone());
+        }
+        for (target, entry) in endpoints.iter().zip(entries.iter()) {
+            let lease = pool.reserve(target).await.unwrap();
+            assert!(Arc::ptr_eq(&lease.entry, entry));
+        }
+        assert_eq!(pool.stats().evicted, 0);
+
+        endpoints.extend((151..=193).map(endpoint));
+        pool.retain(&endpoints);
+        for target in &endpoints[151..] {
+            drop(pool.reserve(target).await.unwrap());
+        }
+        assert_eq!(pool.stats().limit, INVENTORY_LIMIT);
+        assert_eq!(pool.stats().connections, INVENTORY_LIMIT);
+        assert_eq!(pool.stats().evicted, 1);
+
+        let lease = pool.reserve(&endpoint(193)).await.unwrap();
+        pool.retain(&[endpoint(193)]);
+        assert_eq!(pool.stats().limit, DEFAULT_LIMIT);
+        assert_eq!(pool.stats().connections, 1);
+        assert!(lease.options().is_ok());
+        assert!(pool.reserve(&endpoint(1)).await.is_err());
+        pool.shutdown();
+    }
+
     #[tokio::test]
     async fn bounds_capacity_keeps_active_leases_and_evicts_idle_lru() {
         let pool = Pool::new(2, Duration::from_secs(900), None).unwrap();

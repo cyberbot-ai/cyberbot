@@ -469,10 +469,7 @@ async fn poll_server(
     state: State<'_, Arc<AppState>>,
     id: String,
 ) -> Result<server_poll::Report, String> {
-    let mut span = activity::begin("app", "poll_server", activity::id_target(&id));
-    let result = server_poll::refresh(state.inner().clone(), id).await;
-    span.result(&result);
-    result
+    server_poll::refresh(state.inner().clone(), id).await
 }
 
 #[tauri::command]
@@ -1249,7 +1246,9 @@ fn create_state(root: PathBuf) -> Result<Arc<AppState>, String> {
     let instance = InstanceLock::acquire(&root)?;
     let store = Store::open(&root.join("cyberbot.sqlite"))?;
     store.recover_actions()?;
-    store.maintain_storage()?;
+    if !store.collection_allowed()? {
+        store.maintain_storage()?;
+    }
     store.backfill_ledger()?;
     let mut runs = store.investigations()?;
     for run in &mut runs {
@@ -1598,10 +1597,11 @@ fn open_server(
 
 fn background(app: tauri::AppHandle, state: Arc<AppState>) {
     tauri::async_runtime::spawn(monitor_connectivity(app.clone(), state.clone()));
+    tauri::async_runtime::spawn(server_poll::publish_changes(app.clone(), state.clone()));
+    tauri::async_runtime::spawn(storage::maintain_background(app.clone(), state.clone()));
     tauri::async_runtime::spawn(async move {
         let mut inventory_at = now() + 60;
         let mut reconcile_at = 0;
-        let mut maintenance_at = 0;
         let mut advisory_at = 0;
         let mut advisory_job: Option<tokio::task::JoinHandle<()>> = None;
         let mut matching_job: Option<tokio::task::JoinHandle<()>> = None;
@@ -1634,21 +1634,7 @@ fn background(app: tauri::AppHandle, state: Arc<AppState>) {
                 }
                 break;
             }
-            if now() >= maintenance_at {
-                let maintenance = monitoring::sync(&state.store, "storage", "schedule", || {
-                    let mut span = activity::begin("app", "storage_cleanup", None);
-                    let result = state.store.maintain_storage();
-                    span.result(&result);
-                    result
-                });
-                let pending = maintenance.as_ref().is_ok_and(|pending| *pending);
-                if let Err(e) = maintenance {
-                    let _ = state.store.block_auto(&e);
-                }
-                maintenance_at = now() + if pending { 1 } else { 60 };
-                let _ = app.emit("state-changed", ());
-            }
-            let storage_ok = state.store.storage_status().is_ok_and(|s| !s.blocked);
+            let storage_ok = state.store.collection_allowed().unwrap_or(false);
             if storage_ok && state.store.settings().is_ok_and(|s| !s.paused) {
                 if checks_job.as_ref().is_none_or(|j| j.is_finished()) {
                     let state = state.clone();
@@ -1721,8 +1707,7 @@ fn background(app: tauri::AppHandle, state: Arc<AppState>) {
                     let _ = state.store.block_auto(&error);
                 }
             }
-            let mut next =
-                Instant::now() + Duration::from_secs((maintenance_at - now()).clamp(0, 5) as u64);
+            let mut next = Instant::now() + Duration::from_secs(5);
             if let Ok((servers, settings)) = state.store.poll_targets() {
                 if now() >= pool_at {
                     pool_at = now() + 5;
@@ -1987,6 +1972,7 @@ pub fn run() {
             if let Some(state) = app.try_state::<Arc<AppState>>() {
                 state.stop.store(true, Ordering::Relaxed);
                 state.polls.wake.notify_one();
+                state.polls.notify_changed();
                 state.fleet_console.shutdown();
             }
             ssh_pool::shutdown_global();

@@ -9,6 +9,18 @@ const page=(action='SSH connection',next:string|null=null):ActivityPage=>({event
 beforeEach(()=>{vi.clearAllMocks();mocks.call.mockResolvedValue(page());});
 afterEach(()=>{vi.useRealTimers();});
 describe('action journal',()=>{
+ it('shows the trigger, transport and failed checks in one server poll row',async()=>{
+  const result=page('poll');
+  result.events[0]={...result.events[0],category:'server',phase:'failed',poll:{trigger:'manual',version:'hash',revision:1,transport:'failed',checks:[
+   {definitionId:'metrics',succeeded:true},{definitionId:'logs',succeeded:false},
+  ]}};
+  mocks.call.mockResolvedValue(result);
+  const w=mount(ActivityLog);await flushPromises();
+  expect(w.findAll('tbody tr')).toHaveLength(1);
+  expect(w.get('tbody tr').text()).toContain('Manual · 1 updated · 1 failed (System logs) · SSH poll failed');
+  expect(w.get('tbody .duration').text()).toBe('230 ms');
+  w.unmount();
+ });
  it('opens the exact monitoring definition and instance without remote work',async()=>{
   const result=page('Collect metrics');result.events[0].monitoring={definitionId:'redis',serverId:'one',instanceId:'cache',trigger:'schedule',version:'definition-v1',revision:1};mocks.call.mockResolvedValue(result);
   const w=mount(ActivityLog);await flushPromises();expect(w.text()).toContain('redis · scheduled');await w.get('.definition').trigger('click');expect(w.emitted('monitoring')).toEqual([[{definitionId:'redis',serverId:'one',instanceId:'cache'}]]);expect(mocks.call.mock.calls.every(c=>c[0]==='activity_log')).toBe(true);w.unmount();

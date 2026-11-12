@@ -3,15 +3,19 @@ use crate::{model::now, store::Store};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use std::{
-    path::PathBuf,
+    path::{Path, PathBuf},
+    sync::{atomic::Ordering, Arc},
     time::{Duration, Instant},
 };
+use tauri::Emitter;
 const LIMIT: u64 = 1024 * 1024 * 1024;
 const HIGH_WATER: u64 = 900 * 1024 * 1024;
 const LOW_WATER: u64 = 800 * 1024 * 1024;
 const BATCH: usize = 500;
-const PASS_BUDGET: Duration = Duration::from_secs(2);
+const PASS_BUDGET: Duration = Duration::from_millis(500);
 const WAL_LIMIT: u64 = 32 * 1024 * 1024;
+pub(crate) const CLEANUP_INTERVAL_SECONDS: u64 = 300;
+const PRESSURE_CHECK: Duration = Duration::from_secs(5);
 fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
@@ -21,9 +25,16 @@ fn path(db: &Connection) -> Option<PathBuf> {
         .filter(|s| !s.is_empty())
         .map(PathBuf::from)
 }
-fn bytes(path: Option<PathBuf>) -> u64 {
+fn bytes(path: Option<&Path>) -> u64 {
     path.and_then(|p| std::fs::metadata(p).ok())
         .map_or(0, |m| m.len())
+}
+fn wal_path(path: Option<&Path>) -> Option<PathBuf> {
+    path.map(|path| {
+        let mut wal = path.as_os_str().to_os_string();
+        wal.push("-wal");
+        wal.into()
+    })
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -87,47 +98,107 @@ pub fn admit(db: &Connection) -> Result<(), String> {
     admit_with(db, LIMIT, HIGH_WATER)
 }
 fn admit_with(db: &Connection, limit: u64, high: u64) -> Result<(), String> {
-    let used = used_bytes(db)?;
-    let exhausted: bool = db
-        .query_row(
-            "SELECT exhausted FROM storage_cleanup WHERE id=1",
-            [],
-            |r| r.get(0),
-        )
-        .map_err(err)?;
-    if exhausted && used >= high {
-        return Err("Local storage is full of protected data. Latest results and incident evidence cannot be removed automatically; collection is paused.".into());
+    let p = path(db);
+    let mut space = Space::read(db, p.as_deref())?;
+    if space.wal >= WAL_LIMIT {
+        checkpoint(db);
+        space.wal = bytes(wal_path(p.as_deref()).as_deref());
     }
-    if bytes(path(db)) > limit {
-        return Err(
-            "The database exceeded 1 GiB. Collection is paused until cleanup and compaction."
-                .into(),
-        );
+    space.admit(limit, high)
+}
+
+struct Space {
+    used: u64,
+    file: u64,
+    wal: u64,
+    pressure: bool,
+    exhausted: bool,
+}
+
+impl Space {
+    fn read(db: &Connection, path: Option<&Path>) -> Result<Self, String> {
+        let (pressure, exhausted) = db
+            .prepare_cached("SELECT pressure,exhausted FROM storage_cleanup WHERE id=1")
+            .and_then(|mut query| query.query_row([], |r| Ok((r.get(0)?, r.get(1)?))))
+            .map_err(err)?;
+        Ok(Self {
+            used: used_bytes(db)?,
+            file: bytes(path),
+            wal: bytes(wal_path(path).as_deref()),
+            pressure,
+            exhausted,
+        })
     }
-    let wal = path(db).map(|p| PathBuf::from(format!("{}-wal", p.display())));
-    if bytes(wal.clone()) >= WAL_LIMIT {
-        let _: Result<(i64, i64, i64), _> =
-            db.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
-            });
-        if bytes(wal) >= WAL_LIMIT {
+
+    fn admit(&self, limit: u64, high: u64) -> Result<(), String> {
+        if self.exhausted && self.used >= high {
+            return Err("Local storage is full of protected data. Latest results and incident evidence cannot be removed automatically; collection is paused.".into());
+        }
+        if self.file > limit {
+            return Err(
+                "The database exceeded 1 GiB. Collection is paused until cleanup and compaction."
+                    .into(),
+            );
+        }
+        if self.wal >= WAL_LIMIT {
             return Err("The SQLite write-ahead log reached its limit. Collection pauses until the database reader finishes.".into());
         }
+        if self.used >= limit.saturating_sub(8 * 1024 * 1024) {
+            return Err(
+                "The SQLite database reached its 1 GiB limit. Collection pauses until cleanup."
+                    .into(),
+            );
+        }
+        Ok(())
     }
-    if used >= limit.saturating_sub(8 * 1024 * 1024) {
-        return Err(
-            "The SQLite database reached its 1 GiB limit. Collection pauses until cleanup.".into(),
-        );
+
+    fn cleanup_due(&self) -> bool {
+        self.pressure
+            || (self.used >= HIGH_WATER && !self.exhausted)
+            || self.file > LIMIT
+            || self.wal >= WAL_LIMIT
     }
-    Ok(())
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CleanupPass {
+    Complete,
+    Pending,
+    Pressure,
+    Deferred,
+}
+
+impl CleanupPass {
+    fn has_more(self) -> bool {
+        matches!(self, Self::Pending | Self::Pressure)
+    }
+
+    fn delay(self) -> Duration {
+        Duration::from_secs(match self {
+            Self::Complete => CLEANUP_INTERVAL_SECONDS,
+            Self::Pending => 5,
+            Self::Pressure => 1,
+            Self::Deferred => 60,
+        })
+    }
+}
+
 impl Store {
+    pub(crate) fn collection_allowed(&self) -> Result<bool, String> {
+        let db = self.0.lock().map_err(err)?;
+        Ok(Space::read(&db, path(&db).as_deref())?
+            .admit(LIMIT, HIGH_WATER)
+            .is_ok())
+    }
+
+    fn storage_cleanup_due(&self) -> Result<bool, String> {
+        let db = self.0.lock().map_err(err)?;
+        Ok(Space::read(&db, path(&db).as_deref())?.cleanup_due())
+    }
+
     pub(crate) fn storage_status(&self) -> Result<Status, String> {
         let db = self.0.lock().map_err(err)?;
         let p = path(&db);
-        let wal = p
-            .as_ref()
-            .map(|p| PathBuf::from(format!("{}-wal", p.display())));
         let cache_bytes = p
             .as_ref()
             .and_then(|p| p.parent())
@@ -138,14 +209,13 @@ impl Store {
             .filter(|m| m.is_file())
             .map(|m| m.len())
             .sum();
-        let database_bytes = used_bytes(&db)?;
-        let wal_bytes = bytes(wal);
-        let result = admit(&db);
+        let space = Space::read(&db, p.as_deref())?;
+        let result = space.admit(LIMIT, HIGH_WATER);
         Ok(Status {
             actions: crate::ai_actions::storage(&db)?,
             activity: crate::activity::status(),
-            database_bytes,
-            wal_bytes,
+            database_bytes: space.used,
+            wal_bytes: space.wal,
             limit_bytes: LIMIT,
             cache_bytes,
             cache_limit_bytes: 128 * 1024 * 1024,
@@ -153,8 +223,8 @@ impl Store {
             message: result.err(),
         })
     }
-    /// Returns true when another short pass is needed. State survives app restarts.
-    pub(crate) fn maintain_storage(&self) -> Result<bool, String> {
+    /// A pass resumes from the last committed phase, including after a restart.
+    pub(crate) fn maintain_storage(&self) -> Result<CleanupPass, String> {
         self.maintain_storage_with(PASS_BUDGET, HIGH_WATER, LOW_WATER, LIMIT)
     }
 
@@ -164,18 +234,19 @@ impl Store {
         high: u64,
         low: u64,
         limit: u64,
-    ) -> Result<bool, String> {
+    ) -> Result<CleanupPass, String> {
         let started = Instant::now();
         // Cache a history cutoff for this pass, rather than recounting its quota per batch.
         let mut boundary = None;
+        let database_path = path(&*self.0.lock().map_err(err)?);
+        let wal = wal_path(database_path.as_deref());
         loop {
             let mut db = self.0.lock().map_err(err)?;
-            let wal = path(&db).map(|p| PathBuf::from(format!("{}-wal", p.display())));
-            if bytes(wal.clone()) >= WAL_LIMIT {
+            if bytes(wal.as_deref()) >= WAL_LIMIT {
                 checkpoint(&db);
-                if bytes(wal) >= WAL_LIMIT {
+                if bytes(wal.as_deref()) >= WAL_LIMIT {
                     // A pinned reader must not let cleanup grow the WAL indefinitely.
-                    return Ok(false);
+                    return Ok(CleanupPass::Deferred);
                 }
             }
             let tx = db.transaction().map_err(err)?;
@@ -233,23 +304,32 @@ impl Store {
                     phase += 1;
                 }
             } else {
+                exhausted &= used >= high;
                 tx.execute(
-                    "UPDATE storage_cleanup SET phase=0,pressure=0,active=0 WHERE id=1",
-                    [],
+                    "UPDATE storage_cleanup SET phase=0,pressure=0,active=0,exhausted=?1 WHERE id=1",
+                    [exhausted],
                 )
                 .map_err(err)?;
                 tx.execute("INSERT INTO maintenance VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET at=excluded.at", [now()]).map_err(err)?;
                 tx.commit().map_err(err)?;
                 checkpoint(&db);
                 // Legacy databases above the ceiling need a one-off physical compaction.
-                if bytes(path(&db)) > limit
-                    && used_bytes(&db)? < limit.saturating_sub(16 * 1024 * 1024)
-                {
+                let oversized = bytes(database_path.as_deref()) > limit;
+                if oversized && used < limit.saturating_sub(16 * 1024 * 1024) {
                     db.execute_batch("VACUUM;").map_err(err)?;
                     checkpoint(&db);
                     configure(&db)?;
                 }
-                return Ok(false);
+                return Ok(
+                    if exhausted
+                        || bytes(database_path.as_deref()) > limit
+                        || bytes(wal.as_deref()) >= WAL_LIMIT
+                    {
+                        CleanupPass::Deferred
+                    } else {
+                        CleanupPass::Complete
+                    },
+                );
             }
             tx.execute(
                 "UPDATE storage_cleanup SET phase=?1,pressure=?2,exhausted=?3 WHERE id=1",
@@ -257,12 +337,67 @@ impl Store {
             )
             .map_err(err)?;
             tx.commit().map_err(err)?;
-            checkpoint(&db);
-            drop(db);
             if started.elapsed() >= budget {
-                return Ok(true);
+                checkpoint(&db);
+                if bytes(wal.as_deref()) >= WAL_LIMIT {
+                    return Ok(CleanupPass::Deferred);
+                }
+                return Ok(if pressure {
+                    CleanupPass::Pressure
+                } else {
+                    CleanupPass::Pending
+                });
             }
+            drop(db);
             std::thread::yield_now();
+        }
+    }
+}
+
+pub(crate) async fn maintain_background(app: tauri::AppHandle, state: Arc<crate::AppState>) {
+    use tokio::time::{sleep_until, Instant};
+
+    while !state.stop.load(Ordering::Relaxed) {
+        let before = state.store.collection_allowed().unwrap_or(false);
+        let worker = state.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            crate::monitoring::sync(&worker.store, "storage", "schedule", || {
+                let mut span = crate::activity::begin("app", "storage_cleanup", None);
+                let result = worker.store.maintain_storage();
+                span.result(&result);
+                result
+            })
+        })
+        .await
+        .map_err(err)
+        .and_then(|result| result);
+        let outcome = match result {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                let _ = state.store.block_auto(&error);
+                CleanupPass::Deferred
+            }
+        };
+        let after = state.store.collection_allowed().unwrap_or(false);
+        if !outcome.has_more() || before != after {
+            let _ = app.emit("state-changed", ());
+        }
+        if before != after {
+            state.polls.wake.notify_one();
+        }
+        let deadline = Instant::now() + outcome.delay();
+        if outcome == CleanupPass::Complete {
+            loop {
+                sleep_until(deadline.min(Instant::now() + PRESSURE_CHECK)).await;
+                if Instant::now() >= deadline
+                    || state.stop.load(Ordering::Relaxed)
+                    || state.store.storage_cleanup_due().unwrap_or(true)
+                {
+                    break;
+                }
+            }
+        } else {
+            sleep_until(deadline).await;
         }
     }
 }
@@ -291,6 +426,35 @@ fn checkpoint(db: &Connection) {
             let _ = db.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
         }
     }
+}
+
+const TRIM_SERVER_LOGS: &str = "DELETE FROM log_summaries AS h WHERE server_id=?1 AND (h.at,h.rowid) <= (
+    SELECT at,rowid FROM log_summaries WHERE server_id=?1 ORDER BY at DESC,rowid DESC LIMIT 1 OFFSET 1000
+) AND NOT EXISTS (SELECT 1 FROM log_evidence WHERE summary_id=h.id)";
+
+pub(crate) fn trim_server_logs(db: &Connection, server: &str) -> Result<(), String> {
+    db.prepare_cached(TRIM_SERVER_LOGS)
+        .and_then(|mut query| query.execute([server]))
+        .map(|_| ())
+        .map_err(err)
+}
+
+const TRIM_SERVICE_INSTANCE: &str = "DELETE FROM service_summaries AS h
+WHERE server_id=?1 AND kind=?2 AND instance_id=?3 AND (h.at,h.rowid) <= (
+    SELECT at,rowid FROM service_summaries WHERE server_id=?1 AND kind=?2 AND instance_id=?3
+    ORDER BY at DESC,rowid DESC LIMIT 1 OFFSET 1000
+) AND NOT EXISTS (SELECT 1 FROM service_evidence WHERE summary_id=h.id)";
+
+pub(crate) fn trim_service_instance(
+    db: &Connection,
+    server: &str,
+    kind: &str,
+    instance: &str,
+) -> Result<(), String> {
+    db.prepare_cached(TRIM_SERVICE_INSTANCE)
+        .and_then(|mut query| query.execute(params![server, kind, instance]))
+        .map(|_| ())
+        .map_err(err)
 }
 
 struct History {
@@ -341,10 +505,26 @@ impl History {
         filter
     }
     fn boundary(&self, db: &Connection, at: i64) -> Result<(i64, i64), String> {
+        let age = (at - self.days * 86400 - 1, i64::MAX);
+        // If the raw history fits, the unprotected history fits as well. The
+        // date index can answer this without reading rows or checking evidence.
+        let over_quota = db
+            .query_row(
+                &format!(
+                    "SELECT rowid FROM {} ORDER BY at DESC,rowid DESC LIMIT 1 OFFSET ?1",
+                    self.table
+                ),
+                [self.keep],
+                |r| r.get::<_, i64>(0),
+            )
+            .optional()
+            .map_err(err)?
+            .is_some();
+        if !over_quota {
+            return Ok(age);
+        }
         let quota: Option<(i64,i64)> = db.query_row(&format!("SELECT h.at,h.rowid FROM {} h WHERE {} ORDER BY h.at DESC,h.rowid DESC LIMIT 1 OFFSET ?1",self.table,self.disposable()), [self.keep], |r| Ok((r.get(0)?,r.get(1)?))).optional().map_err(err)?;
-        Ok(quota
-            .unwrap_or((i64::MIN, i64::MIN))
-            .max((at - self.days * 86400 - 1, i64::MAX)))
+        Ok(quota.map_or(age, |quota| quota.max(age)))
     }
     fn trim(&self, db: &Connection, boundary: (i64, i64)) -> Result<usize, String> {
         db.execute(&format!("DELETE FROM {} WHERE rowid IN (SELECT h.rowid FROM {} h WHERE (h.at,h.rowid)<=(?1,?2) AND {} ORDER BY h.at,h.rowid LIMIT {BATCH})", self.table,self.table,self.disposable()),params![boundary.0,boundary.1]).map_err(err)
@@ -426,6 +606,7 @@ mod tests {
             if !store
                 .maintain_storage_with(Duration::from_millis(10), high, low, limit)
                 .unwrap()
+                .has_more()
             {
                 return;
             }
@@ -453,6 +634,65 @@ mod tests {
             }
         }
         tx.commit().unwrap();
+    }
+
+    #[test]
+    fn scoped_history_limits_use_time_indexes_and_preserve_incident_samples() {
+        let (store, server) = fixture();
+        let at = now() - 8 * 86400;
+        {
+            let db = store.0.lock().unwrap();
+            db.execute(
+                "INSERT INTO incidents VALUES('open',?1,'{\"status\":\"open\"}')",
+                [&server],
+            )
+            .unwrap();
+            db.execute("WITH RECURSIVE n(i) AS (VALUES(0) UNION ALL SELECT i+1 FROM n WHERE i<1001) INSERT INTO log_summaries SELECT 'log-'||i,?1,?2,'{}' FROM n",params![server, at]).unwrap();
+            db.execute("WITH RECURSIVE n(i) AS (VALUES(0) UNION ALL SELECT i+1 FROM n WHERE i<1001) INSERT INTO service_summaries(id,server_id,kind,instance_id,at,payload) SELECT 'service-'||i,?1,'redis','default',?2,'{}' FROM n",params![server, at]).unwrap();
+            db.execute_batch("INSERT INTO log_evidence VALUES('open','log-0'); INSERT INTO service_evidence VALUES('open','service-0');").unwrap();
+            for (sql, args, index) in [
+                (
+                    TRIM_SERVER_LOGS,
+                    vec![server.as_str()],
+                    "log_summaries_server_at",
+                ),
+                (
+                    TRIM_SERVICE_INSTANCE,
+                    vec![server.as_str(), "redis", "default"],
+                    "service_summaries_instance_at",
+                ),
+            ] {
+                let mut stmt = db.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
+                let plan = stmt
+                    .query_map(rusqlite::params_from_iter(args), |row| {
+                        row.get::<_, String>(3)
+                    })
+                    .unwrap()
+                    .collect::<rusqlite::Result<Vec<_>>>()
+                    .unwrap()
+                    .join("\n");
+                assert!(plan.contains(index) && plan.contains("at<?"), "{plan}");
+                assert!(!plan.contains("TEMP B-TREE"), "{plan}");
+            }
+            trim_server_logs(&db, &server).unwrap();
+            trim_service_instance(&db, &server, "redis", "default").unwrap();
+            for (table, prefix) in [("log_summaries", "log"), ("service_summaries", "service")] {
+                let counts = db.query_row(&format!("SELECT count(*),sum(id=?1||'-0'),sum(id=?1||'-1'),sum(id=?1||'-1001') FROM {table}"), [prefix], |r| Ok((r.get::<_,i64>(0)?,r.get::<_,i64>(1)?,r.get::<_,i64>(2)?,r.get::<_,i64>(3)?))).unwrap();
+                assert_eq!(counts, (1001, 1, 0, 1));
+            }
+        }
+        while store.maintain_storage().unwrap().has_more() {}
+        let db = store.0.lock().unwrap();
+        for (table, prefix) in [("log_summaries", "log"), ("service_summaries", "service")] {
+            let ids = db
+                .prepare(&format!("SELECT id FROM {table} ORDER BY rowid"))
+                .unwrap()
+                .query_map([], |row| row.get::<_, String>(0))
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap();
+            assert_eq!(ids, [format!("{prefix}-0"), format!("{prefix}-1001")]);
+        }
     }
 
     #[test]
@@ -505,12 +745,12 @@ mod tests {
             )
             .unwrap();
             checkpoint(&db);
-            assert!(bytes(path(&db)) > limit);
+            assert!(bytes(path(&db).as_deref()) > limit);
             assert!(admit_with(&db, limit, 24 * 1024 * 1024).is_err());
         }
         finish(&store, 24 * 1024 * 1024, 16 * 1024 * 1024, limit);
         let db = store.0.lock().unwrap();
-        assert!(bytes(path(&db)) < limit);
+        assert!(bytes(path(&db).as_deref()) < limit);
         assert!(admit_with(&db, limit, 24 * 1024 * 1024).is_ok());
         let pages: u64 = db
             .pragma_query_value(None, "max_page_count", |r| r.get(0))
@@ -615,7 +855,8 @@ mod tests {
         }
         assert!(store
             .maintain_storage_with(Duration::ZERO, high, low, limit)
-            .unwrap());
+            .unwrap()
+            .has_more());
         {
             let db = store.0.lock().unwrap();
             assert_eq!(
@@ -642,7 +883,7 @@ mod tests {
             2000
         );
         // Allocated but reusable pages must not cause a false full warning.
-        assert!(bytes(path(&db)) > used_bytes(&db).unwrap());
+        assert!(bytes(path(&db).as_deref()) > used_bytes(&db).unwrap());
         assert!(
             db.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| r
                 .get::<_, i64>(
@@ -796,7 +1037,7 @@ mod tests {
         let mut passes = 0;
         loop {
             let pass = Instant::now();
-            let pending = store.maintain_storage().unwrap();
+            let pending = store.maintain_storage().unwrap().has_more();
             eprintln!("cleanup pass {passes}: {:?}", pass.elapsed());
             assert!(pass.elapsed() < Duration::from_secs(5));
             passes += 1;
@@ -877,7 +1118,7 @@ mod tests {
             )
             .unwrap();
         }
-        while store.maintain_storage().unwrap() {}
+        while store.maintain_storage().unwrap().has_more() {}
         let db = store.0.lock().unwrap();
         let count = |table: &str| -> i64 {
             db.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
@@ -961,16 +1202,20 @@ mod tests {
         let db = store.0.lock().unwrap();
         db.execute_batch("PRAGMA busy_timeout=1;").unwrap();
         for _ in 0..36 {
-            db.execute("INSERT INTO investigations VALUES('wal',0,randomblob(1048576)) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",[]).unwrap();
+            db.execute("INSERT INTO investigations VALUES('wal',0,json_object('status','completed','padding',hex(randomblob(524288)))) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",[]).unwrap();
         }
         assert!(admit(&db).is_err());
         let wal = PathBuf::from(format!("{}-wal", path.display()));
-        let before = bytes(Some(wal.clone()));
+        let before = bytes(Some(&wal));
         drop(db);
-        assert!(!store.maintain_storage().unwrap());
-        assert_eq!(bytes(Some(wal)), before);
-        let db = store.0.lock().unwrap();
+        assert!(!store.collection_allowed().unwrap());
+        assert_eq!(store.maintain_storage().unwrap(), CleanupPass::Deferred);
+        assert_eq!(bytes(Some(&wal)), before);
         reader.execute_batch("ROLLBACK;").unwrap();
+        assert!(store.storage_cleanup_due().unwrap());
+        while store.maintain_storage().unwrap().has_more() {}
+        assert!(store.collection_allowed().unwrap());
+        let db = store.0.lock().unwrap();
         assert!(admit(&db).is_ok());
     }
 }

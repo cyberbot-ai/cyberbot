@@ -221,26 +221,6 @@ pub(crate) fn session_capabilities() -> impl Iterator<Item = &'static str> {
     mutations().flat_map(|mutation| mutation.session_capabilities.iter().copied())
 }
 
-pub(crate) fn trim_instance(
-    db: &Connection,
-    server: &str,
-    kind: &str,
-    instance: &str,
-    at: i64,
-) -> Result<()> {
-    db.execute(
-        "DELETE FROM service_summaries WHERE server_id=?1 AND kind=?2 AND instance_id=?3
-        AND rowid!=(SELECT rowid FROM service_summaries WHERE server_id=?1 AND kind=?2 AND instance_id=?3 ORDER BY at DESC,rowid DESC LIMIT 1)
-        AND (at<?4 OR id NOT IN (
-            SELECT id FROM service_summaries WHERE server_id=?1 AND kind=?2 AND instance_id=?3
-            ORDER BY at DESC,rowid DESC LIMIT 1000
-        )) AND id NOT IN (SELECT summary_id FROM service_evidence)",
-        params![server, kind, instance, at - 7 * 86400],
-    )
-    .map_err(err)?;
-    Ok(())
-}
-
 pub(crate) type CheckSample = (Option<f64>, Option<i64>, bool);
 
 pub(crate) fn check_samples(
@@ -1494,7 +1474,7 @@ impl Store {
             .0
             .into();
         write(&tx, &server.id, kind, &s)?;
-        trim_instance(&tx, &server.id, kind, instance, at)?;
+        crate::storage::trim_service_instance(&tx, &server.id, kind, instance)?;
         tx.commit().map_err(err)?;
         Ok(summary)
     }
@@ -2314,11 +2294,16 @@ mod tests {
         }
         drop(dbconn);
         record(&db, &s, "redis", wire("redis", now()), now());
-        let count: i64 =
+        let count = || {
             db.0.lock()
                 .unwrap()
-                .query_row("SELECT count(*) FROM service_summaries", [], |r| r.get(0))
-                .unwrap();
-        assert_eq!(count, 1);
+                .query_row("SELECT count(*) FROM service_summaries", [], |r| {
+                    r.get::<_, i64>(0)
+                })
+                .unwrap()
+        };
+        assert_eq!(count(), 1000);
+        db.maintain_storage().unwrap();
+        assert_eq!(count(), 1);
     }
 }

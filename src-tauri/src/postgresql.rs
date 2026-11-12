@@ -882,7 +882,7 @@ impl Store {
                 21600
             } + server.id.bytes().map(i64::from).sum::<i64>() % 30;
         write_state(&tx, &server.id, &s)?;
-        crate::services::trim_instance(&tx, &server.id, "postgresql", instance, at)?;
+        crate::storage::trim_service_instance(&tx, &server.id, "postgresql", instance)?;
         tx.commit().map_err(err)?;
         Ok(summary)
     }
@@ -1423,16 +1423,18 @@ mod tests {
         tx.commit().unwrap();
         drop(guard);
         record(&db, &s, wire(1), at + 120);
-        let count: i64 =
+        let count = ||
             db.0.lock()
                 .unwrap()
                 .query_row(
                     "SELECT count(*) FROM service_summaries WHERE kind='postgresql'",
                     [],
-                    |r| r.get(0),
+                    |r| r.get::<_, i64>(0),
                 )
                 .unwrap();
-        assert!(count < 10);
+        assert_eq!(count(), 1000);
+        db.maintain_storage().unwrap();
+        assert!(count() < 10);
         assert!(!db.postgresql_view(&s.id).unwrap().evidence.is_empty());
         record(&db, &s, wire(1), at + 180);
         db.0.lock()

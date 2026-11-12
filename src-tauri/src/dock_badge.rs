@@ -106,19 +106,17 @@ fn is_critical(
 pub(crate) fn start(window: tauri::WebviewWindow, state: std::sync::Arc<crate::AppState>) {
     use std::{sync::atomic::Ordering, time::Duration};
     use tauri::{Listener, Manager};
-    use tokio::time::{interval_at, sleep, Instant, MissedTickBehavior};
+    use tokio::time::{sleep_until, Instant};
 
     const REFRESH: Duration = Duration::from_secs(15);
-    const DEBOUNCE: Duration = Duration::from_millis(250);
+    const MIN_INTERVAL: Duration = Duration::from_secs(5);
     let app = window.app_handle().clone();
     let (changed, mut updates) = tokio::sync::watch::channel(());
     let listener = app.listen("state-changed", move |_| changed.send_replace(()));
     tauri::async_runtime::spawn(async move {
-        let mut freshness = interval_at(Instant::now() + REFRESH, REFRESH);
-        freshness.set_missed_tick_behavior(MissedTickBehavior::Skip);
         let mut last_count = None;
         while !state.stop.load(Ordering::Relaxed) {
-            // Coalesce events before the read and keep events that arrive during it.
+            // Include events received during the wait in the next read.
             updates.borrow_and_update();
             let state = state.clone();
             if let Ok(Ok(count)) = tauri::async_runtime::spawn_blocking(move || {
@@ -134,9 +132,13 @@ pub(crate) fn start(window: tauri::WebviewWindow, state: std::sync::Arc<crate::A
                     last_count = Some(count);
                 }
             }
+            let refreshed = Instant::now();
             tokio::select! {
-                _ = freshness.tick() => (),
-                _ = updates.changed() => sleep(DEBOUNCE).await,
+                _ = sleep_until(refreshed + REFRESH) => (),
+                result = updates.changed() => {
+                    if result.is_err() { break; }
+                    sleep_until(refreshed + MIN_INTERVAL).await;
+                }
             }
         }
         app.unlisten(listener);

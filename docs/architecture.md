@@ -5,8 +5,8 @@ Cyberbot is a macOS desktop app built with Tauri 2, Rust, and Vue 3. The desktop
 ## From a server to an incident
 
 1. The user adds an SSH endpoint or a [static Ansible inventory](INVENTORY.md). Server identity is local and separate from the endpoint used for access.
-2. Rust schedules checks through bounded queues and an OpenSSH ControlMaster pool. Polling, rsync, and the interactive console reuse compatible connections. Host keys are verified. A busy connection stays available to its active operations while the pool evicts idle connections.
-3. The application bundles the Python collector at build time and uses rsync to deploy a content-addressed copy into the remote user's cache. Each routine server poll verifies and runs the collector in one SSH command. The collector streams bounded results for the enabled checks.
+2. Rust schedules checks through bounded queues and an OpenSSH ControlMaster pool. The pool sizes itself to the number of distinct SSH configurations in the inventory, with a capacity of 32 to 192. Polling, rsync, and the interactive console reuse compatible connections. Host keys are verified. A busy connection stays available to its active operations while the pool evicts idle connections.
+3. The application bundles the Python collector at build time and uses rsync to deploy a content-addressed copy into the remote user's cache. Each routine server poll verifies and runs the collector in one SSH command. The collector streams bounded results for the enabled checks. The activity log stores the transport status and check results in one entry per poll.
 4. Rust validates the result and records observations. A metric that cannot be read or is too old remains unknown. Deterministic rules evaluate metrics, logs, connector results, and package advisories. An episode retains its own evidence and identity. [Incident correlation](INCIDENT_GROUPS.md) may link episodes without merging their history.
 5. The dashboard and monitoring library show observations, failures, permissions, and coverage. Routine collection and rules work without an AI provider.
 
@@ -20,7 +20,7 @@ History retention uses a shared allowance of 50,000 unprotected service samples 
 
 At 900 MiB of occupied SQLite pages, cleanup removes the oldest unprotected service, metric, log, and custom-check history until occupancy reaches 800 MiB. Occupancy excludes freelist pages: SQLite can reuse them without shrinking the file. Settings display this occupied space. Physical compaction is reserved for legacy database files exceeding 1 GiB.
 
-Cleanup persists its phase and pressure state in SQLite. It deletes at most 500 selected rows per batch, releases the writer lock between batches, and checks a two-second pass budget between batches. The background scheduler resumes unfinished work after one second, otherwise after one minute. An individual SQL statement or legacy compaction may exceed the pass budget. A pinned WAL reader or exhausted removable history returns to the normal schedule rather than spinning; collection remains blocked when space is unavailable. Cleanup retries automatically and preserves settings, inventory, active work, and protected evidence.
+Cleanup persists its phase and pressure state in SQLite. It deletes at most 500 selected history rows per batch, releases the writer lock between batches, and checks a 500-millisecond pass budget between batches. An individual SQL statement or legacy compaction may exceed the pass budget. Routine cleanup runs every five minutes. Unfinished work resumes after five seconds, or after one second under storage pressure. WAL checkpoints run at the size threshold and at the end of each pass. A pinned WAL reader or exhausted removable history delays the next attempt by one minute. Cleanup retries automatically and preserves settings, inventory, active work, and protected evidence.
 
 ## AI and trust boundaries
 

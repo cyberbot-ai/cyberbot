@@ -50,7 +50,14 @@ export interface ServerDependencies { available:{id:string;name:string;host?:str
 export interface NotificationStatus {enabled:boolean;badgeAllowed:boolean;permission:string;error:string|null;queued:number;overflow:number}
 
 export interface ActivityStorage {bytes:number;limitBytes:number;dropped:number;error:string|null}
-export interface ActivityEvent {aiAction?:{requestId:string;artifactHash:string;rules:string;provider:string;model:string;effort:string;state:string;tokens:number|null;goal?:string};monitoring?:MonitoringExecution;id:string;at:number;category:string;action:string;phase:string;operationId:string;target:string|null;server?:{id?:string;name:string;address:string}|null;runId:string|null;durationMs:number|null}
+export interface PollActivity {
+  trigger: string;
+  version: string;
+  revision: number;
+  transport: 'completed' | 'failed' | 'noResults' | 'interrupted';
+  checks: {definitionId: string; instanceId?: string; succeeded: boolean}[];
+}
+export interface ActivityEvent {aiAction?:{requestId:string;artifactHash:string;rules:string;provider:string;model:string;effort:string;state:string;tokens:number|null;goal?:string};monitoring?:MonitoringExecution;poll?:PollActivity;id:string;at:number;category:string;action:string;phase:string;operationId:string;target:string|null;server?:{id?:string;name:string;address:string}|null;runId:string|null;durationMs:number|null}
 export interface ActivityPage {events:ActivityEvent[];next:string|null;expired:boolean;skipped:number;storage:ActivityStorage}
 
 export interface ActivityQuery {definitionId?:string|null;before?:string|null;category?:string|null;phase?:string|null;search?:string|null}
