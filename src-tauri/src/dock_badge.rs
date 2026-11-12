@@ -1,4 +1,5 @@
 use crate::{model::Server, monitoring, store::Store};
+use std::collections::HashSet;
 
 impl Store {
     fn dock_badge_count(&self, at: i64) -> Result<i64, String> {
@@ -8,31 +9,35 @@ impl Store {
             return Ok(0);
         }
 
-        let open_incidents: i64 = db
-            .query_row(
-                "SELECT count(*) FROM incidents WHERE json_extract(payload,'$.status')='open'",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(|e| e.to_string())?;
+        let mut server_ids: HashSet<String> = {
+            let mut query = db
+                .prepare("SELECT DISTINCT server_id FROM incidents WHERE json_extract(payload,'$.status')='open'")
+                .map_err(|e| e.to_string())?;
+            let rows = query
+                .query_map([], |row| row.get(0))
+                .map_err(|e| e.to_string())?;
+            rows.collect::<Result<_, _>>().map_err(|e| e.to_string())?
+        };
         if self.connectivity().offline() {
-            return Ok(open_incidents);
+            return Ok(server_ids.len() as i64);
         }
 
         let (servers, awaiting_first_check) = self.fleet_servers(&db, at)?;
         if servers.is_empty() {
-            return Ok(open_incidents);
+            return Ok(server_ids.len() as i64);
         }
-        let awaiting_first_check: std::collections::HashSet<_> =
+        let awaiting_first_check: HashSet<_> =
             awaiting_first_check.iter().map(String::as_str).collect();
         let book = monitoring::Book::load(&db)?;
         let services = Self::service_cards(&db)?;
         let checks = crate::checks::statuses(&db)?;
         let logs = Self::log_statuses(&db, settings.log_poll_seconds)?;
         let vulnerabilities = Self::vulnerability_cards(&db)?;
-        let mut count = open_incidents;
-        for server in &servers {
+        for server in servers {
             let id = &server.id;
+            if server_ids.contains(id) {
+                continue;
+            }
             let metrics = book
                 .resolve(&monitoring::scope("metrics", Some(id), None))?
                 .values;
@@ -47,16 +52,16 @@ impl Store {
                     .get(id)
                     .is_some_and(|card| card.affected > 0);
             if is_critical(
-                server,
+                &server,
                 &metrics,
                 awaiting_first_check.contains(id.as_str()),
                 known_critical,
                 at,
             ) {
-                count += 1;
+                server_ids.insert(server.id);
             }
         }
-        Ok(count)
+        Ok(server_ids.len() as i64)
     }
 }
 
@@ -147,7 +152,7 @@ mod tests {
     };
 
     #[test]
-    fn sums_open_incidents_and_critical_servers_independently() {
+    fn counts_each_critical_server_or_server_with_open_incidents_once() {
         let store = Store::open(std::path::Path::new(":memory:")).unwrap();
         let source = Source {
             id: "fleet".into(),
@@ -199,6 +204,7 @@ mod tests {
                     .unwrap();
             }
         }
+        assert_eq!(store.dock_badge_count(at).unwrap(), 1);
         Store::incident(
             &store.0.lock().unwrap(),
             critical,
@@ -210,9 +216,8 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(store.dock_badge_count(at).unwrap(), 3);
-        assert_eq!(store.dock_badge_count(at + 390).unwrap(), 3);
-        assert_eq!(store.dock_badge_count(at + 391).unwrap(), 2);
+        assert_eq!(store.dock_badge_count(at).unwrap(), 1);
+        assert_eq!(store.dock_badge_count(at + 391).unwrap(), 1);
         for incident in store.snapshot().unwrap().incidents {
             if incident.status == "open" {
                 store
@@ -222,6 +227,20 @@ mod tests {
         }
         assert_eq!(store.dock_badge_count(at).unwrap(), 1);
         assert_eq!(store.dock_badge_count(at + 391).unwrap(), 0);
+
+        Store::incident(
+            &store.0.lock().unwrap(),
+            &servers[1].id,
+            "logs:test",
+            Some("Fixture".into()),
+            "Test incident",
+            "warning",
+            at,
+        )
+        .unwrap();
+        assert_eq!(store.dock_badge_count(at).unwrap(), 2);
+        assert_eq!(store.dock_badge_count(at + 390).unwrap(), 2);
+        assert_eq!(store.dock_badge_count(at + 391).unwrap(), 1);
         store
             .update_settings(serde_json::from_str(r#"{"dockBadgeEnabled":false}"#).unwrap())
             .unwrap();

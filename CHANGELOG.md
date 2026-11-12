@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.14.2
+
+- Count each server with a Critical status or an open incident once in the Dock badge.
+
 ## 0.14.1
 
 - Let users who previously allowed notifications request permission for the Dock badge from Cyberbot settings.

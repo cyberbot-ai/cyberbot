@@ -59,7 +59,7 @@ async function allowDockBadge() {
         <input type="checkbox" :checked="dockBadgeEnabled ?? true" :disabled="dockBadgeEnabled === undefined || dockBadgeSaving || preview" aria-describedby="dock-badge-description" @change="changeDockBadge">
         Show Dock badge
       </label>
-      <p id="dock-badge-description">Shows the total number of critical servers and open incidents on the Cyberbot icon.</p>
+      <p id="dock-badge-description">Counts each server with a Critical status or an open incident once.</p>
       <template v-if="dockBadgeEnabled && value && !value.badgeAllowed && !preview && ['notDetermined','denied','authorized','provisional'].includes(value.permission)">
         <p>Allow the Cyberbot app icon badge in macOS notification settings.</p>
         <button type="button" :disabled="dockBadgeSaving" @click="allowDockBadge">{{value.permission === 'denied' ? 'Open macOS settings' : 'Allow Dock badge'}}</button>
