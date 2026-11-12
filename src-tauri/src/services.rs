@@ -221,39 +221,6 @@ pub(crate) fn session_capabilities() -> impl Iterator<Item = &'static str> {
     mutations().flat_map(|mutation| mutation.session_capabilities.iter().copied())
 }
 
-pub(crate) fn trim_history(db: &Connection, at: i64) -> Result<()> {
-    // Preserve each specialized adapter's retention allowance and the shared metrics allowance.
-    let specialized: Vec<_> = SERVICE_BACKENDS.iter().map(|(kind, _)| kind).collect();
-    let specialized = json!(specialized).to_string();
-    for group in SERVICE_BACKENDS
-        .iter()
-        .map(|(kind, _)| Some(*kind))
-        .chain([None])
-    {
-        let filter = "(CASE WHEN ?2 IS NULL THEN kind NOT IN (SELECT value FROM json_each(?3)) ELSE kind=?2 END)";
-        db.execute(
-            &format!(
-                "DELETE FROM service_evidence WHERE rowid IN (
-                SELECT e.rowid FROM service_evidence e JOIN incidents i ON i.id=e.incident_id
-                JOIN service_summaries s ON s.id=e.summary_id
-                WHERE {filter} AND json_extract(i.payload,'$.status')='resolved'
-                AND json_extract(i.payload,'$.updatedAt')<?1 LIMIT 500)"
-            ),
-            params![at - 30 * 86400, group, specialized],
-        )
-        .map_err(err)?;
-        db.execute(&format!(
-            "DELETE FROM service_summaries WHERE rowid IN (
-                SELECT rowid FROM service_summaries WHERE {filter} AND (
-                    at<?1 OR rowid NOT IN (
-                        SELECT rowid FROM service_summaries WHERE {filter} ORDER BY at DESC,rowid DESC LIMIT 50000
-                    )
-                ) AND id NOT IN (SELECT summary_id FROM service_evidence) LIMIT 500)"
-        ), params![at-7*86400, group, specialized]).map_err(err)?;
-    }
-    Ok(())
-}
-
 pub(crate) fn trim_instance(
     db: &Connection,
     server: &str,
@@ -263,6 +230,7 @@ pub(crate) fn trim_instance(
 ) -> Result<()> {
     db.execute(
         "DELETE FROM service_summaries WHERE server_id=?1 AND kind=?2 AND instance_id=?3
+        AND rowid!=(SELECT rowid FROM service_summaries WHERE server_id=?1 AND kind=?2 AND instance_id=?3 ORDER BY at DESC,rowid DESC LIMIT 1)
         AND (at<?4 OR id NOT IN (
             SELECT id FROM service_summaries WHERE server_id=?1 AND kind=?2 AND instance_id=?3
             ORDER BY at DESC,rowid DESC LIMIT 1000

@@ -132,6 +132,7 @@ impl Store {
         if version < 18 {
             crate::service_migration::upgrade(&db)?;
         }
+        crate::storage::initialize(&db)?;
         crate::services::reconcile_resolved_deviations(&db)?;
         let connectivity = Connectivity::new(Self::read_settings(&db)?.connectivity_probe);
         Ok(Self(
@@ -684,8 +685,6 @@ impl Store {
             params![s.id, serde_json::to_string(&s).map_err(err)?],
         )
         .map_err(err)?;
-        tx.execute("DELETE FROM observations WHERE at < ?1", [at - 7 * 86400])
-            .map_err(err)?;
         tx.commit().map_err(err)?;
         first.complete(attempt);
         Ok(())

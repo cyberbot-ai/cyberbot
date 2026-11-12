@@ -806,12 +806,12 @@ impl Store {
     }
 }
 pub(crate) fn trim_runs(db: &Connection) -> Result<()> {
-    db.execute("DELETE FROM check_versions WHERE id IN (SELECT v.id FROM check_versions v WHERE v.at<?1 AND v.id!=(SELECT id FROM check_versions WHERE check_id=v.check_id ORDER BY at DESC,rowid DESC LIMIT 1) AND NOT EXISTS(SELECT 1 FROM check_bindings b WHERE json_extract(b.payload,'$.versionId')=v.id OR json_extract(b.payload,'$.previousVersionId')=v.id) AND NOT EXISTS(SELECT 1 FROM check_runs r JOIN check_evidence e ON e.run_id=r.id WHERE r.version_id=v.id) LIMIT 50)",[now()-30*86400]).map_err(err)?;
+    db.execute("DELETE FROM check_versions WHERE id IN (SELECT v.id FROM check_versions v WHERE v.at<?1 AND v.id!=(SELECT id FROM check_versions WHERE check_id=v.check_id ORDER BY at DESC,rowid DESC LIMIT 1) AND NOT EXISTS(SELECT 1 FROM check_bindings b WHERE json_extract(b.payload,'$.versionId')=v.id OR json_extract(b.payload,'$.previousVersionId')=v.id) AND NOT EXISTS(SELECT 1 FROM check_runs r WHERE r.version_id=v.id) LIMIT 50)",[now()-30*86400]).map_err(err)?;
 
-    db.execute("DELETE FROM check_reviews WHERE at<?1", [now() - 900])
+    db.execute("DELETE FROM check_reviews WHERE rowid IN (SELECT rowid FROM check_reviews WHERE at<?1 LIMIT 500)", [now() - 900])
         .map_err(err)?;
-    db.execute("DELETE FROM check_evidence WHERE incident_id IN (SELECT id FROM incidents WHERE json_extract(payload,'$.status')='resolved' AND json_extract(payload,'$.updatedAt')<?1)",[now()-30*86400]).map_err(err)?;
-    db.execute("DELETE FROM check_runs WHERE id IN (SELECT id FROM (SELECT id,at,row_number() OVER(ORDER BY at DESC,rowid DESC) AS total,row_number() OVER(PARTITION BY server_id,check_id ORDER BY at DESC,rowid DESC) AS per_check FROM check_runs WHERE id NOT IN (SELECT run_id FROM check_evidence)) WHERE at<?1 OR total>10000 OR per_check>100 LIMIT 500)",[now()-7*86400]).map_err(err)?;
+    db.execute("DELETE FROM check_evidence WHERE rowid IN (SELECT e.rowid FROM check_evidence e JOIN incidents i ON i.id=e.incident_id WHERE json_extract(i.payload,'$.status')='resolved' AND json_extract(i.payload,'$.updatedAt')<?1 LIMIT 500)",[now()-30*86400]).map_err(err)?;
+    db.execute("DELETE FROM check_runs WHERE id IN (SELECT id FROM (SELECT id,at,rowid,server_id,check_id,row_number() OVER(ORDER BY at DESC,rowid DESC) AS total,row_number() OVER(PARTITION BY server_id,check_id ORDER BY at DESC,rowid DESC) AS per_check FROM check_runs WHERE id NOT IN (SELECT run_id FROM check_evidence)) h WHERE (at<?1 OR total>10000 OR per_check>100) AND h.rowid!=(SELECT n.rowid FROM check_runs n WHERE n.server_id=h.server_id AND n.check_id=h.check_id ORDER BY n.at DESC,n.rowid DESC LIMIT 1) LIMIT 500)",[now()-7*86400]).map_err(err)?;
     Ok(())
 }
 pub(crate) async fn run_pending(app: Arc<AppState>, server: Option<String>) -> Result<bool> {

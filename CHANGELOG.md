@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.14.3
+
+- Prevent SQLite storage from filling up by sharing the service history quota and reclaiming older history in resumable batches, while preserving latest results and incident evidence. Resume collection automatically when space becomes available.
+
 ## 0.14.2
 
 - Count each server with a Critical status or an open incident once in the Dock badge.

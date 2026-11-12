@@ -1,9 +1,16 @@
 //! Hard SQLite page ceiling plus bounded, resumable retention work.
 use crate::{model::now, store::Store};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
-use std::path::PathBuf;
+use std::{
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 const LIMIT: u64 = 1024 * 1024 * 1024;
+const HIGH_WATER: u64 = 900 * 1024 * 1024;
+const LOW_WATER: u64 = 800 * 1024 * 1024;
+const BATCH: usize = 500;
+const PASS_BUDGET: Duration = Duration::from_secs(2);
 const WAL_LIMIT: u64 = 32 * 1024 * 1024;
 fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
@@ -40,8 +47,58 @@ pub fn configure(db: &Connection) -> Result<(), String> {
     db.execute_batch("PRAGMA journal_size_limit=16777216; PRAGMA wal_autocheckpoint=512;")
         .map_err(err)
 }
+pub(crate) fn initialize(db: &Connection) -> Result<(), String> {
+    loop {
+        let setup = (|| -> rusqlite::Result<()> {
+            let tx = db.unchecked_transaction()?;
+            tx.execute_batch(
+                "CREATE TABLE IF NOT EXISTS storage_cleanup(
+        id INTEGER PRIMARY KEY CHECK(id=1), phase INTEGER NOT NULL DEFAULT 0,
+        pressure INTEGER NOT NULL DEFAULT 0, exhausted INTEGER NOT NULL DEFAULT 0,
+        active INTEGER NOT NULL DEFAULT 0);
+        INSERT OR IGNORE INTO storage_cleanup(id) VALUES(1);
+        CREATE INDEX IF NOT EXISTS service_evidence_summary ON service_evidence(summary_id);
+        CREATE INDEX IF NOT EXISTS log_evidence_summary ON log_evidence(summary_id);
+        CREATE INDEX IF NOT EXISTS check_evidence_run ON check_evidence(run_id);
+        CREATE INDEX IF NOT EXISTS log_summaries_retention ON log_summaries(at);",
+            )?;
+            tx.commit()
+        })();
+        match setup {
+            Ok(()) => return Ok(()),
+            Err(rusqlite::Error::SqliteFailure(code, _))
+                if code.code == rusqlite::ErrorCode::DiskFull =>
+            {
+                // Legacy databases may have no room even for the cleanup indexes.
+                // The same protected-history rules apply before the state table exists.
+                let tx = db.unchecked_transaction().map_err(err)?;
+                if trim_pressure(&tx)? == 0 {
+                    return Err("Cannot initialize storage cleanup: the database is full of protected data.".into());
+                }
+                tx.commit().map_err(err)?;
+                checkpoint(db);
+            }
+            Err(error) => return Err(err(error)),
+        }
+    }
+}
+
 pub fn admit(db: &Connection) -> Result<(), String> {
-    if bytes(path(db)) > LIMIT {
+    admit_with(db, LIMIT, HIGH_WATER)
+}
+fn admit_with(db: &Connection, limit: u64, high: u64) -> Result<(), String> {
+    let used = used_bytes(db)?;
+    let exhausted: bool = db
+        .query_row(
+            "SELECT exhausted FROM storage_cleanup WHERE id=1",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(err)?;
+    if exhausted && used >= high {
+        return Err("Local storage is full of protected data. Latest results and incident evidence cannot be removed automatically; collection is paused.".into());
+    }
+    if bytes(path(db)) > limit {
         return Err(
             "The database exceeded 1 GiB. Collection is paused until cleanup and compaction."
                 .into(),
@@ -57,16 +114,7 @@ pub fn admit(db: &Connection) -> Result<(), String> {
             return Err("The SQLite write-ahead log reached its limit. Collection pauses until the database reader finishes.".into());
         }
     }
-    let pages: u64 = db
-        .pragma_query_value(None, "page_count", |r| r.get(0))
-        .map_err(err)?;
-    let free: u64 = db
-        .pragma_query_value(None, "freelist_count", |r| r.get(0))
-        .map_err(err)?;
-    let size: u64 = db
-        .pragma_query_value(None, "page_size", |r| r.get(0))
-        .map_err(err)?;
-    if pages.saturating_sub(free) * size >= LIMIT - 8 * 1024 * 1024 {
+    if used >= limit.saturating_sub(8 * 1024 * 1024) {
         return Err(
             "The SQLite database reached its 1 GiB limit. Collection pauses until cleanup.".into(),
         );
@@ -90,7 +138,7 @@ impl Store {
             .filter(|m| m.is_file())
             .map(|m| m.len())
             .sum();
-        let database_bytes = bytes(p);
+        let database_bytes = used_bytes(&db)?;
         let wal_bytes = bytes(wal);
         let result = admit(&db);
         Ok(Status {
@@ -105,64 +153,252 @@ impl Store {
             message: result.err(),
         })
     }
-    pub(crate) fn maintain_storage(&self) -> Result<(), String> {
-        let db = self.0.lock().map_err(err)?;
-        let cutoff = now() - 30 * 86400;
-        crate::checks::trim_runs(&db)?;
-        crate::ai_actions::trim(&db, now())?;
-        crate::correlation::trim(&db, now())?;
-        db.execute("UPDATE package_state SET payload=json_set(payload,'$.stage',NULL,'$.pending',json('[]'),'$.offset',0,'$.revision',json_extract(payload,'$.revision')+1,'$.nextCheck',?1) WHERE json_extract(payload,'$.stage') IS NOT NULL AND json_extract(payload,'$.stageAt')<?2",params![now(),now()-3600]).map_err(err)?;
-        // Each delete is capped: cleanup must not monopolize the writer or explode WAL.
-        for sql in [
-   "DELETE FROM package_buckets WHERE rowid IN (SELECT b.rowid FROM package_buckets b JOIN package_state s ON s.server_id=b.server_id WHERE b.root!=coalesce(json_extract(s.payload,'$.root'),'') AND b.root!=coalesce(json_extract(s.payload,'$.previous'),'') AND (b.root!=coalesce(json_extract(s.payload,'$.stage.root'),'') OR json_extract(s.payload,'$.stageAt')<?1+2592000-3600) LIMIT 16)",
-   "DELETE FROM vulnerability_findings WHERE rowid IN (SELECT rowid FROM vulnerability_findings WHERE resolved_at IS NOT NULL AND resolved_at<?1 ORDER BY resolved_at LIMIT 500)",
-   "DELETE FROM vulnerability_evidence WHERE rowid IN (SELECT e.rowid FROM vulnerability_evidence e JOIN incidents i ON i.id=e.incident_id WHERE json_extract(i.payload,'$.status')='resolved' AND json_extract(i.payload,'$.updatedAt')<?1 LIMIT 500)",
-   "DELETE FROM incidents WHERE rowid IN (SELECT rowid FROM incidents WHERE json_extract(payload,'$.status')='resolved' AND (json_extract(payload,'$.updatedAt')<?1 OR rowid NOT IN (SELECT rowid FROM incidents WHERE json_extract(payload,'$.status')='resolved' ORDER BY json_extract(payload,'$.updatedAt') DESC LIMIT 10000)) LIMIT 500)",
-   "DELETE FROM ai_jobs WHERE rowid IN (SELECT rowid FROM ai_jobs WHERE state NOT IN ('queued','running','suppressed') AND created_at<?1 AND id NOT IN (SELECT coalesce(nullif(json_extract(payload,'$.episode'),''),id||':'||json_extract(payload,'$.openedAt')) FROM incidents) AND id NOT IN (SELECT id FROM incident_groups) LIMIT 500)",
-   "DELETE FROM ai_ledger WHERE rowid IN (SELECT rowid FROM ai_ledger WHERE day<?1/86400 AND state!='running' LIMIT 500)",
-   "DELETE FROM observations WHERE id IN (SELECT id FROM observations WHERE at<?1 OR id NOT IN (SELECT id FROM observations ORDER BY at DESC,id DESC LIMIT 120000) LIMIT 500)",
-  ]{db.execute(sql,[cutoff]).map_err(err)?;}
-        db.execute("DELETE FROM log_evidence WHERE rowid IN (SELECT e.rowid FROM log_evidence e JOIN incidents i ON i.id=e.incident_id WHERE json_extract(i.payload,'$.status')='resolved' AND json_extract(i.payload,'$.updatedAt')<?1 LIMIT 500)",[cutoff]).map_err(err)?;
-        db.execute("DELETE FROM log_summaries WHERE rowid IN (SELECT rowid FROM log_summaries WHERE (at<?1 OR rowid NOT IN (SELECT rowid FROM log_summaries ORDER BY at DESC,rowid DESC LIMIT 50000)) AND id NOT IN (SELECT summary_id FROM log_evidence) LIMIT 500)",[now()-7*86400]).map_err(err)?;
-        crate::services::trim_history(&db, now())?;
-        db.execute(
-            "DELETE FROM vulnerability_evaluations WHERE server_id NOT IN (SELECT id FROM servers)",
-            [],
-        )
-        .map_err(err)?;
-        db.execute("DELETE FROM vulnerability_findings WHERE rowid IN (SELECT rowid FROM vulnerability_findings WHERE resolved_at IS NOT NULL AND rowid NOT IN (SELECT rowid FROM vulnerability_findings WHERE resolved_at IS NOT NULL ORDER BY resolved_at DESC LIMIT 10000) LIMIT 500)",[]).map_err(err)?;
-        db.execute("DELETE FROM investigations WHERE id IN (SELECT id FROM investigations WHERE started_at<?1 AND json_extract(payload,'$.status')!='running' LIMIT 50)",[cutoff]).map_err(err)?;
-        db.execute("DELETE FROM vulnerability_apt WHERE rowid IN (SELECT rowid FROM vulnerability_apt WHERE at<?1 LIMIT 500)",[now()-7*86400]).map_err(err)?;
-        // SQLite reuses freed pages; checkpoint truncates the auxiliary WAL file.
-        let _: Result<(i64, i64, i64), _> =
-            db.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
-            });
-        // Older installations can already exceed the new ceiling. Ingestion stays blocked
-        // until bounded retention creates enough space for a one-off compaction.
-        if bytes(path(&db)) > LIMIT {
-            let pages: u64 = db
-                .pragma_query_value(None, "page_count", |r| r.get(0))
-                .map_err(err)?;
-            let free: u64 = db
-                .pragma_query_value(None, "freelist_count", |r| r.get(0))
-                .map_err(err)?;
-            let size: u64 = db
-                .pragma_query_value(None, "page_size", |r| r.get(0))
-                .map_err(err)?;
-            if pages.saturating_sub(free) * size < LIMIT - 16 * 1024 * 1024 {
-                db.execute_batch("VACUUM;").map_err(err)?;
-                configure(&db)?;
+    /// Returns true when another short pass is needed. State survives app restarts.
+    pub(crate) fn maintain_storage(&self) -> Result<bool, String> {
+        self.maintain_storage_with(PASS_BUDGET, HIGH_WATER, LOW_WATER, LIMIT)
+    }
+
+    fn maintain_storage_with(
+        &self,
+        budget: Duration,
+        high: u64,
+        low: u64,
+        limit: u64,
+    ) -> Result<bool, String> {
+        let started = Instant::now();
+        // Cache a history cutoff for this pass, rather than recounting its quota per batch.
+        let mut boundary = None;
+        loop {
+            let mut db = self.0.lock().map_err(err)?;
+            let wal = path(&db).map(|p| PathBuf::from(format!("{}-wal", p.display())));
+            if bytes(wal.clone()) >= WAL_LIMIT {
+                checkpoint(&db);
+                if bytes(wal) >= WAL_LIMIT {
+                    // A pinned reader must not let cleanup grow the WAL indefinitely.
+                    return Ok(false);
+                }
             }
+            let tx = db.transaction().map_err(err)?;
+            tx.execute(
+                "UPDATE storage_cleanup SET active=1,exhausted=0 WHERE id=1 AND active=0",
+                [],
+            )
+            .map_err(err)?;
+            let (mut phase, mut pressure, mut exhausted): (usize, bool, bool) = tx
+                .query_row(
+                    "SELECT phase,pressure,exhausted FROM storage_cleanup WHERE id=1",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )
+                .map_err(err)?;
+            let used = used_bytes(&tx)?;
+            if used >= high && !exhausted && !pressure {
+                pressure = true;
+            }
+            if pressure {
+                if used <= low {
+                    pressure = false;
+                    exhausted = false;
+                } else if trim_pressure(&tx)? == 0 {
+                    pressure = false;
+                    exhausted = true;
+                }
+            } else if phase < RETENTION_SQL.len() {
+                let (sql, batch) = RETENTION_SQL[phase];
+                let removed = tx.execute(sql, [now() - 30 * 86400]).map_err(err)?;
+                if removed < batch {
+                    phase += 1;
+                }
+            } else if phase < RETENTION_SQL.len() + 3 {
+                let before = tx.total_changes();
+                match phase - RETENTION_SQL.len() {
+                    0 => crate::checks::trim_runs(&tx)?,
+                    1 => crate::ai_actions::trim(&tx, now())?,
+                    _ => crate::correlation::trim(&tx, now())?,
+                }
+                if tx.total_changes() - before < [50, 100, 100][phase - RETENTION_SQL.len()] {
+                    phase += 1;
+                }
+            } else if phase < RETENTION_SQL.len() + 6 {
+                let history = &HISTORIES[phase - RETENTION_SQL.len() - 3];
+                let cutoff = match boundary {
+                    Some((saved_phase, cutoff)) if saved_phase == phase => cutoff,
+                    _ => {
+                        let cutoff = history.boundary(&tx, now())?;
+                        boundary = Some((phase, cutoff));
+                        cutoff
+                    }
+                };
+                if history.trim(&tx, cutoff)? < BATCH {
+                    phase += 1;
+                }
+            } else {
+                tx.execute(
+                    "UPDATE storage_cleanup SET phase=0,pressure=0,active=0 WHERE id=1",
+                    [],
+                )
+                .map_err(err)?;
+                tx.execute("INSERT INTO maintenance VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET at=excluded.at", [now()]).map_err(err)?;
+                tx.commit().map_err(err)?;
+                checkpoint(&db);
+                // Legacy databases above the ceiling need a one-off physical compaction.
+                if bytes(path(&db)) > limit
+                    && used_bytes(&db)? < limit.saturating_sub(16 * 1024 * 1024)
+                {
+                    db.execute_batch("VACUUM;").map_err(err)?;
+                    checkpoint(&db);
+                    configure(&db)?;
+                }
+                return Ok(false);
+            }
+            tx.execute(
+                "UPDATE storage_cleanup SET phase=?1,pressure=?2,exhausted=?3 WHERE id=1",
+                params![phase, pressure, exhausted],
+            )
+            .map_err(err)?;
+            tx.commit().map_err(err)?;
+            checkpoint(&db);
+            drop(db);
+            if started.elapsed() >= budget {
+                return Ok(true);
+            }
+            std::thread::yield_now();
         }
-        db.execute(
-            "INSERT INTO maintenance VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET at=excluded.at",
-            params![now()],
-        )
-        .map_err(err)?;
-        Ok(())
     }
 }
+
+fn used_bytes(db: &Connection) -> Result<u64, String> {
+    let pages: u64 = db
+        .pragma_query_value(None, "page_count", |r| r.get(0))
+        .map_err(err)?;
+    let free: u64 = db
+        .pragma_query_value(None, "freelist_count", |r| r.get(0))
+        .map_err(err)?;
+    let size: u64 = db
+        .pragma_query_value(None, "page_size", |r| r.get(0))
+        .map_err(err)?;
+    Ok(pages.saturating_sub(free) * size)
+}
+
+fn checkpoint(db: &Connection) {
+    // PASSIVE never waits for readers; truncate only if all frames were checkpointed.
+    let result: rusqlite::Result<(i64, i64, i64)> =
+        db.query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        });
+    if let Ok((0, frames, done)) = result {
+        if frames == done {
+            let _ = db.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
+        }
+    }
+}
+
+struct History {
+    table: &'static str,
+    scope: &'static str,
+    evidence: Option<(&'static str, &'static str)>,
+    keep: usize,
+    days: i64,
+}
+const HISTORIES: [History; 4] = [
+    History {
+        table: "service_summaries",
+        scope: "n.server_id=h.server_id AND n.kind=h.kind AND n.instance_id=h.instance_id",
+        evidence: Some(("service_evidence", "summary_id")),
+        keep: 50_000,
+        days: 7,
+    },
+    History {
+        table: "observations",
+        scope: "n.server_id=h.server_id",
+        evidence: None,
+        keep: 120_000,
+        days: 30,
+    },
+    History {
+        table: "log_summaries",
+        scope: "n.server_id=h.server_id",
+        evidence: Some(("log_evidence", "summary_id")),
+        keep: 50_000,
+        days: 7,
+    },
+    History {
+        table: "check_runs",
+        scope: "n.server_id=h.server_id AND n.check_id=h.check_id",
+        evidence: Some(("check_evidence", "run_id")),
+        keep: 10_000,
+        days: 7,
+    },
+];
+impl History {
+    fn disposable(&self) -> String {
+        let mut filter = format!("h.rowid != (SELECT n.rowid FROM {} n WHERE {} ORDER BY n.at DESC,n.rowid DESC LIMIT 1)", self.table, self.scope);
+        if let Some((table, column)) = self.evidence {
+            filter.push_str(&format!(
+                " AND NOT EXISTS (SELECT 1 FROM {table} e WHERE e.{column}=h.id)"
+            ));
+        }
+        filter
+    }
+    fn boundary(&self, db: &Connection, at: i64) -> Result<(i64, i64), String> {
+        let quota: Option<(i64,i64)> = db.query_row(&format!("SELECT h.at,h.rowid FROM {} h WHERE {} ORDER BY h.at DESC,h.rowid DESC LIMIT 1 OFFSET ?1",self.table,self.disposable()), [self.keep], |r| Ok((r.get(0)?,r.get(1)?))).optional().map_err(err)?;
+        Ok(quota
+            .unwrap_or((i64::MIN, i64::MIN))
+            .max((at - self.days * 86400 - 1, i64::MAX)))
+    }
+    fn trim(&self, db: &Connection, boundary: (i64, i64)) -> Result<usize, String> {
+        db.execute(&format!("DELETE FROM {} WHERE rowid IN (SELECT h.rowid FROM {} h WHERE (h.at,h.rowid)<=(?1,?2) AND {} ORDER BY h.at,h.rowid LIMIT {BATCH})", self.table,self.table,self.disposable()),params![boundary.0,boundary.1]).map_err(err)
+    }
+}
+
+fn trim_pressure(db: &Connection) -> Result<usize, String> {
+    let selections: Vec<_> = HISTORIES.iter().enumerate().map(|(index,h)| format!("SELECT * FROM (SELECT {index} AS kind,h.rowid AS id,h.at FROM {} h WHERE {} ORDER BY h.at,h.rowid LIMIT {BATCH})",h.table,h.disposable())).collect();
+    let sql = format!(
+        "SELECT kind,id FROM ({}) ORDER BY at,kind,id LIMIT {BATCH}",
+        selections.join(" UNION ALL ")
+    );
+    let mut query = db.prepare(&sql).map_err(err)?;
+    let rows = query
+        .query_map([], |r| Ok((r.get::<_, usize>(0)?, r.get::<_, i64>(1)?)))
+        .map_err(err)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(err)?;
+    let removed = rows.len();
+    for (kind, h) in HISTORIES.iter().enumerate() {
+        let ids: Vec<_> = rows
+            .iter()
+            .filter(|(k, _)| *k == kind)
+            .map(|(_, id)| *id)
+            .collect();
+        if !ids.is_empty() {
+            db.execute(
+                &format!(
+                    "DELETE FROM {} WHERE rowid IN (SELECT value FROM json_each(?1))",
+                    h.table
+                ),
+                [serde_json::to_string(&ids).map_err(err)?],
+            )
+            .map_err(err)?;
+        }
+    }
+    Ok(removed)
+}
+
+const RETENTION_SQL: &[(&str, usize)] = &[
+    ("DELETE FROM service_evidence WHERE rowid IN (SELECT e.rowid FROM service_evidence e JOIN incidents i ON i.id=e.incident_id WHERE json_extract(i.payload,'$.status')='resolved' AND json_extract(i.payload,'$.updatedAt')<?1 LIMIT 500)", 500),
+    ("UPDATE package_state SET payload=json_set(payload,'$.stage',NULL,'$.pending',json('[]'),'$.offset',0,'$.revision',json_extract(payload,'$.revision')+1,'$.nextCheck',?1+2592000) WHERE json_extract(payload,'$.stage') IS NOT NULL AND rowid IN (SELECT rowid FROM package_state WHERE json_extract(payload,'$.stage') IS NOT NULL AND json_extract(payload,'$.stageAt')<?1+2592000-3600 LIMIT 500)", 500),
+    ("DELETE FROM package_buckets WHERE rowid IN (SELECT b.rowid FROM package_buckets b JOIN package_state s ON s.server_id=b.server_id WHERE b.root!=coalesce(json_extract(s.payload,'$.root'),'') AND b.root!=coalesce(json_extract(s.payload,'$.previous'),'') AND (b.root!=coalesce(json_extract(s.payload,'$.stage.root'),'') OR json_extract(s.payload,'$.stageAt')<?1+2592000-3600) LIMIT 16)", 16),
+    ("DELETE FROM vulnerability_findings WHERE rowid IN (SELECT rowid FROM vulnerability_findings WHERE resolved_at IS NOT NULL AND resolved_at<?1 ORDER BY resolved_at LIMIT 500)", 500),
+    ("DELETE FROM vulnerability_evidence WHERE rowid IN (SELECT e.rowid FROM vulnerability_evidence e JOIN incidents i ON i.id=e.incident_id WHERE json_extract(i.payload,'$.status')='resolved' AND json_extract(i.payload,'$.updatedAt')<?1 LIMIT 500)", 500),
+    ("DELETE FROM incidents WHERE rowid IN (SELECT rowid FROM incidents WHERE json_extract(payload,'$.status')='resolved' AND (json_extract(payload,'$.updatedAt')<?1 OR rowid NOT IN (SELECT rowid FROM incidents WHERE json_extract(payload,'$.status')='resolved' ORDER BY json_extract(payload,'$.updatedAt') DESC LIMIT 10000)) LIMIT 500)", 500),
+    ("DELETE FROM ai_jobs WHERE rowid IN (SELECT rowid FROM ai_jobs WHERE state NOT IN ('queued','running','suppressed') AND created_at<?1 AND id NOT IN (SELECT coalesce(nullif(json_extract(payload,'$.episode'),''),id||':'||json_extract(payload,'$.openedAt')) FROM incidents) AND id NOT IN (SELECT id FROM incident_groups) LIMIT 500)", 500),
+    ("DELETE FROM ai_ledger WHERE rowid IN (SELECT rowid FROM ai_ledger WHERE day<?1/86400 AND state!='running' LIMIT 500)", 500),
+    ("DELETE FROM log_evidence WHERE rowid IN (SELECT e.rowid FROM log_evidence e JOIN incidents i ON i.id=e.incident_id WHERE json_extract(i.payload,'$.status')='resolved' AND json_extract(i.payload,'$.updatedAt')<?1 LIMIT 500)", 500),
+    ("DELETE FROM vulnerability_evaluations WHERE rowid IN (SELECT rowid FROM vulnerability_evaluations WHERE server_id NOT IN (SELECT id FROM servers) LIMIT 500) AND ?1 IS NOT NULL", 500),
+    ("DELETE FROM vulnerability_findings WHERE rowid IN (SELECT rowid FROM vulnerability_findings WHERE resolved_at IS NOT NULL AND rowid NOT IN (SELECT rowid FROM vulnerability_findings WHERE resolved_at IS NOT NULL ORDER BY resolved_at DESC LIMIT 10000) LIMIT 500) AND ?1 IS NOT NULL", 500),
+    ("DELETE FROM investigations WHERE id IN (SELECT id FROM investigations WHERE started_at<?1 AND json_extract(payload,'$.status')!='running' LIMIT 50)", 50),
+    ("DELETE FROM vulnerability_apt WHERE rowid IN (SELECT rowid FROM vulnerability_apt WHERE at<?1+1987200 LIMIT 500)", 500),
+];
 
 #[cfg(test)]
 mod tests {
@@ -185,6 +421,404 @@ mod tests {
         let id = store.snapshot().unwrap().servers[0].id.clone();
         (store, id)
     }
+    fn finish(store: &Store, high: u64, low: u64, limit: u64) {
+        for _ in 0..2000 {
+            if !store
+                .maintain_storage_with(Duration::from_millis(10), high, low, limit)
+                .unwrap()
+            {
+                return;
+            }
+        }
+        panic!("cleanup did not finish");
+    }
+
+    fn seed_services(db: &Connection, server: &str, count: usize, payload_size: usize) {
+        let at = now();
+        let payload = format!("{{\"padding\":\"{}\"}}", "x".repeat(payload_size));
+        let tx = db.unchecked_transaction().unwrap();
+        {
+            let mut insert = tx.prepare("INSERT INTO service_summaries(id,server_id,kind,instance_id,at,payload) VALUES(?1,?2,?3,?4,?5,?6)").unwrap();
+            for n in 0..count {
+                insert
+                    .execute(params![
+                        format!("sample-{n}"),
+                        server,
+                        format!("kind-{}", n % 18),
+                        format!("instance-{}", (n / 18) % 150),
+                        at + (n / 2700) as i64,
+                        payload
+                    ])
+                    .unwrap();
+            }
+        }
+        tx.commit().unwrap();
+    }
+
+    #[test]
+    fn cleanup_initializes_when_the_old_database_has_no_free_pages() {
+        let (store, server) = fixture();
+        let db = store.0.lock().unwrap();
+        // Recreate an old installation without any of the new cleanup objects.
+        db.execute_batch("DROP TABLE storage_cleanup; DROP INDEX service_evidence_summary; DROP INDEX log_evidence_summary; DROP INDEX check_evidence_run; DROP INDEX log_summaries_retention;").unwrap();
+        seed_services(&db, &server, 4000, 1024);
+        db.execute_batch("VACUUM;").unwrap();
+        let pages: u64 = db
+            .pragma_query_value(None, "page_count", |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            db.pragma_query_value(None, "freelist_count", |r| r.get::<_, u64>(0))
+                .unwrap(),
+            0
+        );
+        db.pragma_update(None, "max_page_count", pages).unwrap();
+        initialize(&db).unwrap();
+        assert_eq!(
+            db.query_row("SELECT count(*) FROM storage_cleanup", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert!(
+            db.query_row("SELECT count(*) FROM service_summaries", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap()
+                < 4000
+        );
+        assert_eq!(db.query_row("SELECT count(*) FROM (SELECT server_id,kind,instance_id FROM service_summaries GROUP BY server_id,kind,instance_id)",[],|r|r.get::<_,i64>(0)).unwrap(),2700);
+    }
+
+    #[test]
+    fn legacy_oversized_file_is_compacted_after_retention() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("db");
+        let store = Store::open(&file).unwrap();
+        let limit = 32 * 1024 * 1024;
+        {
+            let db = store.0.lock().unwrap();
+            db.execute(
+                "INSERT INTO investigations VALUES('expired',0,?1)",
+                [format!(
+                    "{{\"status\":\"completed\",\"padding\":\"{}\"}}",
+                    "x".repeat(40 * 1024 * 1024)
+                )],
+            )
+            .unwrap();
+            checkpoint(&db);
+            assert!(bytes(path(&db)) > limit);
+            assert!(admit_with(&db, limit, 24 * 1024 * 1024).is_err());
+        }
+        finish(&store, 24 * 1024 * 1024, 16 * 1024 * 1024, limit);
+        let db = store.0.lock().unwrap();
+        assert!(bytes(path(&db)) < limit);
+        assert!(admit_with(&db, limit, 24 * 1024 * 1024).is_ok());
+        let pages: u64 = db
+            .pragma_query_value(None, "max_page_count", |r| r.get(0))
+            .unwrap();
+        let size: u64 = db
+            .pragma_query_value(None, "page_size", |r| r.get(0))
+            .unwrap();
+        assert_eq!(pages * size, LIMIT);
+        assert_eq!(
+            db.query_row("PRAGMA integrity_check", [], |r| r.get::<_, String>(0))
+                .unwrap(),
+            "ok"
+        );
+    }
+
+    #[test]
+    fn service_quota_is_shared_and_latest_and_evidence_are_extra() {
+        let (store, server) = fixture();
+        {
+            let db = store.0.lock().unwrap();
+            seed_services(&db, &server, 60_000, 10);
+            Store::incident(
+                &db,
+                &server,
+                "test",
+                Some("evidence".into()),
+                "Test",
+                "critical",
+                now(),
+            )
+            .unwrap();
+            db.execute(
+                "INSERT INTO service_evidence VALUES(?1,'sample-0')",
+                [inventory::stable_id(&server, "test")],
+            )
+            .unwrap();
+        }
+        finish(&store, HIGH_WATER, LOW_WATER, LIMIT);
+        let db = store.0.lock().unwrap();
+        assert_eq!(
+            db.query_row("SELECT count(*) FROM service_summaries", [], |r| r
+                .get::<_, usize>(0))
+                .unwrap(),
+            50_000 + 2700 + 1
+        );
+        assert_eq!(
+            db.query_row(
+                "SELECT count(*) FROM service_summaries WHERE id='sample-0'",
+                [],
+                |r| r.get::<_, usize>(0)
+            )
+            .unwrap(),
+            1
+        );
+        assert_eq!(db.query_row("SELECT count(*) FROM service_summaries WHERE id IN (SELECT 'sample-'||value FROM json_each(?1))", [serde_json::to_string(&(57_300..60_000).collect::<Vec<_>>()).unwrap()], |r| r.get::<_,usize>(0)).unwrap(),2700);
+        // Retention is idempotent and also retains old latest results of silent sources.
+        db.execute("UPDATE service_summaries SET at=?1", [now() - 31 * 86400])
+            .unwrap();
+        drop(db);
+        finish(&store, HIGH_WATER, LOW_WATER, LIMIT);
+        let db = store.0.lock().unwrap();
+        assert_eq!(
+            db.query_row("SELECT count(*) FROM service_summaries", [], |r| r
+                .get::<_, usize>(0))
+                .unwrap(),
+            2701
+        );
+    }
+
+    #[test]
+    fn pressure_resumes_after_restart_and_reuses_pages() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("db");
+        let (source, server) = fixture();
+        source
+            .0
+            .lock()
+            .unwrap()
+            .execute("VACUUM INTO ?1", [file.to_str().unwrap()])
+            .unwrap();
+        let store = Store::open(&file).unwrap();
+        let high = 24 * 1024 * 1024;
+        let low = 16 * 1024 * 1024;
+        let limit = 40 * 1024 * 1024;
+        {
+            let db = store.0.lock().unwrap();
+            let tx = db.unchecked_transaction().unwrap();
+            for n in 0..2000 {
+                tx.execute(
+                    "INSERT INTO observations(server_id,at,payload) VALUES(?1,?2,?3)",
+                    params![
+                        server,
+                        now() + n,
+                        format!("{{\"padding\":\"{}\"}}", "x".repeat(20_000))
+                    ],
+                )
+                .unwrap();
+            }
+            tx.commit().unwrap();
+            checkpoint(&db);
+            assert!(admit_with(&db, limit, high).is_err());
+        }
+        assert!(store
+            .maintain_storage_with(Duration::ZERO, high, low, limit)
+            .unwrap());
+        {
+            let db = store.0.lock().unwrap();
+            assert_eq!(
+                db.query_row("SELECT count(*) FROM observations", [], |r| r
+                    .get::<_, usize>(0))
+                    .unwrap(),
+                1500
+            );
+            assert!(db
+                .query_row("SELECT pressure FROM storage_cleanup", [], |r| r
+                    .get::<_, bool>(0))
+                .unwrap());
+        }
+        drop(store);
+        let store = Store::open(&file).unwrap();
+        finish(&store, high, low, limit);
+        let db = store.0.lock().unwrap();
+        assert!(used_bytes(&db).unwrap() <= low);
+        assert!(admit_with(&db, limit, high).is_ok());
+        assert_eq!(
+            db.query_row("SELECT max(id) FROM observations", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            2000
+        );
+        // Allocated but reusable pages must not cause a false full warning.
+        assert!(bytes(path(&db)) > used_bytes(&db).unwrap());
+        assert!(
+            db.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| r
+                .get::<_, i64>(
+                0
+            ))
+            .unwrap()
+                == 0
+        );
+    }
+
+    #[test]
+    fn pressure_preserves_all_latest_scopes_and_pinned_evidence() {
+        let (store, server) = fixture();
+        let db = store.0.lock().unwrap();
+        Store::incident(
+            &db,
+            &server,
+            "test",
+            Some("pinned".into()),
+            "Test",
+            "critical",
+            now(),
+        )
+        .unwrap();
+        let incident = inventory::stable_id(&server, "test");
+        db.execute("INSERT INTO check_definitions VALUES('check',0,'Test')", [])
+            .unwrap();
+        db.execute("INSERT INTO check_versions(id,check_id,at,spec,author) VALUES('version','check',0,'{}','user')",[]).unwrap();
+        for n in 0..3 {
+            db.execute(
+                "INSERT INTO observations(server_id,at,payload) VALUES(?1,?2,'{}')",
+                params![server, n],
+            )
+            .unwrap();
+            db.execute(
+                "INSERT INTO log_summaries VALUES(?1,?2,?3,'{}')",
+                params![format!("l{n}"), server, n],
+            )
+            .unwrap();
+            db.execute("INSERT INTO service_summaries(id,server_id,kind,at,payload) VALUES(?1,?2,'docker',?3,'{}')",params![format!("s{n}"),server,n]).unwrap();
+            db.execute(
+                "INSERT INTO check_runs VALUES(?1,?2,'check','version',?3,'{}')",
+                params![format!("c{n}"), server, n],
+            )
+            .unwrap();
+        }
+        db.execute("INSERT INTO log_evidence VALUES(?1,'l0')", [&incident])
+            .unwrap();
+        db.execute("INSERT INTO service_evidence VALUES(?1,'s0')", [&incident])
+            .unwrap();
+        db.execute("INSERT INTO check_evidence VALUES(?1,'c0')", [&incident])
+            .unwrap();
+        db.execute(
+            "INSERT INTO investigations VALUES('active',0,'{\"status\":\"running\"}')",
+            [],
+        )
+        .unwrap();
+        let settings = Store::read_settings(&db).unwrap();
+        assert_eq!(trim_pressure(&db).unwrap(), 5);
+        assert_eq!(trim_pressure(&db).unwrap(), 0);
+        drop(db);
+        // Scaled pressure thresholds exercise exhaustion without a 1 GiB test database.
+        finish(&store, 1, 0, LIMIT);
+        let db = store.0.lock().unwrap();
+        assert!(admit_with(&db, LIMIT, 1)
+            .unwrap_err()
+            .contains("protected data"));
+        assert!(db
+            .query_row("SELECT exhausted FROM storage_cleanup", [], |r| r
+                .get::<_, bool>(0))
+            .unwrap());
+        assert!(!db
+            .query_row("SELECT active FROM storage_cleanup", [], |r| r
+                .get::<_, bool>(0))
+            .unwrap());
+        for table in ["service_summaries", "log_summaries", "check_runs"] {
+            assert_eq!(
+                db.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r
+                    .get::<_, i64>(0))
+                    .unwrap(),
+                2
+            );
+        }
+        assert_eq!(
+            db.query_row("SELECT count(*) FROM observations", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            db.query_row(
+                "SELECT count(*) FROM investigations WHERE id='active'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            serde_json::to_value(settings).unwrap(),
+            serde_json::to_value(Store::read_settings(&db).unwrap()).unwrap()
+        );
+        assert_eq!(
+            db.query_row("SELECT count(*) FROM servers", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            db.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| r
+                .get::<_, i64>(
+                0
+            ))
+            .unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    #[ignore = "million-row storage load check; run explicitly"]
+    fn million_row_cleanup_uses_indexes_and_short_batches() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("db");
+        let (source, server) = fixture();
+        source
+            .0
+            .lock()
+            .unwrap()
+            .execute("VACUUM INTO ?1", [file.to_str().unwrap()])
+            .unwrap();
+        let store = Store::open(&file).unwrap();
+        {
+            let db = store.0.lock().unwrap();
+            seed_services(&db, &server, 1_000_000, 512);
+            checkpoint(&db);
+            let h = &HISTORIES[0];
+            let sql=format!("EXPLAIN QUERY PLAN SELECT h.rowid FROM service_summaries h WHERE (h.at,h.rowid)<=(?1,?2) AND {} ORDER BY h.at,h.rowid LIMIT 500",h.disposable());
+            let mut q = db.prepare(&sql).unwrap();
+            let plan = q
+                .query_map(params![i64::MAX, i64::MAX], |r| r.get::<_, String>(3))
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap()
+                .join("\n");
+            eprintln!("{plan}");
+            assert!(plan.contains("service_summaries_retention"));
+            assert!(plan.contains("service_summaries_instance_at"));
+            assert!(plan.contains("service_evidence_summary"));
+            assert!(!plan.contains("TEMP B-TREE"));
+        }
+        let started = Instant::now();
+        let mut passes = 0;
+        loop {
+            let pass = Instant::now();
+            let pending = store.maintain_storage().unwrap();
+            eprintln!("cleanup pass {passes}: {:?}", pass.elapsed());
+            assert!(pass.elapsed() < Duration::from_secs(5));
+            passes += 1;
+            if !pending {
+                break;
+            }
+            assert!(passes < 200);
+        }
+        eprintln!(
+            "million-row cleanup: {:?}, {passes} passes",
+            started.elapsed()
+        );
+        let db = store.0.lock().unwrap();
+        assert_eq!(
+            db.query_row("SELECT count(*) FROM service_summaries", [], |r| r
+                .get::<_, usize>(0))
+                .unwrap(),
+            52_700
+        );
+        assert!(admit(&db).is_ok());
+    }
+
     #[test]
     fn retention_preserves_open_evidence_and_purges_old_data() {
         let (store, id) = fixture();
@@ -225,6 +859,11 @@ mod tests {
                 )
                 .unwrap();
             }
+            db.execute(
+                "INSERT INTO log_summaries VALUES('latest',?1,?2,'{}')",
+                params![id, now()],
+            )
+            .unwrap();
             for n in 0..750 {
                 db.execute(
                     "INSERT INTO observations(server_id,at,payload) VALUES(?1,?2,'{}')",
@@ -238,28 +877,21 @@ mod tests {
             )
             .unwrap();
         }
-        store.maintain_storage().unwrap();
-        {
-            let db = store.0.lock().unwrap();
-            let n: i64 = db
-                .query_row("SELECT count(*) FROM observations", [], |r| r.get(0))
-                .unwrap();
-            assert_eq!(n, 251);
-        }
-        store.maintain_storage().unwrap();
+        while store.maintain_storage().unwrap() {}
         let db = store.0.lock().unwrap();
         let count = |table: &str| -> i64 {
             db.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
                 .unwrap()
         };
         assert_eq!(count("observations"), 1);
-        assert_eq!(count("log_summaries"), 1);
+        assert_eq!(count("log_summaries"), 2);
         assert_eq!(count("log_evidence"), 1);
         assert_eq!(count("incidents"), 1);
         assert_eq!(
-            db.query_row("SELECT id FROM log_summaries", [], |r| r
-                .get::<_, String>(0))
-                .unwrap(),
+            db.query_row("SELECT id FROM log_summaries WHERE id='pinned'", [], |r| {
+                r.get::<_, String>(0)
+            })
+            .unwrap(),
             "pinned"
         );
     }
@@ -332,6 +964,12 @@ mod tests {
             db.execute("INSERT INTO investigations VALUES('wal',0,randomblob(1048576)) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",[]).unwrap();
         }
         assert!(admit(&db).is_err());
+        let wal = PathBuf::from(format!("{}-wal", path.display()));
+        let before = bytes(Some(wal.clone()));
+        drop(db);
+        assert!(!store.maintain_storage().unwrap());
+        assert_eq!(bytes(Some(wal)), before);
+        let db = store.0.lock().unwrap();
         reader.execute_batch("ROLLBACK;").unwrap();
         assert!(admit(&db).is_ok());
     }

@@ -1641,10 +1641,11 @@ fn background(app: tauri::AppHandle, state: Arc<AppState>) {
                     span.result(&result);
                     result
                 });
+                let pending = maintenance.as_ref().is_ok_and(|pending| *pending);
                 if let Err(e) = maintenance {
                     let _ = state.store.block_auto(&e);
                 }
-                maintenance_at = now() + 60;
+                maintenance_at = now() + if pending { 1 } else { 60 };
                 let _ = app.emit("state-changed", ());
             }
             let storage_ok = state.store.storage_status().is_ok_and(|s| !s.blocked);
@@ -1720,7 +1721,8 @@ fn background(app: tauri::AppHandle, state: Arc<AppState>) {
                     let _ = state.store.block_auto(&error);
                 }
             }
-            let mut next = Instant::now() + Duration::from_secs(5);
+            let mut next =
+                Instant::now() + Duration::from_secs((maintenance_at - now()).clamp(0, 5) as u64);
             if let Ok((servers, settings)) = state.store.poll_targets() {
                 if now() >= pool_at {
                     pool_at = now() + 5;
