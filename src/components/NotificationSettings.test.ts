@@ -49,3 +49,19 @@ it('requests badge permission on demand with incident notifications off', async 
   expect(wrapper.text()).not.toContain('Allow Dock badge');
   wrapper.unmount();
 });
+
+it.each([true, false])('requests a missing badge permission for an already authorized app (allowed: %s)', async (badgeAllowed) => {
+  mocks.call.mockResolvedValueOnce({...state, badgeAllowed: false});
+  const wrapper = mount(NotificationSettings, {props: {dockBadgeEnabled: true}});
+  await flushPromises();
+  const allow = wrapper.findAll('button').find(button => button.text() === 'Allow Dock badge');
+  expect(allow).toBeDefined();
+
+  mocks.call.mockResolvedValueOnce({...state, badgeAllowed});
+  await allow!.trigger('click');
+  await flushPromises();
+  expect(mocks.call.mock.calls.map(([command]) => command)).toEqual(badgeAllowed
+    ? ['notification_status', 'request_notification_permission']
+    : ['notification_status', 'request_notification_permission', 'open_notification_settings']);
+  wrapper.unmount();
+});

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.14.1
+
+- Let users who previously allowed notifications request permission for the Dock badge from Cyberbot settings.
+
 ## 0.14.0
 
 - See the total number of critical servers and open incidents on the macOS Dock icon. Turn off the badge in notification settings.

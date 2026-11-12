@@ -30,12 +30,12 @@ async function allowDockBadge() {
   dockBadgeSaving.value = true;
   dockBadgeError.value = '';
   try {
-    if (value.value?.permission === 'notDetermined') {
+    if (value.value?.permission !== 'denied') {
       value.value = await call<NotificationStatus>('request_notification_permission');
       emit('updated');
-    } else {
-      await call('open_notification_settings');
+      if (value.value.badgeAllowed) return;
     }
+    await call('open_notification_settings');
   } catch (error) {
     dockBadgeError.value = String(error).replace(/^Error: /, '');
   } finally {
@@ -62,7 +62,7 @@ async function allowDockBadge() {
       <p id="dock-badge-description">Shows the total number of critical servers and open incidents on the Cyberbot icon.</p>
       <template v-if="dockBadgeEnabled && value && !value.badgeAllowed && !preview && ['notDetermined','denied','authorized','provisional'].includes(value.permission)">
         <p>Allow the Cyberbot app icon badge in macOS notification settings.</p>
-        <button type="button" :disabled="dockBadgeSaving" @click="allowDockBadge">{{value.permission === 'notDetermined' ? 'Allow Dock badge' : 'Open macOS settings'}}</button>
+        <button type="button" :disabled="dockBadgeSaving" @click="allowDockBadge">{{value.permission === 'denied' ? 'Open macOS settings' : 'Allow Dock badge'}}</button>
       </template>
       <p v-if="dockBadgeError" class="error" role="alert">{{dockBadgeError}}</p>
     </div>
