@@ -7,7 +7,7 @@ import AutomationMode from './components/AutomationMode.vue';
 import { appearanceKey } from './appearance';
 import { cliChecksKey } from './aiNavigation';
 import { listen } from '@tauri-apps/api/event';
-import type { Incident, LogView, Observation, Server, Settings } from './types';
+import type { Incident, LogView, Observation, Server, ServiceCard, Settings } from './types';
 
 const apiState = vi.hoisted(()=>({preview:true}));
 vi.mock('./api', () => ({ get preview(){return apiState.preview;}, call: vi.fn() }));
@@ -226,6 +226,60 @@ describe('fleet ribbon integration', () => {
     await app.get('[aria-label="Close server"]').trigger('click');
     await app.findAll('.fleet-filters button').find(button => button.text().startsWith('Healthy'))!.trigger('click');
     app.unmount();
+  });
+  it('shows a confirmed Fail2ban stop in the fleet and server details until a poll confirms recovery', async () => {
+    apiState.preview = false;
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+    const at = Date.now() / 1000;
+    const server: Server = {
+      id: 'node', name: 'node', sourceId: 'fixture',
+      endpoint: { host: 'node.invalid', user: 'ops', port: 22, identityFile: null, jumpHost: null },
+      observation: {
+        at, cpuPercent: 10, memoryPercent: 20, swapPercent: 0, load: 0.4, uptime: 100,
+        disks: [{ mount: '/', usedPercent: 30, inodePercent: 1 }],
+        services: [{ name: 'fail2ban.service', state: 'inactive' }], missing: [], bytesReceived: 100, durationMs: 10,
+      },
+      lastError: null, lastAttempt: at, nextCheck: at + 180, failures: 0,
+    };
+    const settings: Settings = {
+      mode: 'manual', dailyTokenLimit: null, dailyRunLimit: null, runTokenLimit: 50000, autoAgent: 'codex',
+      pollSeconds: 180, logPollSeconds: 600, paused: false, concurrency: 4, dockBadgeEnabled: true,
+    };
+    let fail2ban: ServiceCard = { kind: 'fail2ban', name: 'Fail2ban', detected: true, availability: 'stopped', status: 'warning', at };
+    vi.mocked(call).mockImplementation(async command => {
+      if (command === 'poll_server') {
+        fail2ban = { ...fail2ban, availability: 'running', status: 'unknown' };
+        return { updated: 2, failed: [] };
+      }
+      if (command === 'snapshot') return {
+        servers: [server], services: { node: [fail2ban] }, sources: [], incidents: [], logStatus: {}, settings, collectedAt: at,
+      };
+      return command === 'history' ? [] : {};
+    });
+
+    const app = mount(App, { attachTo: document.body });
+    try {
+      await flushPromises();
+      const filter = (label: string) => app.findAll('.fleet-filters button').find(button => button.text().startsWith(label))!;
+      expect(filter('Needs attention').text()).toBe('Needs attention 1');
+      await filter('Needs attention').trigger('click');
+      const ribbon = app.get('button.ribbon.warning');
+      expect(ribbon.get('[data-service="fail2ban:default"]').text()).toBe('Fail2banStopped');
+      await ribbon.trigger('click');
+      expect(app.get('.detail-dialog .state').text()).toBe('Needs attention');
+
+      await app.get('.detail-dialog .server-heading button').trigger('click');
+      await flushPromises();
+      expect(app.get('.detail-dialog .state').text()).toBe('Healthy');
+      expect(filter('Needs attention').text()).toBe('Needs attention 0');
+      expect(app.find('button.ribbon').exists()).toBe(false);
+
+      await app.get('[aria-label="Close server"]').trigger('click');
+      await filter('Healthy').trigger('click');
+      expect(app.get('button.ribbon.healthy [data-service="fail2ban:default"]').text()).toBe('Fail2banRunning');
+    } finally {
+      app.unmount();
+    }
   });
   it('sorts the fleet by hostname suffix or metric, including after polling', async () => {
     vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });

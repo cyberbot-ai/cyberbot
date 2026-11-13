@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.14.5
+
+- Mark servers as Needs attention when a fresh check confirms that Fail2ban has stopped.
+
 ## 0.14.4
 
 - Reduce CPU use during server polling by reusing SSH connections across larger fleets, recording one activity entry per poll, and reducing repeated storage and interface work.

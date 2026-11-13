@@ -1145,6 +1145,17 @@ impl Store {
             let availability = spec.reports_availability.then(|| {
                 Availability::observed(serde_json::from_str(&availability).ok().flatten(), valid)
             });
+            let status = if !valid {
+                "unknown".into()
+            } else if kind == "fail2ban"
+                && detected
+                && availability == Some(Availability::Stopped)
+                && status != "critical"
+            {
+                "warning".into()
+            } else {
+                status
+            };
             let name = names.name(&id, &kind, &instance);
             out.entry(id).or_default().push(Card {
                 instance_id: instance,
@@ -1152,7 +1163,7 @@ impl Store {
                 name,
                 detected,
                 availability,
-                status: if valid { status } else { "unknown".into() },
+                status,
                 at,
                 metric: None,
             });
@@ -1670,6 +1681,44 @@ mod tests {
         sample.as_object_mut().unwrap().remove("availability");
         record(&db, &server, "caddy", sample, now() + 1);
         assert_eq!(card(), Some(Availability::Unknown));
+    }
+    #[test]
+    fn confirmed_fail2ban_stop_warns_in_the_fleet_summary_until_recovery() {
+        let (db, server) = fixture();
+        let kind = "fail2ban";
+        let at = now();
+        let card = || {
+            let snapshot = db.snapshot().unwrap();
+            let card = snapshot.services[&server.id]
+                .iter()
+                .find(|card| card.kind == kind)
+                .unwrap();
+            (card.availability, card.status.clone())
+        };
+        let mut sample = wire(kind, at);
+        sample["availability"] = json!("stopped");
+        sample["connected"] = json!(false);
+        sample["complete"] = json!(false);
+        sample["issues"] = json!(["source_unavailable"]);
+        sample["metrics"] = json!({"jails":null,"currentlyBanned":null,"totalBanned":null});
+
+        record(&db, &server, kind, sample.clone(), at - 86400);
+        assert_eq!(card(), (Some(Availability::Unknown), "unknown".into()));
+
+        record(&db, &server, kind, sample.clone(), at);
+        assert_eq!(card(), (Some(Availability::Stopped), "warning".into()));
+        assert_eq!(db.service_view(&server.id, kind).unwrap().status, "unknown");
+        assert!(db.snapshot().unwrap().incidents.is_empty());
+
+        sample["availability"] = json!("running");
+        record(&db, &server, kind, sample.clone(), at + 1);
+        assert_eq!(card(), (Some(Availability::Running), "unknown".into()));
+
+        sample["detected"] = json!(false);
+        sample["availability"] = json!("unknown");
+        sample["issues"] = json!(["not_detected"]);
+        record(&db, &server, kind, sample, at + 2);
+        assert_eq!(card(), (Some(Availability::Unknown), "not_detected".into()));
     }
     #[test]
     fn running_service_keeps_its_poll_interval_when_statistics_are_unavailable() {

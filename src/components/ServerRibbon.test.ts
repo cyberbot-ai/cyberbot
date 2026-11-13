@@ -147,14 +147,14 @@ it('does not attribute another unit failure to Fail2ban or treat an inactive uni
     observation: {...base.observation!, disks: [base.observation!.disks[0]], services: [
       {name: 'fail2ban.service', state: 'inactive'}, {name: 'fail2ban-exporter.service', state: 'failed'},
     ]},
-    services: [{kind: 'fail2ban', name: 'Fail2ban', detected: true, availability: 'stopped', status: 'unknown', at: 1000}],
+    services: [{kind: 'fail2ban', name: 'Fail2ban', detected: true, availability: 'unknown', status: 'unknown', at: 1000}],
   };
   const ribbon = render(server);
   expect(ribbon.classes()).toContain('warning');
   expect(ribbon.get('[data-service="systemd:fail2ban-exporter.service"]').classes()).toContain('critical');
   const fail2ban = ribbon.get('[data-service="fail2ban:default"]');
   expect(fail2ban.classes()).toContain('unknown');
-  expect(fail2ban.text()).toBe('Fail2banStopped');
+  expect(fail2ban.text()).toBe('Fail2banStatus unknown');
 
   await ribbon.setProps({server: {...server, observation: {...server.observation!, services: [{name: 'fail2ban.service', state: 'inactive'}]}}});
   expect(ribbon.classes()).toContain('healthy');
